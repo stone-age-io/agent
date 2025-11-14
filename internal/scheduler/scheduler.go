@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/go-co-op/gocron/v2"
+	"go.uber.org/zap"
 	"win-agent/internal/config"
 	natsclient "win-agent/internal/nats"
 	"win-agent/internal/tasks"
-	"go.uber.org/zap"
 )
 
 // Scheduler manages periodic task execution
@@ -55,6 +55,19 @@ func New(
 // scheduleTasks sets up all periodic tasks
 func (s *Scheduler) scheduleTasks() error {
 	deviceID := s.config.DeviceID
+
+	// If metrics are enabled, do an initial baseline scrape (don't publish)
+	// This establishes counter baselines so the first real publish has valid data
+	if s.config.Tasks.SystemMetrics.Enabled {
+		s.logger.Info("Establishing metrics baseline (not publishing)")
+		_, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
+		if err != nil {
+			s.logger.Warn("Failed to establish metrics baseline", zap.Error(err))
+			// Continue anyway - first publish will just skip rate-based metrics
+		} else {
+			s.logger.Info("Metrics baseline established")
+		}
+	}
 
 	// Schedule heartbeat task
 	if s.config.Tasks.Heartbeat.Enabled {
@@ -185,10 +198,11 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 			zap.String("subject", subject),
 			zap.Error(err))
 	} else {
-		s.logger.Debug("Published metrics",
+		s.logger.Info("Published metrics",
 			zap.String("subject", subject),
-			zap.Float64("cpu", metrics.CPUUsagePercent),
-			zap.Float64("memory_free_gb", metrics.MemoryFreeGB))
+			zap.Float64("cpu_percent", metrics.CPUUsagePercent),
+			zap.Float64("memory_free_gb", metrics.MemoryFreeGB),
+			zap.Float64("disk_free_percent", metrics.DiskFreePercent))
 	}
 }
 

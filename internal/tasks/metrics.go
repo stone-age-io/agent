@@ -8,6 +8,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"go.uber.org/zap"
 )
 
 // SystemMetrics represents system metrics collected from windows_exporter
@@ -20,8 +21,15 @@ type SystemMetrics struct {
 	Timestamp            string  `json:"timestamp"`
 }
 
+// round rounds a float to 2 decimal places (grug brain: nobody needs 15 decimals for CPU%)
+func round(val float64) float64 {
+	return float64(int(val*100+0.5)) / 100
+}
+
 // metricsCache stores previous counter values for rate calculation
 type metricsCache struct {
+	lastCPUTotal       float64
+	lastCPUIdle        float64
 	lastDiskReadBytes  float64
 	lastDiskWriteBytes float64
 	lastTimestamp      time.Time
@@ -43,7 +51,7 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	}
 
 	// Parse metrics using expfmt
-	metrics, err := parsePrometheusMetrics(resp.Body)
+	metrics, err := parsePrometheusMetrics(resp.Body, e.logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse metrics: %w", err)
 	}
@@ -53,36 +61,111 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 }
 
 // parsePrometheusMetrics parses Prometheus format metrics using expfmt
-func parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, error) {
-	var parser expfmt.TextParser
-	metricFamilies, err := parser.TextToMetricFamilies(reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse metric families: %w", err)
+func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetrics, error) {
+	// Use NewDecoder with FmtText format for proper initialization
+	// This ensures validation scheme is properly set
+	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
+	
+	metricFamilies := make(map[string]*dto.MetricFamily)
+	
+	for {
+		mf := &dto.MetricFamily{}
+		err := decoder.Decode(mf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode metric family: %w", err)
+		}
+		metricFamilies[mf.GetName()] = mf
+	}
+	
+	// Debug: Log available metric families (only first time)
+	if cache.lastTimestamp.IsZero() {
+		logger.Debug("Available metric families",
+			zap.Int("count", len(metricFamilies)),
+			zap.Strings("names", getMetricNames(metricFamilies)))
 	}
 
 	metrics := &SystemMetrics{}
 
-	// Extract CPU usage (calculate from idle time)
+	// Extract CPU usage
+	// HOW THIS WORKS (grug brain version):
+	// - windows_cpu_time_total is a counter = total seconds CPU spent in each mode
+	// - Each core reports time in different modes: idle, user, privileged, dpc, interrupt
+	// - We sum ALL time across ALL cores and ALL modes = total available CPU seconds
+	// - We sum IDLE time across ALL cores = wasted CPU seconds
+	// - CPU usage % = (total - idle) / total * 100
+	
+	cpuFound := false
+	
 	if family, ok := metricFamilies["windows_cpu_time_total"]; ok {
+		var totalTime, idleTime float64
+		
+		// Sum across ALL cores and ALL modes
 		for _, m := range family.Metric {
 			mode := getLabelValue(m.Label, "mode")
-			if mode == "idle" && m.Counter != nil {
-				// CPU usage = 100 - idle percentage
-				// Note: This is a simplified calculation
-				// For accurate usage, we'd need to track rates over time
-				idlePercent := m.Counter.GetValue()
-				if idlePercent <= 100 {
-					metrics.CPUUsagePercent = 100 - idlePercent
+			
+			if m.Counter != nil {
+				value := m.Counter.GetValue()
+				totalTime += value  // Add all time from all modes and cores
+				
+				if mode == "idle" {
+					idleTime += value  // Add idle time from all cores
 				}
 			}
 		}
+		
+		// Only calculate if we have a previous measurement
+		if !cache.lastTimestamp.IsZero() && totalTime > 0 && cache.lastCPUTotal > 0 {
+			// How much CPU time passed between measurements
+			totalDelta := totalTime - cache.lastCPUTotal
+			idleDelta := idleTime - cache.lastCPUIdle
+			
+			if totalDelta > 0 {
+				// Usage = time spent NOT idle / total time
+				idlePercent := (idleDelta / totalDelta) * 100
+				metrics.CPUUsagePercent = round(100 - idlePercent)
+				cpuFound = true
+				
+				logger.Debug("CPU calculated",
+					zap.Float64("total_delta", totalDelta),
+					zap.Float64("idle_delta", idleDelta),
+					zap.Float64("idle_percent", idlePercent),
+					zap.Float64("usage_percent", metrics.CPUUsagePercent))
+			}
+		} else if cache.lastTimestamp.IsZero() {
+			logger.Debug("CPU baseline stored (first scrape)",
+				zap.Float64("total_time", totalTime),
+				zap.Float64("idle_time", idleTime))
+		}
+		
+		// Store current values for next time
+		cache.lastCPUTotal = totalTime
+		cache.lastCPUIdle = idleTime
 	}
 
 	// Extract memory free bytes and convert to GB
-	if family, ok := metricFamilies["windows_os_physical_memory_free_bytes"]; ok {
+	// Try multiple possible metric names
+	memoryFound := false
+	
+	// Primary metric: available bytes (includes cache that can be freed)
+	if family, ok := metricFamilies["windows_memory_available_bytes"]; ok {
 		if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
 			bytes := family.Metric[0].Gauge.GetValue()
-			metrics.MemoryFreeGB = bytes / 1024 / 1024 / 1024
+			metrics.MemoryFreeGB = round(bytes / 1024 / 1024 / 1024)
+			memoryFound = true
+		}
+	}
+	
+	// Fallback: try physical free bytes
+	if !memoryFound {
+		if family, ok := metricFamilies["windows_memory_physical_free_bytes"]; ok {
+			if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
+				bytes := family.Metric[0].Gauge.GetValue()
+				metrics.MemoryFreeGB = round(bytes / 1024 / 1024 / 1024)
+				memoryFound = true
+			}
 		}
 	}
 
@@ -113,57 +196,88 @@ func parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, error) {
 		}
 
 		if foundFree && foundTotal && totalBytes > 0 {
-			metrics.DiskFreePercent = (freeBytes / totalBytes) * 100
+			metrics.DiskFreePercent = round((freeBytes / totalBytes) * 100)
 		}
 	}
 
 	// Extract disk I/O rates (read and write)
+	// Same concept as CPU - counters need two measurements to calculate rate
 	now := time.Now()
-	timeDelta := now.Sub(cache.lastTimestamp).Seconds()
 
-	if timeDelta > 0 {
-		// Read bytes
+	if !cache.lastTimestamp.IsZero() {
+		timeDelta := now.Sub(cache.lastTimestamp).Seconds()
+		
+		if timeDelta > 0 {
+			// Read bytes
+			if family, ok := metricFamilies["windows_logical_disk_read_bytes_total"]; ok {
+				for _, m := range family.Metric {
+					volume := getLabelValue(m.Label, "volume")
+					if volume == "C:" && m.Counter != nil {
+						currentRead := m.Counter.GetValue()
+						if cache.lastDiskReadBytes > 0 {
+							delta := currentRead - cache.lastDiskReadBytes
+							metrics.DiskReadBytesPerSec = round(delta / timeDelta)
+						}
+						cache.lastDiskReadBytes = currentRead
+						break
+					}
+				}
+			}
+
+			// Write bytes
+			if family, ok := metricFamilies["windows_logical_disk_write_bytes_total"]; ok {
+				for _, m := range family.Metric {
+					volume := getLabelValue(m.Label, "volume")
+					if volume == "C:" && m.Counter != nil {
+						currentWrite := m.Counter.GetValue()
+						if cache.lastDiskWriteBytes > 0 {
+							delta := currentWrite - cache.lastDiskWriteBytes
+							metrics.DiskWriteBytesPerSec = round(delta / timeDelta)
+						}
+						cache.lastDiskWriteBytes = currentWrite
+						break
+					}
+				}
+			}
+		}
+	} else {
+		// First scrape - just store baseline values
 		if family, ok := metricFamilies["windows_logical_disk_read_bytes_total"]; ok {
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
 				if volume == "C:" && m.Counter != nil {
-					currentRead := m.Counter.GetValue()
-					if cache.lastTimestamp.IsZero() {
-						// First reading, just store it
-						cache.lastDiskReadBytes = currentRead
-					} else {
-						// Calculate rate
-						delta := currentRead - cache.lastDiskReadBytes
-						metrics.DiskReadBytesPerSec = delta / timeDelta
-						cache.lastDiskReadBytes = currentRead
-					}
+					cache.lastDiskReadBytes = m.Counter.GetValue()
 					break
 				}
 			}
 		}
-
-		// Write bytes
+		
 		if family, ok := metricFamilies["windows_logical_disk_write_bytes_total"]; ok {
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
 				if volume == "C:" && m.Counter != nil {
-					currentWrite := m.Counter.GetValue()
-					if cache.lastTimestamp.IsZero() {
-						// First reading, just store it
-						cache.lastDiskWriteBytes = currentWrite
-					} else {
-						// Calculate rate
-						delta := currentWrite - cache.lastDiskWriteBytes
-						metrics.DiskWriteBytesPerSec = delta / timeDelta
-						cache.lastDiskWriteBytes = currentWrite
-					}
+					cache.lastDiskWriteBytes = m.Counter.GetValue()
 					break
 				}
 			}
 		}
+		
+		logger.Debug("Disk I/O baseline stored, will calculate on next scrape")
 	}
 
 	cache.lastTimestamp = now
+	
+	// Log warnings if metrics weren't found
+	if !cpuFound {
+		logger.Warn("CPU metric not found or could not be calculated",
+			zap.Bool("has_cpu_time_total", metricFamilies["windows_cpu_time_total"] != nil),
+			zap.Bool("is_first_scrape", cache.lastCPUTotal == 0))
+	}
+	if !memoryFound {
+		logger.Warn("Memory metric not found",
+			zap.Bool("has_memory_available_bytes", metricFamilies["windows_memory_available_bytes"] != nil),
+			zap.Bool("has_physical_free_bytes", metricFamilies["windows_memory_physical_free_bytes"] != nil))
+	}
 
 	return metrics, nil
 }
@@ -192,4 +306,13 @@ func CreateMetricsError(err error) *MetricsError {
 		Error:     err.Error(),
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// getMetricNames extracts metric names from metric families for logging
+func getMetricNames(families map[string]*dto.MetricFamily) []string {
+	names := make([]string, 0, len(families))
+	for name := range families {
+		names = append(names, name)
+	}
+	return names
 }
