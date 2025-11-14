@@ -195,10 +195,11 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("system_metrics interval must be at least 30 seconds (got: %v)", cfg.Tasks.SystemMetrics.Interval)
 	}
 
-	// Validate heartbeat is more frequent than metrics (best practice)
+	// FIXED: Validate heartbeat is more frequent than metrics (best practice)
+	// Heartbeat should be MORE frequent, meaning a SMALLER interval duration
 	if cfg.Tasks.Heartbeat.Enabled && cfg.Tasks.SystemMetrics.Enabled {
 		if cfg.Tasks.Heartbeat.Interval > cfg.Tasks.SystemMetrics.Interval {
-			return fmt.Errorf("heartbeat interval (%v) should not exceed metrics interval (%v)",
+			return fmt.Errorf("heartbeat interval (%v) should be less than or equal to metrics interval (%v) - heartbeat should be more frequent",
 				cfg.Tasks.Heartbeat.Interval, cfg.Tasks.SystemMetrics.Interval)
 		}
 	}

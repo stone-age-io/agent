@@ -52,6 +52,11 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 		return nil, fmt.Errorf("failed to parse metrics: %w", err)
 	}
 
+	// Validate metrics before returning
+	if err := validateMetrics(metrics); err != nil {
+		return nil, fmt.Errorf("invalid metrics: %w", err)
+	}
+
 	metrics.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	return metrics, nil
 }
@@ -61,9 +66,9 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	// Use NewDecoder with FmtText format for proper initialization
 	// This ensures validation scheme is properly set
 	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
-	
+
 	metricFamilies := make(map[string]*dto.MetricFamily)
-	
+
 	for {
 		mf := &dto.MetricFamily{}
 		err := decoder.Decode(mf)
@@ -75,7 +80,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 		}
 		metricFamilies[mf.GetName()] = mf
 	}
-	
+
 	// Debug: Log available metric families (only first time)
 	if cache.lastTimestamp.IsZero() {
 		logger.Debug("Available metric families",
@@ -92,38 +97,38 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	// - We sum ALL time across ALL cores and ALL modes = total available CPU seconds
 	// - We sum IDLE time across ALL cores = wasted CPU seconds
 	// - CPU usage % = (total - idle) / total * 100
-	
+
 	cpuFound := false
-	
+
 	if family, ok := metricFamilies["windows_cpu_time_total"]; ok {
 		var totalTime, idleTime float64
-		
+
 		// Sum across ALL cores and ALL modes
 		for _, m := range family.Metric {
 			mode := getLabelValue(m.Label, "mode")
-			
+
 			if m.Counter != nil {
 				value := m.Counter.GetValue()
-				totalTime += value  // Add all time from all modes and cores
-				
+				totalTime += value // Add all time from all modes and cores
+
 				if mode == "idle" {
-					idleTime += value  // Add idle time from all cores
+					idleTime += value // Add idle time from all cores
 				}
 			}
 		}
-		
+
 		// Only calculate if we have a previous measurement
 		if !cache.lastTimestamp.IsZero() && totalTime > 0 && cache.lastCPUTotal > 0 {
 			// How much CPU time passed between measurements
 			totalDelta := totalTime - cache.lastCPUTotal
 			idleDelta := idleTime - cache.lastCPUIdle
-			
+
 			if totalDelta > 0 {
 				// Usage = time spent NOT idle / total time
 				idlePercent := (idleDelta / totalDelta) * 100
 				metrics.CPUUsagePercent = utils.Round(100 - idlePercent)
 				cpuFound = true
-				
+
 				logger.Debug("CPU calculated",
 					zap.Float64("total_delta", totalDelta),
 					zap.Float64("idle_delta", idleDelta),
@@ -135,7 +140,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 				zap.Float64("total_time", totalTime),
 				zap.Float64("idle_time", idleTime))
 		}
-		
+
 		// Store current values for next time
 		cache.lastCPUTotal = totalTime
 		cache.lastCPUIdle = idleTime
@@ -144,7 +149,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	// Extract memory free bytes and convert to GB
 	// Try multiple possible metric names
 	memoryFound := false
-	
+
 	// Primary metric: available bytes (includes cache that can be freed)
 	if family, ok := metricFamilies["windows_memory_available_bytes"]; ok {
 		if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
@@ -153,7 +158,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 			memoryFound = true
 		}
 	}
-	
+
 	// Fallback: try physical free bytes
 	if !memoryFound {
 		if family, ok := metricFamilies["windows_memory_physical_free_bytes"]; ok {
@@ -203,7 +208,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 
 	if !cache.lastTimestamp.IsZero() {
 		timeDelta := now.Sub(cache.lastTimestamp).Seconds()
-		
+
 		if timeDelta > 0 {
 			// Read bytes
 			if family, ok := metricFamilies["windows_logical_disk_read_bytes_total"]; ok {
@@ -248,7 +253,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 				}
 			}
 		}
-		
+
 		if family, ok := metricFamilies["windows_logical_disk_write_bytes_total"]; ok {
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
@@ -258,14 +263,14 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 				}
 			}
 		}
-		
+
 		logger.Debug("Disk I/O baseline stored, will calculate on next scrape")
 	}
 
 	cache.lastTimestamp = now
-	
+
 	// Log warnings if metrics weren't found
-	if !cpuFound {
+	if !cpuFound && !cache.lastTimestamp.IsZero() {
 		logger.Warn("CPU metric not found or could not be calculated",
 			zap.Bool("has_cpu_time_total", metricFamilies["windows_cpu_time_total"] != nil),
 			zap.Bool("is_first_scrape", cache.lastCPUTotal == 0))
@@ -277,6 +282,39 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	}
 
 	return metrics, nil
+}
+
+// validateMetrics performs sanity checks on metrics values
+func validateMetrics(m *SystemMetrics) error {
+	// Validate CPU percentage (only if we have a value)
+	if cache.lastTimestamp.IsZero() {
+		// First scrape - no CPU value yet, skip validation
+		return nil
+	}
+
+	if m.CPUUsagePercent < 0 || m.CPUUsagePercent > 100 {
+		return fmt.Errorf("invalid CPU usage: %.2f%% (must be 0-100)", m.CPUUsagePercent)
+	}
+
+	// Validate memory (should be positive)
+	if m.MemoryFreeGB < 0 {
+		return fmt.Errorf("invalid memory free: %.2f GB (cannot be negative)", m.MemoryFreeGB)
+	}
+
+	// Validate disk percentage
+	if m.DiskFreePercent < 0 || m.DiskFreePercent > 100 {
+		return fmt.Errorf("invalid disk free: %.2f%% (must be 0-100)", m.DiskFreePercent)
+	}
+
+	// Validate disk I/O rates (should not be negative)
+	if m.DiskReadBytesPerSec < 0 {
+		return fmt.Errorf("invalid disk read rate: %.2f bytes/sec (cannot be negative)", m.DiskReadBytesPerSec)
+	}
+	if m.DiskWriteBytesPerSec < 0 {
+		return fmt.Errorf("invalid disk write rate: %.2f bytes/sec (cannot be negative)", m.DiskWriteBytesPerSec)
+	}
+
+	return nil
 }
 
 // getLabelValue extracts a label value from a metric's label pairs

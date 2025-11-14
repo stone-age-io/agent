@@ -12,16 +12,18 @@ import (
 
 // ExecuteCommand executes a PowerShell command if it's in the whitelist
 // Commands must match exactly - no parameter substitution is allowed
-func (e *Executor) ExecuteCommand(command string, allowedCommands []string) (string, int, error) {
+func (e *Executor) ExecuteCommand(command string, allowedCommands []string, timeout time.Duration) (string, int, error) {
 	// Validate command is in whitelist (exact match)
 	if !isCommandAllowed(command, allowedCommands) {
 		return "", -1, fmt.Errorf("command not in allowed list")
 	}
 
-	e.logger.Info("Executing whitelisted command", zap.String("command", command))
+	e.logger.Info("Executing whitelisted command",
+		zap.String("command", command),
+		zap.Duration("timeout", timeout))
 
-	// Execute via PowerShell
-	output, exitCode, err := executePowerShell(command)
+	// Execute via PowerShell with configured timeout
+	output, exitCode, err := executePowerShell(command, timeout)
 	if err != nil {
 		e.logger.Error("Command execution failed",
 			zap.String("command", command),
@@ -59,7 +61,7 @@ func normalizeWhitespace(s string) string {
 }
 
 // executePowerShell executes a PowerShell command and returns output and exit code
-func executePowerShell(command string) (string, int, error) {
+func executePowerShell(command string, timeout time.Duration) (string, int, error) {
 	// Create the PowerShell command with proper escaping
 	// Use -NoProfile for faster startup and -NonInteractive for non-interactive mode
 	cmd := exec.Command("powershell.exe",
@@ -73,7 +75,7 @@ func executePowerShell(command string) (string, int, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Set timeout for command execution (30 seconds)
+	// Set timeout for command execution (from config)
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Run()
@@ -109,11 +111,11 @@ func executePowerShell(command string) (string, int, error) {
 
 		return output, exitCode, nil
 
-	case <-time.After(30 * time.Second):
+	case <-time.After(timeout):
 		// Kill the process if it times out
 		if cmd.Process != nil {
 			cmd.Process.Kill()
 		}
-		return "", -1, fmt.Errorf("command execution timeout (30s)")
+		return "", -1, fmt.Errorf("command execution timeout (%v)", timeout)
 	}
 }

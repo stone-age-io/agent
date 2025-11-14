@@ -3,6 +3,7 @@ package nats
 import (
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -29,36 +30,73 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 	}
 }
 
+// handleWithRecovery wraps a command handler with panic recovery
+// This prevents a panic in one command handler from crashing the entire agent
+func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandler) nats.MsgHandler {
+	return func(msg *nats.Msg) {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log the panic with stack trace
+				h.logger.Error("Panic recovered in command handler",
+					zap.String("handler", name),
+					zap.String("subject", msg.Subject),
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+
+				// Send error response to caller
+				response := errorResponse{
+					Status:    "error",
+					Error:     fmt.Sprintf("Internal error: handler panicked: %v", r),
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+				}
+				responseBytes, _ := json.Marshal(response)
+				msg.Respond(responseBytes)
+			}
+		}()
+
+		// Execute the actual handler
+		handler(msg)
+	}
+}
+
 // SubscribeAll subscribes to all command subjects for this device
 func (h *CommandHandlers) SubscribeAll(client *Client) error {
-	// Subscribe to ping command
+	// Subscribe to ping command with recovery
 	if _, err := client.Subscribe(
 		fmt.Sprintf("agents.%s.cmd.ping", h.deviceID),
-		h.handlePing,
+		h.handleWithRecovery("ping", h.handlePing),
 	); err != nil {
 		return err
 	}
 
-	// Subscribe to service control command
+	// Subscribe to service control command with recovery
 	if _, err := client.Subscribe(
 		fmt.Sprintf("agents.%s.cmd.service", h.deviceID),
-		h.handleServiceControl,
+		h.handleWithRecovery("service", h.handleServiceControl),
 	); err != nil {
 		return err
 	}
 
-	// Subscribe to log fetch command
+	// Subscribe to log fetch command with recovery
 	if _, err := client.Subscribe(
 		fmt.Sprintf("agents.%s.cmd.logs", h.deviceID),
-		h.handleLogFetch,
+		h.handleWithRecovery("logs", h.handleLogFetch),
 	); err != nil {
 		return err
 	}
 
-	// Subscribe to custom exec command
+	// Subscribe to custom exec command with recovery
 	if _, err := client.Subscribe(
 		fmt.Sprintf("agents.%s.cmd.exec", h.deviceID),
-		h.handleCustomExec,
+		h.handleWithRecovery("exec", h.handleCustomExec),
+	); err != nil {
+		return err
+	}
+
+	// Subscribe to health check command with recovery
+	if _, err := client.Subscribe(
+		fmt.Sprintf("agents.%s.cmd.health", h.deviceID),
+		h.handleWithRecovery("health", h.handleHealth),
 	); err != nil {
 		return err
 	}
@@ -114,6 +152,12 @@ type customExecResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type healthResponse struct {
+	Status      string                 `json:"status"`
+	AgentMetrics *tasks.AgentMetrics   `json:"agent_metrics"`
+	Timestamp   string                 `json:"timestamp"`
+}
+
 type errorResponse struct {
 	Status    string `json:"status"`
 	Error     string `json:"error"`
@@ -144,6 +188,7 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		h.logger.Error("Failed to parse service control request", zap.Error(err))
 		h.respondError(msg, "Invalid request format")
+		h.taskExecutor.RecordCommandError(err)
 		return
 	}
 
@@ -159,6 +204,8 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 			zap.String("service", req.ServiceName),
 			zap.String("action", req.Action))
 
+		h.taskExecutor.RecordCommandError(err)
+
 		response := serviceControlResponse{
 			Status:    "error",
 			Error:     err.Error(),
@@ -168,6 +215,8 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 		msg.Respond(responseBytes)
 		return
 	}
+
+	h.taskExecutor.RecordCommandSuccess()
 
 	// Success response
 	response := serviceControlResponse{
@@ -195,6 +244,7 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		h.logger.Error("Failed to parse log fetch request", zap.Error(err))
 		h.respondError(msg, "Invalid request format")
+		h.taskExecutor.RecordCommandError(err)
 		return
 	}
 
@@ -209,6 +259,8 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 			zap.Error(err),
 			zap.String("path", req.LogPath))
 
+		h.taskExecutor.RecordCommandError(err)
+
 		response := logFetchResponse{
 			Status:    "error",
 			Error:     err.Error(),
@@ -218,6 +270,8 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 		msg.Respond(responseBytes)
 		return
 	}
+
+	h.taskExecutor.RecordCommandSuccess()
 
 	// Success response
 	response := logFetchResponse{
@@ -245,17 +299,24 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		h.logger.Error("Failed to parse exec request", zap.Error(err))
 		h.respondError(msg, "Invalid request format")
+		h.taskExecutor.RecordCommandError(err)
 		return
 	}
 
 	h.logger.Info("Executing custom command", zap.String("command", req.Command))
 
-	// Execute command
-	output, exitCode, err := h.taskExecutor.ExecuteCommand(req.Command, h.config.Commands.AllowedCommands)
+	// Execute command with configured timeout
+	output, exitCode, err := h.taskExecutor.ExecuteCommand(
+		req.Command,
+		h.config.Commands.AllowedCommands,
+		h.config.Commands.Timeout,
+	)
 	if err != nil {
 		h.logger.Error("Command execution failed",
 			zap.Error(err),
 			zap.String("command", req.Command))
+
+		h.taskExecutor.RecordCommandError(err)
 
 		response := customExecResponse{
 			Status:    "error",
@@ -266,6 +327,8 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		msg.Respond(responseBytes)
 		return
 	}
+
+	h.taskExecutor.RecordCommandSuccess()
 
 	// Success response
 	response := customExecResponse{
@@ -282,6 +345,27 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 	h.logger.Info("Command execution succeeded",
 		zap.String("command", req.Command),
 		zap.Int("exit_code", exitCode))
+}
+
+// handleHealth returns agent health and performance metrics
+func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
+	h.logger.Debug("Received health check command")
+
+	// Get agent metrics
+	metrics := h.taskExecutor.GetAgentMetrics()
+
+	response := healthResponse{
+		Status:       "healthy",
+		AgentMetrics: metrics,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+	}
+
+	responseBytes, _ := json.Marshal(response)
+	msg.Respond(responseBytes)
+
+	h.logger.Debug("Sent health response",
+		zap.Float64("memory_mb", metrics.MemoryUsageMB),
+		zap.Int("goroutines", metrics.Goroutines))
 }
 
 // respondError sends a generic error response

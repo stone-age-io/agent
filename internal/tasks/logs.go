@@ -29,20 +29,62 @@ func (e *Executor) FetchLogLines(logPath string, lines int, allowedPatterns []st
 }
 
 // isPathAllowed checks if a requested path matches any of the allowed patterns
+// Enhanced with additional security checks
 func isPathAllowed(requestedPath string, allowedPatterns []string) bool {
+	// Clean and normalize the path to prevent path traversal
 	cleanPath := filepath.Clean(requestedPath)
+	
+	// Reject paths with suspicious patterns
+	// Convert to lowercase for case-insensitive comparison on Windows
+	lowerPath := strings.ToLower(cleanPath)
+	
+	// Reject paths containing suspicious elements
+	suspiciousPatterns := []string{
+		"..",           // Parent directory traversal
+		"system32",     // System directories
+		"\\windows\\",  // Windows directory
+		"\\program files\\", // Program Files
+		"sam",          // Security Account Manager
+		".exe",         // Executables
+		".dll",         // Libraries
+		".sys",         // System files
+	}
+	
+	for _, suspicious := range suspiciousPatterns {
+		if strings.Contains(lowerPath, suspicious) {
+			return false
+		}
+	}
+	
+	// Ensure path is absolute (starts with drive letter on Windows)
+	if !filepath.IsAbs(cleanPath) {
+		return false
+	}
 
+	// Check against allowed patterns
 	for _, pattern := range allowedPatterns {
+		// Clean the pattern too
+		cleanPattern := filepath.Clean(pattern)
+		
 		// Expand glob pattern
-		matches, err := filepath.Glob(pattern)
+		matches, err := filepath.Glob(cleanPattern)
 		if err != nil {
 			continue
 		}
 
 		// Check if requested path matches any expanded path
 		for _, match := range matches {
-			if cleanPath == filepath.Clean(match) {
-				return true
+			cleanMatch := filepath.Clean(match)
+			if cleanPath == cleanMatch {
+				// Additional check: ensure the matched path is still within expected directories
+				// Extract the base directory from the pattern (before any wildcards)
+				patternBase := strings.Split(cleanPattern, "*")[0]
+				patternBase = filepath.Clean(patternBase)
+				
+				// Ensure the matched file is within the pattern's base directory
+				if strings.HasPrefix(cleanPath, patternBase) {
+					return true
+				}
 			}
 		}
 	}

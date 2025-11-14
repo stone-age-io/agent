@@ -2,6 +2,7 @@ package nats
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -60,9 +61,10 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 		return nil, fmt.Errorf("invalid auth type: %s", cfg.Auth.Type)
 	}
 
-	// Connect to NATS
+	// FIXED: Pass all URLs for automatic failover
+	serverURLs := strings.Join(cfg.URLs, ",")
 	logger.Info("Connecting to NATS", zap.Strings("urls", cfg.URLs))
-	conn, err := nats.Connect(cfg.URLs[0], opts...)
+	conn, err := nats.Connect(serverURLs, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}

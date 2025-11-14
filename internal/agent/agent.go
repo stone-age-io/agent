@@ -43,8 +43,8 @@ func New(configPath string, version string) (*Agent, error) {
 		zap.String("version", version),
 		zap.String("device_id", cfg.DeviceID))
 
-	// Create task executor
-	executor := tasks.NewExecutor(logger)
+	// Create task executor with command timeout from config
+	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout)
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")
