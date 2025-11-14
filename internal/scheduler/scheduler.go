@@ -3,6 +3,7 @@ package scheduler
 import (
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -53,6 +54,25 @@ func New(
 	return scheduler, nil
 }
 
+// wrapTaskWithRecovery wraps a task function with panic recovery
+// This prevents one task's panic from crashing the entire agent
+func (s *Scheduler) wrapTaskWithRecovery(taskName string, taskFunc func()) func() {
+	return func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log the panic with stack trace
+				s.logger.Error("Panic recovered in scheduled task",
+					zap.String("task", taskName),
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
+
+		// Execute the actual task
+		taskFunc()
+	}
+}
+
 // scheduleTasks sets up all periodic tasks
 func (s *Scheduler) scheduleTasks() error {
 	deviceID := s.config.DeviceID
@@ -95,13 +115,13 @@ func (s *Scheduler) scheduleTasks() error {
 		}
 	}
 
-	// Schedule heartbeat task
+	// Schedule heartbeat task WITH PANIC RECOVERY
 	if s.config.Tasks.Heartbeat.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.Heartbeat.Interval),
-			gocron.NewTask(func() {
+			gocron.NewTask(s.wrapTaskWithRecovery("heartbeat", func() {
 				s.publishHeartbeat(deviceID)
-			}),
+			})),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to schedule heartbeat: %w", err)
@@ -110,13 +130,13 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.Heartbeat.Interval))
 	}
 
-	// Schedule system metrics task
+	// Schedule system metrics task WITH PANIC RECOVERY
 	if s.config.Tasks.SystemMetrics.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.SystemMetrics.Interval),
-			gocron.NewTask(func() {
+			gocron.NewTask(s.wrapTaskWithRecovery("metrics", func() {
 				s.publishMetrics(deviceID)
-			}),
+			})),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to schedule metrics: %w", err)
@@ -125,13 +145,13 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.SystemMetrics.Interval))
 	}
 
-	// Schedule service check task
+	// Schedule service check task WITH PANIC RECOVERY
 	if s.config.Tasks.ServiceCheck.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.ServiceCheck.Interval),
-			gocron.NewTask(func() {
+			gocron.NewTask(s.wrapTaskWithRecovery("service_check", func() {
 				s.publishServiceStatus(deviceID)
-			}),
+			})),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to schedule service check: %w", err)
@@ -140,17 +160,19 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.ServiceCheck.Interval))
 	}
 
-	// Schedule inventory task (but run it once immediately first)
+	// Schedule inventory task WITH PANIC RECOVERY (but run it once immediately first)
 	if s.config.Tasks.Inventory.Enabled {
-		// Run immediately on startup
-		go s.publishInventory(deviceID)
+		// Run immediately on startup (wrapped with panic recovery)
+		go s.wrapTaskWithRecovery("inventory_startup", func() {
+			s.publishInventory(deviceID)
+		})()
 
 		// Then schedule for periodic execution
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.Inventory.Interval),
-			gocron.NewTask(func() {
+			gocron.NewTask(s.wrapTaskWithRecovery("inventory", func() {
 				s.publishInventory(deviceID)
-			}),
+			})),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to schedule inventory: %w", err)
