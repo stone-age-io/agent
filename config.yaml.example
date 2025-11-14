@@ -23,6 +23,24 @@ nats:
     # username: "user"
     # password: "pass"
   
+  # TLS Configuration (optional but recommended for production)
+  tls:
+    # Enable TLS encryption
+    enabled: false
+    
+    # Client certificate and key for mutual TLS authentication (optional)
+    # Required if server requires client certificates
+    cert_file: "C:\\ProgramData\\WinAgent\\client-cert.pem"
+    key_file: "C:\\ProgramData\\WinAgent\\client-key.pem"
+    
+    # CA certificate for server verification (optional)
+    # If not provided, system CA pool is used
+    ca_file: "C:\\ProgramData\\WinAgent\\ca-cert.pem"
+    
+    # Skip server certificate verification (NOT RECOMMENDED for production)
+    # Only use this for development/testing with self-signed certificates
+    insecure_skip_verify: false
+  
   # Optional: Custom connection options
   max_reconnects: -1  # -1 = infinite retries
   reconnect_wait: "2s"
@@ -71,6 +89,9 @@ commands:
   allowed_log_paths:
     - "C:\\Logs\\*.log"
     - "C:\\ProgramData\\YourApp\\*.log"
+  
+  # Command execution timeout
+  timeout: "30s"
 
 # Logging
 logging:
@@ -78,3 +99,4 @@ logging:
   file: "C:\\ProgramData\\WinAgent\\agent.log"
   max_size_mb: 100
   max_backups: 3
+

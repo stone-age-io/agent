@@ -1,7 +1,10 @@
 package nats
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -44,6 +47,25 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 		}),
 	}
 
+	// Configure TLS if enabled
+	if cfg.TLS.Enabled {
+		tlsConfig, err := createTLSConfig(&cfg.TLS, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create TLS config: %w", err)
+		}
+		
+		opts = append(opts, nats.Secure(tlsConfig))
+		logger.Info("TLS enabled for NATS connection",
+			zap.Bool("client_cert", cfg.TLS.CertFile != ""),
+			zap.Bool("ca_cert", cfg.TLS.CAFile != ""),
+			zap.Bool("skip_verify", cfg.TLS.InsecureSkipVerify))
+		
+		// Warn if insecure skip verify is enabled
+		if cfg.TLS.InsecureSkipVerify {
+			logger.Warn("TLS certificate verification is DISABLED - this is insecure and should only be used in development")
+		}
+	}
+
 	// Add authentication based on config type
 	switch cfg.Auth.Type {
 	case "creds":
@@ -71,7 +93,8 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 
 	logger.Info("Connected to NATS",
 		zap.String("url", conn.ConnectedUrl()),
-		zap.String("server_id", conn.ConnectedServerId()))
+		zap.String("server_id", conn.ConnectedServerId()),
+		zap.Bool("tls", conn.TLSRequired()))
 
 	// Create JetStream context for telemetry publishing
 	js, err := conn.JetStream()
@@ -86,6 +109,55 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 		logger: logger,
 		config: cfg,
 	}, nil
+}
+
+// createTLSConfig creates a TLS configuration based on the provided settings
+func createTLSConfig(cfg *config.TLSConfig, logger *zap.Logger) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12, // Enforce TLS 1.2 minimum for security
+	}
+
+	// Configure certificate verification
+	if cfg.InsecureSkipVerify {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	// Load CA certificate if provided
+	// This is used to verify the server's certificate
+	if cfg.CAFile != "" {
+		logger.Info("Loading CA certificate", zap.String("file", cfg.CAFile))
+		
+		caCert, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		tlsConfig.RootCAs = caCertPool
+		logger.Debug("CA certificate loaded successfully")
+	}
+
+	// Load client certificate and key if provided
+	// This is used for mutual TLS authentication
+	if cfg.CertFile != "" && cfg.KeyFile != "" {
+		logger.Info("Loading client certificate",
+			zap.String("cert", cfg.CertFile),
+			zap.String("key", cfg.KeyFile))
+
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client certificate: %w", err)
+		}
+
+		tlsConfig.Certificates = []tls.Certificate{cert}
+		logger.Debug("Client certificate loaded successfully")
+	}
+
+	return tlsConfig, nil
 }
 
 // PublishTelemetry publishes a message to JetStream asynchronously (fire-and-forget)

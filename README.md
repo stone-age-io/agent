@@ -6,6 +6,7 @@ A lightweight Windows management and observability agent written in Go. The agen
 
 - **Native Windows Service**: Runs as a system service with automatic startup
 - **NATS Integration**: All communication via NATS (Core Request/Reply for commands, JetStream for telemetry)
+- **TLS Support**: Secure encrypted connections with optional mutual TLS authentication
 - **System Monitoring**: CPU, memory, disk metrics via windows_exporter
 - **Service Management**: Start/stop/restart Windows services
 - **Log Retrieval**: Fetch log file contents remotely
@@ -20,7 +21,7 @@ The agent follows a simple, purpose-built design:
 
 ```
 NATS (Data Plane)
-    ↕
+    ↕ (TLS encrypted)
 win-agent.exe (Windows Service)
     ├─ Scheduled Tasks (JetStream)
     │   ├─ Heartbeat (every 1m)
@@ -88,6 +89,7 @@ Edit `config.yaml` to set:
 - `device_id`: Unique identifier for this agent
 - `nats.urls`: Your NATS server URL(s)
 - `nats.auth`: Authentication credentials
+- `nats.tls`: TLS configuration (if using encrypted connections)
 - `tasks.service_check.services`: Services to monitor
 - `commands.allowed_services`: Services that can be controlled
 - `commands.allowed_commands`: PowerShell commands that can be executed
@@ -145,6 +147,70 @@ nats:
     password: "secret-password"
 ```
 
+### TLS Configuration
+
+The agent supports TLS encryption for secure communication with NATS servers. TLS is **strongly recommended for production deployments**.
+
+#### Basic TLS (Server Verification)
+
+Use this when connecting to a server with a certificate signed by a trusted CA:
+
+```yaml
+nats:
+  urls:
+    - "tls://connect.your-service.com:4222"
+  tls:
+    enabled: true
+```
+
+#### TLS with Custom CA
+
+Use this when your NATS server uses a self-signed certificate or an internal CA:
+
+```yaml
+nats:
+  urls:
+    - "tls://connect.your-service.com:4222"
+  tls:
+    enabled: true
+    ca_file: "C:\\ProgramData\\WinAgent\\ca-cert.pem"
+```
+
+#### Mutual TLS (Client Certificate Authentication)
+
+Use this when the NATS server requires client certificates for authentication:
+
+```yaml
+nats:
+  urls:
+    - "tls://connect.your-service.com:4222"
+  auth:
+    type: "none"  # Auth via client certificate
+  tls:
+    enabled: true
+    cert_file: "C:\\ProgramData\\WinAgent\\client-cert.pem"
+    key_file: "C:\\ProgramData\\WinAgent\\client-key.pem"
+    ca_file: "C:\\ProgramData\\WinAgent\\ca-cert.pem"
+```
+
+#### Recommended Production Configuration
+
+Combine TLS encryption with NATS credentials for maximum security:
+
+```yaml
+nats:
+  urls:
+    - "tls://connect.your-service.com:4222"
+  auth:
+    type: "creds"
+    creds_file: "C:\\ProgramData\\WinAgent\\device.creds"
+  tls:
+    enabled: true
+    ca_file: "C:\\ProgramData\\WinAgent\\ca-cert.pem"
+```
+
+**⚠️ WARNING**: Never use `insecure_skip_verify: true` in production. It disables certificate verification and makes the connection vulnerable to man-in-the-middle attacks.
+
 ### Task Configuration
 
 Each task can be individually enabled/disabled and has a configurable interval:
@@ -188,6 +254,9 @@ commands:
   # Only logs matching these patterns can be read
   allowed_log_paths:
     - "C:\\Logs\\*.log"
+  
+  # Command execution timeout
+  timeout: "30s"
 ```
 
 ## NATS Subjects
@@ -209,6 +278,7 @@ Commands use Core NATS Request/Reply:
 - `agents.<device_id>.cmd.service` - Service control (start/stop/restart)
 - `agents.<device_id>.cmd.logs` - Fetch log file contents
 - `agents.<device_id>.cmd.exec` - Execute PowerShell command
+- `agents.<device_id>.cmd.health` - Agent health and performance metrics
 
 ## Usage Examples
 
@@ -281,6 +351,27 @@ Response:
   "command": "Get-Process...",
   "output": "...",
   "exit_code": 0,
+  "timestamp": "2025-11-14T12:00:00Z"
+}
+```
+
+### Check Agent Health
+
+```bash
+nats request "agents.device-12345.cmd.health" '{}'
+```
+
+Response:
+```json
+{
+  "status": "healthy",
+  "agent_metrics": {
+    "memory_usage_mb": 45.2,
+    "goroutines": 12,
+    "uptime_seconds": 86400,
+    "commands_processed": 1543,
+    "commands_errored": 2
+  },
   "timestamp": "2025-11-14T12:00:00Z"
 }
 ```
@@ -372,6 +463,23 @@ Remove-Item "C:\ProgramData\WinAgent" -Recurse -Force
    Get-EventLog -LogName Application -Source win-agent -Newest 20
    ```
 
+### TLS Connection Issues
+
+1. Verify TLS is properly configured in config.yaml
+
+2. Test certificate files exist and are readable:
+   ```powershell
+   Test-Path "C:\ProgramData\WinAgent\ca-cert.pem"
+   Test-Path "C:\ProgramData\WinAgent\client-cert.pem"
+   ```
+
+3. Check agent logs for TLS errors:
+   ```powershell
+   Get-Content "C:\ProgramData\WinAgent\agent.log" | Select-String "TLS"
+   ```
+
+4. For development, temporarily enable `insecure_skip_verify` to rule out certificate issues
+
 ### Metrics Not Publishing
 
 1. Verify windows_exporter is running:
@@ -406,7 +514,19 @@ Remove-Item "C:\ProgramData\WinAgent" -Recurse -Force
 - Log file access restricted to configured paths
 - No HTTP endpoints exposed
 - NATS authentication required
+- TLS encryption available for secure communications
 - Tenant isolation via NATS accounts
+- Client certificate authentication supported
+
+### Security Best Practices
+
+1. **Always use TLS in production** - Enable `nats.tls.enabled: true`
+2. **Use credentials file authentication** - More secure than username/password
+3. **Never use `insecure_skip_verify`** in production
+4. **Keep whitelists minimal** - Only allow necessary services, commands, and log paths
+5. **Rotate certificates regularly** - Follow your organization's PKI policies
+6. **Monitor agent logs** - Watch for authentication failures and unauthorized access attempts
+7. **Run as LocalService** - Ensure the service has minimal privileges
 
 ## License
 

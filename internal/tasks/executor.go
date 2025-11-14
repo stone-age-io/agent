@@ -13,6 +13,7 @@ type Executor struct {
 	logger         *zap.Logger
 	commandTimeout time.Duration
 	stats          *ExecutorStats
+	metricsCache   *metricsCache // Moved from global variable in metrics.go
 }
 
 // ExecutorStats tracks executor statistics for self-monitoring
@@ -23,6 +24,17 @@ type ExecutorStats struct {
 	commandsErrored   int64
 	lastError         string
 	lastErrorTime     time.Time
+}
+
+// metricsCache stores previous counter values for rate calculation
+// Counter-based metrics (CPU, disk I/O) need two measurements to calculate rates
+type metricsCache struct {
+	mu                 sync.RWMutex
+	lastCPUTotal       float64
+	lastCPUIdle        float64
+	lastDiskReadBytes  float64
+	lastDiskWriteBytes float64
+	lastTimestamp      time.Time
 }
 
 // AgentMetrics represents agent self-monitoring metrics
@@ -44,6 +56,7 @@ func NewExecutor(logger *zap.Logger, commandTimeout time.Duration) *Executor {
 		stats: &ExecutorStats{
 			startTime: time.Now(),
 		},
+		metricsCache: &metricsCache{},
 	}
 }
 

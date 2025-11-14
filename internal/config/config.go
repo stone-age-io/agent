@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"time"
 
@@ -21,6 +22,7 @@ type Config struct {
 type NATSConfig struct {
 	URLs          []string      `mapstructure:"urls"`
 	Auth          AuthConfig    `mapstructure:"auth"`
+	TLS           TLSConfig     `mapstructure:"tls"`
 	MaxReconnects int           `mapstructure:"max_reconnects"`
 	ReconnectWait time.Duration `mapstructure:"reconnect_wait"`
 	DrainTimeout  time.Duration `mapstructure:"drain_timeout"`
@@ -33,6 +35,15 @@ type AuthConfig struct {
 	Token     string `mapstructure:"token"`      // for token auth
 	Username  string `mapstructure:"username"`   // for userpass auth
 	Password  string `mapstructure:"password"`   // for userpass auth
+}
+
+// TLSConfig holds TLS connection settings
+type TLSConfig struct {
+	Enabled            bool   `mapstructure:"enabled"`
+	CertFile           string `mapstructure:"cert_file"`            // Client certificate
+	KeyFile            string `mapstructure:"key_file"`             // Client private key
+	CAFile             string `mapstructure:"ca_file"`              // CA certificate for server verification
+	InsecureSkipVerify bool   `mapstructure:"insecure_skip_verify"` // Skip server certificate verification (NOT recommended for production)
 }
 
 // TasksConfig holds scheduled task configurations
@@ -121,6 +132,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.reconnect_wait", "2s")
 	v.SetDefault("nats.drain_timeout", "30s")
 
+	// TLS defaults
+	v.SetDefault("nats.tls.enabled", false)
+	v.SetDefault("nats.tls.insecure_skip_verify", false)
+
 	// Task defaults
 	v.SetDefault("tasks.heartbeat.enabled", true)
 	v.SetDefault("tasks.heartbeat.interval", "1m")
@@ -167,6 +182,10 @@ func validate(cfg *Config) error {
 		if cfg.NATS.Auth.CredsFile == "" {
 			return fmt.Errorf("creds_file is required for creds auth type")
 		}
+		// Verify credentials file exists
+		if _, err := os.Stat(cfg.NATS.Auth.CredsFile); err != nil {
+			return fmt.Errorf("credentials file not found: %s (%w)", cfg.NATS.Auth.CredsFile, err)
+		}
 	case "token":
 		if cfg.NATS.Auth.Token == "" {
 			return fmt.Errorf("token is required for token auth type")
@@ -179,6 +198,40 @@ func validate(cfg *Config) error {
 		// No validation needed
 	default:
 		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, or none)", cfg.NATS.Auth.Type)
+	}
+
+	// Validate TLS configuration
+	if cfg.NATS.TLS.Enabled {
+		// If client certificate is provided, key must also be provided
+		if cfg.NATS.TLS.CertFile != "" && cfg.NATS.TLS.KeyFile == "" {
+			return fmt.Errorf("tls.key_file is required when tls.cert_file is specified")
+		}
+		if cfg.NATS.TLS.KeyFile != "" && cfg.NATS.TLS.CertFile == "" {
+			return fmt.Errorf("tls.cert_file is required when tls.key_file is specified")
+		}
+
+		// Verify TLS files exist if specified
+		if cfg.NATS.TLS.CertFile != "" {
+			if _, err := os.Stat(cfg.NATS.TLS.CertFile); err != nil {
+				return fmt.Errorf("TLS certificate file not found: %s (%w)", cfg.NATS.TLS.CertFile, err)
+			}
+		}
+		if cfg.NATS.TLS.KeyFile != "" {
+			if _, err := os.Stat(cfg.NATS.TLS.KeyFile); err != nil {
+				return fmt.Errorf("TLS key file not found: %s (%w)", cfg.NATS.TLS.KeyFile, err)
+			}
+		}
+		if cfg.NATS.TLS.CAFile != "" {
+			if _, err := os.Stat(cfg.NATS.TLS.CAFile); err != nil {
+				return fmt.Errorf("TLS CA file not found: %s (%w)", cfg.NATS.TLS.CAFile, err)
+			}
+		}
+
+		// Warn about insecure_skip_verify (but allow it for development)
+		if cfg.NATS.TLS.InsecureSkipVerify {
+			// This will be logged as a warning in the agent startup
+			// We don't block it here to allow development/testing scenarios
+		}
 	}
 
 	// Validate service check has services if enabled
@@ -195,7 +248,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("system_metrics interval must be at least 30 seconds (got: %v)", cfg.Tasks.SystemMetrics.Interval)
 	}
 
-	// FIXED: Validate heartbeat is more frequent than metrics (best practice)
+	// Validate heartbeat is more frequent than metrics (best practice)
 	// Heartbeat should be MORE frequent, meaning a SMALLER interval duration
 	if cfg.Tasks.Heartbeat.Enabled && cfg.Tasks.SystemMetrics.Enabled {
 		if cfg.Tasks.Heartbeat.Interval > cfg.Tasks.SystemMetrics.Interval {

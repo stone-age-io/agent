@@ -22,17 +22,6 @@ type SystemMetrics struct {
 	Timestamp            string  `json:"timestamp"`
 }
 
-// metricsCache stores previous counter values for rate calculation
-type metricsCache struct {
-	lastCPUTotal       float64
-	lastCPUIdle        float64
-	lastDiskReadBytes  float64
-	lastDiskWriteBytes float64
-	lastTimestamp      time.Time
-}
-
-var cache = &metricsCache{}
-
 // ScrapeMetrics fetches and parses metrics from windows_exporter
 func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	// Fetch metrics from windows_exporter
@@ -47,13 +36,13 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	}
 
 	// Parse metrics using expfmt
-	metrics, err := parsePrometheusMetrics(resp.Body, e.logger)
+	metrics, err := e.parsePrometheusMetrics(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse metrics: %w", err)
 	}
 
 	// Validate metrics before returning
-	if err := validateMetrics(metrics); err != nil {
+	if err := e.validateMetrics(metrics); err != nil {
 		return nil, fmt.Errorf("invalid metrics: %w", err)
 	}
 
@@ -62,7 +51,7 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 }
 
 // parsePrometheusMetrics parses Prometheus format metrics using expfmt
-func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetrics, error) {
+func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, error) {
 	// Use NewDecoder with FmtText format for proper initialization
 	// This ensures validation scheme is properly set
 	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
@@ -82,8 +71,12 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	}
 
 	// Debug: Log available metric families (only first time)
-	if cache.lastTimestamp.IsZero() {
-		logger.Debug("Available metric families",
+	e.metricsCache.mu.RLock()
+	isFirstScrape := e.metricsCache.lastTimestamp.IsZero()
+	e.metricsCache.mu.RUnlock()
+
+	if isFirstScrape {
+		e.logger.Debug("Available metric families",
 			zap.Int("count", len(metricFamilies)),
 			zap.Strings("names", getMetricNames(metricFamilies)))
 	}
@@ -117,11 +110,15 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 			}
 		}
 
+		// Lock the cache for reading and writing
+		e.metricsCache.mu.Lock()
+		defer e.metricsCache.mu.Unlock()
+
 		// Only calculate if we have a previous measurement
-		if !cache.lastTimestamp.IsZero() && totalTime > 0 && cache.lastCPUTotal > 0 {
+		if !e.metricsCache.lastTimestamp.IsZero() && totalTime > 0 && e.metricsCache.lastCPUTotal > 0 {
 			// How much CPU time passed between measurements
-			totalDelta := totalTime - cache.lastCPUTotal
-			idleDelta := idleTime - cache.lastCPUIdle
+			totalDelta := totalTime - e.metricsCache.lastCPUTotal
+			idleDelta := idleTime - e.metricsCache.lastCPUIdle
 
 			if totalDelta > 0 {
 				// Usage = time spent NOT idle / total time
@@ -129,21 +126,23 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 				metrics.CPUUsagePercent = utils.Round(100 - idlePercent)
 				cpuFound = true
 
-				logger.Debug("CPU calculated",
+				e.logger.Debug("CPU calculated",
 					zap.Float64("total_delta", totalDelta),
 					zap.Float64("idle_delta", idleDelta),
 					zap.Float64("idle_percent", idlePercent),
 					zap.Float64("usage_percent", metrics.CPUUsagePercent))
 			}
-		} else if cache.lastTimestamp.IsZero() {
-			logger.Debug("CPU baseline stored (first scrape)",
+		} else if e.metricsCache.lastTimestamp.IsZero() {
+			e.logger.Debug("CPU baseline stored (first scrape)",
 				zap.Float64("total_time", totalTime),
 				zap.Float64("idle_time", idleTime))
 		}
 
 		// Store current values for next time
-		cache.lastCPUTotal = totalTime
-		cache.lastCPUIdle = idleTime
+		e.metricsCache.lastCPUTotal = totalTime
+		e.metricsCache.lastCPUIdle = idleTime
+
+		// Note: defer unlock will happen at end of function
 	}
 
 	// Extract memory free bytes and convert to GB
@@ -166,7 +165,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 				bytes := family.Metric[0].Gauge.GetValue()
 				metrics.MemoryFreeGB = utils.Round(bytes / 1024 / 1024 / 1024)
 				memoryFound = true
-				logger.Debug("Using physical_free_bytes fallback for memory metric")
+				e.logger.Debug("Using physical_free_bytes fallback for memory metric")
 			}
 		}
 	}
@@ -206,8 +205,11 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 	// Same concept as CPU - counters need two measurements to calculate rate
 	now := time.Now()
 
-	if !cache.lastTimestamp.IsZero() {
-		timeDelta := now.Sub(cache.lastTimestamp).Seconds()
+	// Lock for disk I/O cache operations
+	e.metricsCache.mu.Lock()
+	
+	if !e.metricsCache.lastTimestamp.IsZero() {
+		timeDelta := now.Sub(e.metricsCache.lastTimestamp).Seconds()
 
 		if timeDelta > 0 {
 			// Read bytes
@@ -216,11 +218,11 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 					volume := getLabelValue(m.Label, "volume")
 					if volume == "C:" && m.Counter != nil {
 						currentRead := m.Counter.GetValue()
-						if cache.lastDiskReadBytes > 0 {
-							delta := currentRead - cache.lastDiskReadBytes
+						if e.metricsCache.lastDiskReadBytes > 0 {
+							delta := currentRead - e.metricsCache.lastDiskReadBytes
 							metrics.DiskReadBytesPerSec = utils.Round(delta / timeDelta)
 						}
-						cache.lastDiskReadBytes = currentRead
+						e.metricsCache.lastDiskReadBytes = currentRead
 						break
 					}
 				}
@@ -232,11 +234,11 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 					volume := getLabelValue(m.Label, "volume")
 					if volume == "C:" && m.Counter != nil {
 						currentWrite := m.Counter.GetValue()
-						if cache.lastDiskWriteBytes > 0 {
-							delta := currentWrite - cache.lastDiskWriteBytes
+						if e.metricsCache.lastDiskWriteBytes > 0 {
+							delta := currentWrite - e.metricsCache.lastDiskWriteBytes
 							metrics.DiskWriteBytesPerSec = utils.Round(delta / timeDelta)
 						}
-						cache.lastDiskWriteBytes = currentWrite
+						e.metricsCache.lastDiskWriteBytes = currentWrite
 						break
 					}
 				}
@@ -248,7 +250,7 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
 				if volume == "C:" && m.Counter != nil {
-					cache.lastDiskReadBytes = m.Counter.GetValue()
+					e.metricsCache.lastDiskReadBytes = m.Counter.GetValue()
 					break
 				}
 			}
@@ -258,25 +260,26 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
 				if volume == "C:" && m.Counter != nil {
-					cache.lastDiskWriteBytes = m.Counter.GetValue()
+					e.metricsCache.lastDiskWriteBytes = m.Counter.GetValue()
 					break
 				}
 			}
 		}
 
-		logger.Debug("Disk I/O baseline stored, will calculate on next scrape")
+		e.logger.Debug("Disk I/O baseline stored, will calculate on next scrape")
 	}
 
-	cache.lastTimestamp = now
+	e.metricsCache.lastTimestamp = now
+	e.metricsCache.mu.Unlock()
 
 	// Log warnings if metrics weren't found
-	if !cpuFound && !cache.lastTimestamp.IsZero() {
-		logger.Warn("CPU metric not found or could not be calculated",
+	if !cpuFound && !isFirstScrape {
+		e.logger.Warn("CPU metric not found or could not be calculated",
 			zap.Bool("has_cpu_time_total", metricFamilies["windows_cpu_time_total"] != nil),
-			zap.Bool("is_first_scrape", cache.lastCPUTotal == 0))
+			zap.Bool("is_first_scrape", isFirstScrape))
 	}
 	if !memoryFound {
-		logger.Warn("Memory metric not found",
+		e.logger.Warn("Memory metric not found",
 			zap.Bool("has_memory_available_bytes", metricFamilies["windows_memory_available_bytes"] != nil),
 			zap.Bool("has_physical_free_bytes", metricFamilies["windows_memory_physical_free_bytes"] != nil))
 	}
@@ -285,13 +288,18 @@ func parsePrometheusMetrics(reader io.Reader, logger *zap.Logger) (*SystemMetric
 }
 
 // validateMetrics performs sanity checks on metrics values
-func validateMetrics(m *SystemMetrics) error {
-	// Validate CPU percentage (only if we have a value)
-	if cache.lastTimestamp.IsZero() {
-		// First scrape - no CPU value yet, skip validation
+func (e *Executor) validateMetrics(m *SystemMetrics) error {
+	// Check if this is the first scrape
+	e.metricsCache.mu.RLock()
+	isFirstScrape := e.metricsCache.lastTimestamp.IsZero()
+	e.metricsCache.mu.RUnlock()
+
+	if isFirstScrape {
+		// First scrape - no CPU value yet, skip CPU validation
 		return nil
 	}
 
+	// Validate CPU percentage (only if we have a value)
 	if m.CPUUsagePercent < 0 || m.CPUUsagePercent > 100 {
 		return fmt.Errorf("invalid CPU usage: %.2f%% (must be 0-100)", m.CPUUsagePercent)
 	}
