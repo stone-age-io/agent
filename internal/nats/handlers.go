@@ -3,6 +3,7 @@ package nats
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -153,7 +154,7 @@ type customExecRequest struct {
 type customExecResponse struct {
 	Status    string          `json:"status"`
 	Command   string          `json:"command,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`  // Changed to RawMessage for JSON support
+	Output    json.RawMessage `json:"output,omitempty"`
 	ExitCode  int             `json:"exit_code,omitempty"`
 	Error     string          `json:"error,omitempty"`
 	Timestamp string          `json:"timestamp"`
@@ -161,12 +162,13 @@ type customExecResponse struct {
 
 // Enhanced health response structures
 type healthResponse struct {
-	Status    string              `json:"status"` // "healthy", "degraded", "unhealthy"
-	Timestamp string              `json:"timestamp"`
-	Agent     *tasks.AgentMetrics `json:"agent"`
-	NATS      *NATSHealth         `json:"nats"`
-	Tasks     *tasks.TaskHealthMetrics `json:"tasks"`
-	Config    *ConfigInfo         `json:"config"`
+	Status    string                       `json:"status"` // "healthy", "degraded", "unhealthy"
+	Timestamp string                       `json:"timestamp"`
+	Agent     *tasks.AgentMetrics          `json:"agent"`
+	NATS      *NATSHealth                  `json:"nats"`
+	Tasks     *tasks.TaskHealthMetrics     `json:"tasks"`
+	Config    *ConfigInfo                  `json:"config"`
+	OS        *tasks.OSInfo                `json:"os"` // Operating system information
 }
 
 type NATSHealth struct {
@@ -360,27 +362,22 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 	h.taskExecutor.RecordCommandSuccess()
 
 	// Prepare output for response
-	// If output is valid JSON, include it as parsed JSON
-	// If not, include it as a JSON-encoded string
+	// IMPROVED: Always try to parse as JSON first, regardless of first character
+	// This prevents false positives like "[ERROR] message" being treated as JSON
 	var outputData json.RawMessage
 	trimmedOutput := strings.TrimSpace(output)
 	
-	// Check if output looks like JSON (starts with { or [)
-	if len(trimmedOutput) > 0 && (trimmedOutput[0] == '{' || trimmedOutput[0] == '[') {
-		// Try to parse as JSON to validate
-		var testJSON interface{}
-		if err := json.Unmarshal([]byte(trimmedOutput), &testJSON); err == nil {
-			// Valid JSON - include as-is (will be parsed object in response)
-			outputData = json.RawMessage(trimmedOutput)
-		} else {
-			// Not valid JSON - encode as string
-			jsonStr, _ := json.Marshal(output)
-			outputData = json.RawMessage(jsonStr)
-		}
+	// Try to parse as JSON
+	var testJSON interface{}
+	if len(trimmedOutput) > 0 && json.Unmarshal([]byte(trimmedOutput), &testJSON) == nil {
+		// Valid JSON - include as-is (will be parsed object in response)
+		outputData = json.RawMessage(trimmedOutput)
+		h.logger.Debug("Command output is valid JSON, including as parsed object")
 	} else {
-		// Plain text output - encode as string
+		// Not valid JSON (or empty) - encode as string
 		jsonStr, _ := json.Marshal(output)
 		outputData = json.RawMessage(jsonStr)
+		h.logger.Debug("Command output is plain text, encoding as JSON string")
 	}
 
 	// Success response
@@ -416,6 +413,9 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 	// Get config info
 	configInfo := h.getConfigInfo()
 
+	// Get OS information
+	osInfo := h.getOSInfo()
+
 	// Determine overall health status
 	status := h.determineHealthStatus(natsHealth, taskMetrics)
 
@@ -426,6 +426,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		NATS:      natsHealth,
 		Tasks:     taskMetrics,
 		Config:    configInfo,
+		OS:        osInfo,
 	}
 
 	responseBytes, _ := json.Marshal(response)
@@ -434,7 +435,8 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 	h.logger.Debug("Sent health response",
 		zap.String("status", status),
 		zap.Float64("memory_mb", agentMetrics.MemoryUsageMB),
-		zap.Int("goroutines", agentMetrics.Goroutines))
+		zap.Int("goroutines", agentMetrics.Goroutines),
+		zap.String("platform", osInfo.Platform))
 }
 
 // getNATSHealth collects NATS connection health information
@@ -482,6 +484,23 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 		Version:       h.version,
 		EnabledTasks:  enabledTasks,
 	}
+}
+
+// getOSInfo returns operating system information
+// This provides immediate platform detection without requiring JetStream queries
+func (h *CommandHandlers) getOSInfo() *tasks.OSInfo {
+	osInfo, err := tasks.GetOSInfo()
+	if err != nil {
+		h.logger.Warn("Failed to get OS info for health check", zap.Error(err))
+		// Return basic info with at least the platform
+		return &tasks.OSInfo{
+			Name:     "Unknown",
+			Version:  "Unknown",
+			Build:    "Unknown",
+			Platform: runtime.GOOS,
+		}
+	}
+	return osInfo
 }
 
 // determineHealthStatus calculates overall health status

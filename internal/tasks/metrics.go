@@ -358,38 +358,39 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 }
 
 // validateMetrics performs sanity checks on metrics values
+// FIXED: Now validates gauge metrics (memory, disk) even on first scrape
+// Only counter-based metrics (CPU, disk I/O) are skipped on first scrape
 func (e *Executor) validateMetrics(m *SystemMetrics) error {
 	// Check if this is the first scrape
 	e.metricsCache.mu.RLock()
 	isFirstScrape := e.metricsCache.lastTimestamp.IsZero()
 	e.metricsCache.mu.RUnlock()
 
-	if isFirstScrape {
-		// First scrape - no CPU value yet, skip CPU validation
-		return nil
+	// Validate CPU percentage (only if we have a value - not on first scrape)
+	if !isFirstScrape {
+		if m.CPUUsagePercent < 0 || m.CPUUsagePercent > 100 {
+			return fmt.Errorf("invalid CPU usage: %.2f%% (must be 0-100)", m.CPUUsagePercent)
+		}
 	}
 
-	// Validate CPU percentage (only if we have a value)
-	if m.CPUUsagePercent < 0 || m.CPUUsagePercent > 100 {
-		return fmt.Errorf("invalid CPU usage: %.2f%% (must be 0-100)", m.CPUUsagePercent)
-	}
-
-	// Validate memory (should be positive)
+	// ALWAYS validate memory (gauge metric, not affected by first scrape)
 	if m.MemoryFreeGB < 0 {
 		return fmt.Errorf("invalid memory free: %.2f GB (cannot be negative)", m.MemoryFreeGB)
 	}
 
-	// Validate disk percentage
+	// ALWAYS validate disk percentage (gauge metric, not affected by first scrape)
 	if m.DiskFreePercent < 0 || m.DiskFreePercent > 100 {
 		return fmt.Errorf("invalid disk free: %.2f%% (must be 0-100)", m.DiskFreePercent)
 	}
 
-	// Validate disk I/O rates (should not be negative)
-	if m.DiskReadBytesPerSec < 0 {
-		return fmt.Errorf("invalid disk read rate: %.2f bytes/sec (cannot be negative)", m.DiskReadBytesPerSec)
-	}
-	if m.DiskWriteBytesPerSec < 0 {
-		return fmt.Errorf("invalid disk write rate: %.2f bytes/sec (cannot be negative)", m.DiskWriteBytesPerSec)
+	// Validate disk I/O rates (only if we have values - not on first scrape)
+	if !isFirstScrape {
+		if m.DiskReadBytesPerSec < 0 {
+			return fmt.Errorf("invalid disk read rate: %.2f bytes/sec (cannot be negative)", m.DiskReadBytesPerSec)
+		}
+		if m.DiskWriteBytesPerSec < 0 {
+			return fmt.Errorf("invalid disk write rate: %.2f bytes/sec (cannot be negative)", m.DiskWriteBytesPerSec)
+		}
 	}
 
 	return nil

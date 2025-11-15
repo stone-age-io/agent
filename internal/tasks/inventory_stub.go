@@ -21,9 +21,10 @@ type Inventory struct {
 
 // OSInfo contains operating system information
 type OSInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Build   string `json:"build"`
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Build    string `json:"build"`
+	Platform string `json:"platform"` // runtime.GOOS value: "windows", "linux", "freebsd"
 }
 
 // CPUInfo contains CPU information
@@ -57,23 +58,26 @@ type AgentInfo struct {
 
 // CollectInventory is a stub for non-Windows platforms
 func (e *Executor) CollectInventory(version string) (*Inventory, error) {
+	osInfo, _ := GetOSInfo()
+	
 	return &Inventory{
-		OS: OSInfo{
-			Name:    runtime.GOOS,
-			Version: "N/A",
-			Build:   "N/A",
-		},
-		CPU: CPUInfo{
-			Cores: runtime.NumCPU(),
-			Model: "N/A",
-		},
-		Memory: MemoryInfo{
-			TotalGB:     0,
-			AvailableGB: 0,
-		},
+		OS:        *osInfo,
+		CPU:       CPUInfo{Cores: runtime.NumCPU(), Model: "N/A"},
+		Memory:    MemoryInfo{TotalGB: 0, AvailableGB: 0},
 		Disks:     []DiskInfo{},
 		Network:   NetworkInfo{PrimaryIP: "N/A"},
 		Agent:     AgentInfo{Version: version},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}, fmt.Errorf("inventory collection not supported on %s", runtime.GOOS)
+}
+
+// GetOSInfo retrieves OS information for non-Windows platforms
+// This is public so it can be used by both inventory collection and health checks
+func GetOSInfo() (*OSInfo, error) {
+	return &OSInfo{
+		Name:     runtime.GOOS,
+		Version:  "N/A",
+		Build:    "N/A",
+		Platform: runtime.GOOS, // "linux", "freebsd", "darwin", etc.
+	}, nil
 }

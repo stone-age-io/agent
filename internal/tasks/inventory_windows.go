@@ -28,9 +28,10 @@ type Inventory struct {
 
 // OSInfo contains operating system information
 type OSInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Build   string `json:"build"`
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Build    string `json:"build"`
+	Platform string `json:"platform"` // runtime.GOOS value: "windows", "linux", "freebsd"
 }
 
 // CPUInfo contains CPU information
@@ -70,11 +71,11 @@ func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 	}
 
 	// Collect OS information from registry
-	osInfo, err := getOSInfo()
+	osInfo, err := GetOSInfo()
 	if err != nil {
 		e.logger.Warn("Failed to collect OS info", zap.Error(err))
 	} else {
-		inv.OS = osInfo
+		inv.OS = *osInfo
 	}
 
 	// Collect CPU information
@@ -107,13 +108,14 @@ func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 	return inv, nil
 }
 
-// getOSInfo retrieves OS information from Windows registry
-func getOSInfo() (OSInfo, error) {
+// GetOSInfo retrieves OS information from Windows registry
+// This is public so it can be used by both inventory collection and health checks
+func GetOSInfo() (*OSInfo, error) {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
 		registry.QUERY_VALUE)
 	if err != nil {
-		return OSInfo{}, fmt.Errorf("failed to open registry key: %w", err)
+		return nil, fmt.Errorf("failed to open registry key: %w", err)
 	}
 	defer k.Close()
 
@@ -132,10 +134,11 @@ func getOSInfo() (OSInfo, error) {
 		currentBuild = "Unknown"
 	}
 
-	return OSInfo{
-		Name:    productName,
-		Version: currentVersion,
-		Build:   currentBuild,
+	return &OSInfo{
+		Name:     productName,
+		Version:  currentVersion,
+		Build:    currentBuild,
+		Platform: runtime.GOOS, // "windows"
 	}, nil
 }
 
