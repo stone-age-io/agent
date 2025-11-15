@@ -27,6 +27,10 @@ func TestNewExecutor(t *testing.T) {
 		t.Error("NewExecutor() metricsCache is nil")
 	}
 
+	if executor.httpClient == nil {
+		t.Error("NewExecutor() httpClient is nil")
+	}
+
 	// Verify stats are initialized
 	if executor.stats.startTime.IsZero() {
 		t.Error("NewExecutor() stats.startTime not initialized")
@@ -243,10 +247,176 @@ func TestMetricsCacheInitialization(t *testing.T) {
 	if executor.metricsCache.lastCPUIdle != 0 {
 		t.Error("Initial lastCPUIdle should be zero")
 	}
-	if executor.metricsCache.lastDiskReadBytes != 0 {
-		t.Error("Initial lastDiskReadBytes should be zero")
+	
+	// NEW: Check per-drive disk metrics map is initialized
+	if executor.metricsCache.lastDiskMetrics == nil {
+		t.Error("Initial lastDiskMetrics map should be initialized (not nil)")
 	}
-	if executor.metricsCache.lastDiskWriteBytes != 0 {
-		t.Error("Initial lastDiskWriteBytes should be zero")
+	if len(executor.metricsCache.lastDiskMetrics) != 0 {
+		t.Errorf("Initial lastDiskMetrics should be empty, got %d entries", len(executor.metricsCache.lastDiskMetrics))
+	}
+}
+
+// TestDiskMetricsCacheStorage tests per-drive disk metrics storage
+func TestDiskMetricsCacheStorage(t *testing.T) {
+	executor := NewExecutor(nil, 0)
+
+	// Simulate storing metrics for multiple drives
+	executor.metricsCache.mu.Lock()
+	
+	// Store metrics for C: drive
+	executor.metricsCache.lastDiskMetrics["C:"] = DiskCounters{
+		ReadBytes:  1024000,
+		WriteBytes: 512000,
+	}
+	
+	// Store metrics for D: drive
+	executor.metricsCache.lastDiskMetrics["D:"] = DiskCounters{
+		ReadBytes:  2048000,
+		WriteBytes: 1024000,
+	}
+	
+	executor.metricsCache.mu.Unlock()
+
+	// Verify storage
+	executor.metricsCache.mu.RLock()
+	defer executor.metricsCache.mu.RUnlock()
+
+	// Check C: drive
+	cDrive, exists := executor.metricsCache.lastDiskMetrics["C:"]
+	if !exists {
+		t.Error("C: drive metrics not found in cache")
+	}
+	if cDrive.ReadBytes != 1024000 {
+		t.Errorf("C: ReadBytes = %f, want 1024000", cDrive.ReadBytes)
+	}
+	if cDrive.WriteBytes != 512000 {
+		t.Errorf("C: WriteBytes = %f, want 512000", cDrive.WriteBytes)
+	}
+
+	// Check D: drive
+	dDrive, exists := executor.metricsCache.lastDiskMetrics["D:"]
+	if !exists {
+		t.Error("D: drive metrics not found in cache")
+	}
+	if dDrive.ReadBytes != 2048000 {
+		t.Errorf("D: ReadBytes = %f, want 2048000", dDrive.ReadBytes)
+	}
+	if dDrive.WriteBytes != 1024000 {
+		t.Errorf("D: WriteBytes = %f, want 1024000", dDrive.WriteBytes)
+	}
+
+	// Verify map size
+	if len(executor.metricsCache.lastDiskMetrics) != 2 {
+		t.Errorf("lastDiskMetrics should have 2 entries, got %d", len(executor.metricsCache.lastDiskMetrics))
+	}
+}
+
+// TestDiskMetricsCacheUpdate tests updating disk metrics for existing drive
+func TestDiskMetricsCacheUpdate(t *testing.T) {
+	executor := NewExecutor(nil, 0)
+
+	executor.metricsCache.mu.Lock()
+
+	// Initial values for C: drive
+	executor.metricsCache.lastDiskMetrics["C:"] = DiskCounters{
+		ReadBytes:  1000000,
+		WriteBytes: 500000,
+	}
+
+	// Update values for C: drive (simulating next scrape)
+	counters := executor.metricsCache.lastDiskMetrics["C:"]
+	counters.ReadBytes = 2000000
+	counters.WriteBytes = 1000000
+	executor.metricsCache.lastDiskMetrics["C:"] = counters
+
+	executor.metricsCache.mu.Unlock()
+
+	// Verify update
+	executor.metricsCache.mu.RLock()
+	defer executor.metricsCache.mu.RUnlock()
+
+	updated := executor.metricsCache.lastDiskMetrics["C:"]
+	if updated.ReadBytes != 2000000 {
+		t.Errorf("Updated ReadBytes = %f, want 2000000", updated.ReadBytes)
+	}
+	if updated.WriteBytes != 1000000 {
+		t.Errorf("Updated WriteBytes = %f, want 1000000", updated.WriteBytes)
+	}
+}
+
+// TestHTTPClientInitialization tests that HTTP client is created and cached
+func TestHTTPClientInitialization(t *testing.T) {
+	executor := NewExecutor(nil, 0)
+
+	if executor.httpClient == nil {
+		t.Fatal("httpClient should be initialized, got nil")
+	}
+
+	// Verify it's the same instance on multiple accesses
+	client1 := executor.httpClient
+	client2 := executor.httpClient
+
+	if client1 != client2 {
+		t.Error("httpClient should be the same instance (cached)")
+	}
+
+	// Verify timeout is set (should be 30s from createHTTPClient)
+	if executor.httpClient.Timeout != 30*time.Second {
+		t.Errorf("httpClient.Timeout = %v, want 30s", executor.httpClient.Timeout)
+	}
+}
+
+// TestTaskStatsRecording tests task execution tracking
+func TestTaskStatsRecording(t *testing.T) {
+	executor := NewExecutor(nil, 0)
+
+	// Initial state - all timestamps should be zero
+	metrics := executor.GetTaskMetrics()
+	if metrics.HeartbeatCount != 0 {
+		t.Errorf("Initial HeartbeatCount = %d, want 0", metrics.HeartbeatCount)
+	}
+	if metrics.MetricsCount != 0 {
+		t.Errorf("Initial MetricsCount = %d, want 0", metrics.MetricsCount)
+	}
+
+	// Record some task executions
+	executor.RecordHeartbeat()
+	executor.RecordMetricsSuccess()
+	executor.RecordMetricsSuccess()
+	executor.RecordMetricsFailure()
+	executor.RecordServiceCheck()
+	executor.RecordInventory()
+
+	// Check counters
+	metrics = executor.GetTaskMetrics()
+	if metrics.HeartbeatCount != 1 {
+		t.Errorf("HeartbeatCount = %d, want 1", metrics.HeartbeatCount)
+	}
+	if metrics.MetricsCount != 2 {
+		t.Errorf("MetricsCount = %d, want 2", metrics.MetricsCount)
+	}
+	if metrics.MetricsFailures != 1 {
+		t.Errorf("MetricsFailures = %d, want 1", metrics.MetricsFailures)
+	}
+	if metrics.ServiceCheckCount != 1 {
+		t.Errorf("ServiceCheckCount = %d, want 1", metrics.ServiceCheckCount)
+	}
+	if metrics.InventoryCount != 1 {
+		t.Errorf("InventoryCount = %d, want 1", metrics.InventoryCount)
+	}
+
+	// Check timestamps are set
+	if metrics.LastHeartbeat == "" {
+		t.Error("LastHeartbeat should be set")
+	}
+	if metrics.LastMetrics == "" {
+		t.Error("LastMetrics should be set")
+	}
+	if metrics.LastServiceCheck == "" {
+		t.Error("LastServiceCheck should be set")
+	}
+	if metrics.LastInventory == "" {
+		t.Error("LastInventory should be set")
 	}
 }

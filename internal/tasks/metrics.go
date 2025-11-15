@@ -16,16 +16,25 @@ import (
 
 // SystemMetrics represents system metrics collected from windows_exporter
 type SystemMetrics struct {
-	CPUUsagePercent      float64 `json:"cpu_usage_percent"`
-	MemoryFreeGB         float64 `json:"memory_free_gb"`
-	DiskFreePercent      float64 `json:"disk_free_percent"`
-	DiskReadBytesPerSec  float64 `json:"disk_read_bytes_per_sec"`
-	DiskWriteBytesPerSec float64 `json:"disk_write_bytes_per_sec"`
-	Timestamp            string  `json:"timestamp"`
+	CPUUsagePercent float64       `json:"cpu_usage_percent"`
+	MemoryFreeGB    float64       `json:"memory_free_gb"`
+	Disks           []DiskMetrics `json:"disks"` // All drives detected on system
+	Timestamp       string        `json:"timestamp"`
+}
+
+// DiskMetrics represents metrics for a single disk drive
+type DiskMetrics struct {
+	Drive            string  `json:"drive"`               // Drive letter (C:, D:, E:, etc.)
+	FreePercent      float64 `json:"free_percent"`        // Percentage of free space
+	FreeGB           float64 `json:"free_gb"`             // Free space in GB
+	TotalGB          float64 `json:"total_gb"`            // Total space in GB
+	ReadBytesPerSec  float64 `json:"read_bytes_per_sec"`  // Read rate (requires previous measurement)
+	WriteBytesPerSec float64 `json:"write_bytes_per_sec"` // Write rate (requires previous measurement)
 }
 
 // createHTTPClient creates an HTTP client with appropriate timeouts for metrics scraping
 // These timeouts prevent indefinite hangs when windows_exporter is slow or unreachable
+// This client is created ONCE and reused for all scrapes for efficiency
 func createHTTPClient() *http.Client {
 	return &http.Client{
 		// Overall request timeout (connection + headers + body read)
@@ -42,8 +51,10 @@ func createHTTPClient() *http.Client {
 			TLSHandshakeTimeout: 5 * time.Second,
 			// Time to receive response headers
 			ResponseHeaderTimeout: 10 * time.Second,
-			// Disable keep-alives to avoid connection reuse issues
-			DisableKeepAlives: true,
+			// ENABLE connection reuse for localhost scraping efficiency
+			// Since we're scraping the same local endpoint every 5 minutes,
+			// reusing the connection saves TCP handshake overhead
+			DisableKeepAlives: false,
 			// Max idle connections
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 2,
@@ -55,9 +66,6 @@ func createHTTPClient() *http.Client {
 // ScrapeMetrics fetches and parses metrics from windows_exporter
 func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	e.logger.Debug("Starting metrics scrape", zap.String("url", exporterURL))
-
-	// Create HTTP client with timeouts
-	client := createHTTPClient()
 
 	// Create context with timeout for additional safety
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -72,9 +80,9 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	// Set User-Agent for identification
 	req.Header.Set("User-Agent", "win-agent/1.0")
 
-	// Execute request
+	// Execute request using cached HTTP client (reuses connections)
 	e.logger.Debug("Executing HTTP request", zap.String("url", exporterURL))
-	resp, err := client.Do(req)
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		// Provide more context about the error
 		if ctx.Err() == context.DeadlineExceeded {
@@ -113,7 +121,7 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	e.logger.Debug("Metrics scrape completed successfully",
 		zap.Float64("cpu_percent", metrics.CPUUsagePercent),
 		zap.Float64("memory_free_gb", metrics.MemoryFreeGB),
-		zap.Float64("disk_free_percent", metrics.DiskFreePercent))
+		zap.Int("disk_count", len(metrics.Disks)))
 
 	return metrics, nil
 }
@@ -240,38 +248,44 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 		}
 	}
 
-	// Extract disk free space for C: drive
-	if family, ok := metricFamilies["windows_logical_disk_free_bytes"]; ok {
-		var freeBytes, totalBytes float64
-		foundFree, foundTotal := false, false
+	// Extract disk metrics for ALL drives (automatic discovery)
+	// Build a map of drive -> metrics for easier lookup
+	diskData := make(map[string]*DiskMetrics)
 
+	// Collect free space for all drives
+	if family, ok := metricFamilies["windows_logical_disk_free_bytes"]; ok {
 		for _, m := range family.Metric {
 			volume := getLabelValue(m.Label, "volume")
-			if volume == "C:" && m.Gauge != nil {
-				freeBytes = m.Gauge.GetValue()
-				foundFree = true
-				break
-			}
-		}
-
-		// Get total size to calculate percentage
-		if totalFamily, ok := metricFamilies["windows_logical_disk_size_bytes"]; ok {
-			for _, m := range totalFamily.Metric {
-				volume := getLabelValue(m.Label, "volume")
-				if volume == "C:" && m.Gauge != nil {
-					totalBytes = m.Gauge.GetValue()
-					foundTotal = true
-					break
+			if volume != "" && m.Gauge != nil {
+				if diskData[volume] == nil {
+					diskData[volume] = &DiskMetrics{Drive: volume}
 				}
+				diskData[volume].FreeGB = utils.Round(m.Gauge.GetValue() / 1024 / 1024 / 1024)
 			}
-		}
-
-		if foundFree && foundTotal && totalBytes > 0 {
-			metrics.DiskFreePercent = utils.Round((freeBytes / totalBytes) * 100)
 		}
 	}
 
-	// Extract disk I/O rates (read and write)
+	// Collect total size for all drives
+	if family, ok := metricFamilies["windows_logical_disk_size_bytes"]; ok {
+		for _, m := range family.Metric {
+			volume := getLabelValue(m.Label, "volume")
+			if volume != "" && m.Gauge != nil {
+				if diskData[volume] == nil {
+					diskData[volume] = &DiskMetrics{Drive: volume}
+				}
+				totalBytes := m.Gauge.GetValue()
+				diskData[volume].TotalGB = utils.Round(totalBytes / 1024 / 1024 / 1024)
+				
+				// Calculate percentage if we have both free and total
+				if diskData[volume].FreeGB > 0 && totalBytes > 0 {
+					freeBytes := diskData[volume].FreeGB * 1024 * 1024 * 1024
+					diskData[volume].FreePercent = utils.Round((freeBytes / totalBytes) * 100)
+				}
+			}
+		}
+	}
+
+	// Extract disk I/O rates for ALL drives (read and write)
 	// Same concept as CPU - counters need two measurements to calculate rate
 	now := time.Now()
 
@@ -282,46 +296,66 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 		timeDelta := now.Sub(e.metricsCache.lastTimestamp).Seconds()
 
 		if timeDelta > 0 {
-			// Read bytes
+			// Read bytes for all drives
 			if family, ok := metricFamilies["windows_logical_disk_read_bytes_total"]; ok {
 				for _, m := range family.Metric {
 					volume := getLabelValue(m.Label, "volume")
-					if volume == "C:" && m.Counter != nil {
+					if volume != "" && m.Counter != nil {
 						currentRead := m.Counter.GetValue()
-						if e.metricsCache.lastDiskReadBytes > 0 {
-							delta := currentRead - e.metricsCache.lastDiskReadBytes
-							metrics.DiskReadBytesPerSec = utils.Round(delta / timeDelta)
+						
+						// Check if we have previous measurement for this drive
+						if prevCounters, exists := e.metricsCache.lastDiskMetrics[volume]; exists && prevCounters.ReadBytes > 0 {
+							delta := currentRead - prevCounters.ReadBytes
+							if diskData[volume] == nil {
+								diskData[volume] = &DiskMetrics{Drive: volume}
+							}
+							diskData[volume].ReadBytesPerSec = utils.Round(delta / timeDelta)
 						}
-						e.metricsCache.lastDiskReadBytes = currentRead
-						break
+						
+						// Store current value
+						if e.metricsCache.lastDiskMetrics[volume].ReadBytes == 0 {
+							e.metricsCache.lastDiskMetrics[volume] = DiskCounters{}
+						}
+						counters := e.metricsCache.lastDiskMetrics[volume]
+						counters.ReadBytes = currentRead
+						e.metricsCache.lastDiskMetrics[volume] = counters
 					}
 				}
 			}
 
-			// Write bytes
+			// Write bytes for all drives
 			if family, ok := metricFamilies["windows_logical_disk_write_bytes_total"]; ok {
 				for _, m := range family.Metric {
 					volume := getLabelValue(m.Label, "volume")
-					if volume == "C:" && m.Counter != nil {
+					if volume != "" && m.Counter != nil {
 						currentWrite := m.Counter.GetValue()
-						if e.metricsCache.lastDiskWriteBytes > 0 {
-							delta := currentWrite - e.metricsCache.lastDiskWriteBytes
-							metrics.DiskWriteBytesPerSec = utils.Round(delta / timeDelta)
+						
+						// Check if we have previous measurement for this drive
+						if prevCounters, exists := e.metricsCache.lastDiskMetrics[volume]; exists && prevCounters.WriteBytes > 0 {
+							delta := currentWrite - prevCounters.WriteBytes
+							if diskData[volume] == nil {
+								diskData[volume] = &DiskMetrics{Drive: volume}
+							}
+							diskData[volume].WriteBytesPerSec = utils.Round(delta / timeDelta)
 						}
-						e.metricsCache.lastDiskWriteBytes = currentWrite
-						break
+						
+						// Store current value
+						counters := e.metricsCache.lastDiskMetrics[volume]
+						counters.WriteBytes = currentWrite
+						e.metricsCache.lastDiskMetrics[volume] = counters
 					}
 				}
 			}
 		}
 	} else {
-		// First scrape - just store baseline values
+		// First scrape - just store baseline values for all drives
 		if family, ok := metricFamilies["windows_logical_disk_read_bytes_total"]; ok {
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
-				if volume == "C:" && m.Counter != nil {
-					e.metricsCache.lastDiskReadBytes = m.Counter.GetValue()
-					break
+				if volume != "" && m.Counter != nil {
+					counters := e.metricsCache.lastDiskMetrics[volume]
+					counters.ReadBytes = m.Counter.GetValue()
+					e.metricsCache.lastDiskMetrics[volume] = counters
 				}
 			}
 		}
@@ -329,18 +363,28 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 		if family, ok := metricFamilies["windows_logical_disk_write_bytes_total"]; ok {
 			for _, m := range family.Metric {
 				volume := getLabelValue(m.Label, "volume")
-				if volume == "C:" && m.Counter != nil {
-					e.metricsCache.lastDiskWriteBytes = m.Counter.GetValue()
-					break
+				if volume != "" && m.Counter != nil {
+					counters := e.metricsCache.lastDiskMetrics[volume]
+					counters.WriteBytes = m.Counter.GetValue()
+					e.metricsCache.lastDiskMetrics[volume] = counters
 				}
 			}
 		}
 
-		e.logger.Debug("Disk I/O baseline stored, will calculate on next scrape")
+		e.logger.Debug("Disk I/O baseline stored for all drives, will calculate on next scrape")
 	}
 
 	e.metricsCache.lastTimestamp = now
 	e.metricsCache.mu.Unlock()
+
+	// Convert disk map to sorted array for consistent output
+	metrics.Disks = make([]DiskMetrics, 0, len(diskData))
+	for _, disk := range diskData {
+		// Only include drives with actual data (have either space or I/O metrics)
+		if disk.TotalGB > 0 || disk.ReadBytesPerSec > 0 || disk.WriteBytesPerSec > 0 {
+			metrics.Disks = append(metrics.Disks, *disk)
+		}
+	}
 
 	// Log warnings if metrics weren't found
 	if !cpuFound && !isFirstScrape {
@@ -352,6 +396,11 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 		e.logger.Warn("Memory metric not found",
 			zap.Bool("has_memory_available_bytes", metricFamilies["windows_memory_available_bytes"] != nil),
 			zap.Bool("has_physical_free_bytes", metricFamilies["windows_memory_physical_free_bytes"] != nil))
+	}
+	if len(metrics.Disks) == 0 {
+		e.logger.Warn("No disk metrics found",
+			zap.Bool("has_disk_free_bytes", metricFamilies["windows_logical_disk_free_bytes"] != nil),
+			zap.Bool("has_disk_size_bytes", metricFamilies["windows_logical_disk_size_bytes"] != nil))
 	}
 
 	return metrics, nil
@@ -378,18 +427,27 @@ func (e *Executor) validateMetrics(m *SystemMetrics) error {
 		return fmt.Errorf("invalid memory free: %.2f GB (cannot be negative)", m.MemoryFreeGB)
 	}
 
-	// ALWAYS validate disk percentage (gauge metric, not affected by first scrape)
-	if m.DiskFreePercent < 0 || m.DiskFreePercent > 100 {
-		return fmt.Errorf("invalid disk free: %.2f%% (must be 0-100)", m.DiskFreePercent)
-	}
-
-	// Validate disk I/O rates (only if we have values - not on first scrape)
-	if !isFirstScrape {
-		if m.DiskReadBytesPerSec < 0 {
-			return fmt.Errorf("invalid disk read rate: %.2f bytes/sec (cannot be negative)", m.DiskReadBytesPerSec)
+	// ALWAYS validate all disk metrics (gauge metrics for space, counters for I/O)
+	for _, disk := range m.Disks {
+		// Validate space metrics (always available)
+		if disk.FreePercent < 0 || disk.FreePercent > 100 {
+			return fmt.Errorf("invalid disk free percent for %s: %.2f%% (must be 0-100)", disk.Drive, disk.FreePercent)
 		}
-		if m.DiskWriteBytesPerSec < 0 {
-			return fmt.Errorf("invalid disk write rate: %.2f bytes/sec (cannot be negative)", m.DiskWriteBytesPerSec)
+		if disk.FreeGB < 0 {
+			return fmt.Errorf("invalid disk free space for %s: %.2f GB (cannot be negative)", disk.Drive, disk.FreeGB)
+		}
+		if disk.TotalGB < 0 {
+			return fmt.Errorf("invalid disk total space for %s: %.2f GB (cannot be negative)", disk.Drive, disk.TotalGB)
+		}
+
+		// Validate I/O rates (only if we have values - not on first scrape)
+		if !isFirstScrape {
+			if disk.ReadBytesPerSec < 0 {
+				return fmt.Errorf("invalid disk read rate for %s: %.2f bytes/sec (cannot be negative)", disk.Drive, disk.ReadBytesPerSec)
+			}
+			if disk.WriteBytesPerSec < 0 {
+				return fmt.Errorf("invalid disk write rate for %s: %.2f bytes/sec (cannot be negative)", disk.Drive, disk.WriteBytesPerSec)
+			}
 		}
 	}
 

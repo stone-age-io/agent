@@ -97,11 +97,24 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 		zap.Bool("tls", conn.TLSRequired()))
 
 	// Create JetStream context for telemetry publishing
+	logger.Info("Creating JetStream context...")
 	js, err := conn.JetStream()
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
+
+	// CRITICAL: Validate JetStream is actually enabled on the server
+	// This prevents cryptic failures when trying to publish telemetry later
+	// Fail fast here rather than silently failing on first heartbeat
+	logger.Info("Validating JetStream availability...")
+	_, err = js.AccountInfo()
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("JetStream not available on NATS server (is JetStream enabled?): %w", err)
+	}
+
+	logger.Info("JetStream validated successfully")
 
 	return &Client{
 		conn:   conn,

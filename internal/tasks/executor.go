@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"net/http"
 	"runtime"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 type Executor struct {
 	logger         *zap.Logger
 	commandTimeout time.Duration
+	httpClient     *http.Client  // Cached HTTP client for metrics scraping (created once, reused)
 	stats          *ExecutorStats
 	metricsCache   *metricsCache // Moved from global variable in metrics.go
 	taskStats      *TaskStats
@@ -49,12 +51,17 @@ type TaskStats struct {
 // metricsCache stores previous counter values for rate calculation
 // Counter-based metrics (CPU, disk I/O) need two measurements to calculate rates
 type metricsCache struct {
-	mu                 sync.RWMutex
-	lastCPUTotal       float64
-	lastCPUIdle        float64
-	lastDiskReadBytes  float64
-	lastDiskWriteBytes float64
-	lastTimestamp      time.Time
+	mu              sync.RWMutex
+	lastCPUTotal    float64
+	lastCPUIdle     float64
+	lastDiskMetrics map[string]DiskCounters  // Per-drive counters for I/O rate calculation
+	lastTimestamp   time.Time
+}
+
+// DiskCounters stores previous disk counter values for rate calculation
+type DiskCounters struct {
+	ReadBytes  float64
+	WriteBytes float64
 }
 
 // AgentMetrics represents agent self-monitoring metrics
@@ -87,11 +94,14 @@ func NewExecutor(logger *zap.Logger, commandTimeout time.Duration) *Executor {
 	return &Executor{
 		logger:         logger,
 		commandTimeout: commandTimeout,
+		httpClient:     createHTTPClient(), // Create HTTP client ONCE and reuse for all scrapes
 		stats: &ExecutorStats{
 			startTime: time.Now(),
 		},
-		metricsCache: &metricsCache{},
-		taskStats:    &TaskStats{},
+		metricsCache: &metricsCache{
+			lastDiskMetrics: make(map[string]DiskCounters), // Initialize per-drive counters map
+		},
+		taskStats: &TaskStats{},
 	}
 }
 

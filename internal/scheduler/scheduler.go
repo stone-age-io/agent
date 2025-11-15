@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -104,6 +105,9 @@ func (s *Scheduler) scheduleTasks() error {
 
 			// Don't sleep after last attempt
 			if attempt < maxRetries {
+				s.logger.Info("Retrying baseline in 2 seconds...",
+					zap.Int("attempt", attempt),
+					zap.Int("max", maxRetries))
 				time.Sleep(retryDelay)
 			}
 		}
@@ -261,12 +265,19 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 	// Record successful execution
 	s.executor.RecordMetricsSuccess()
 
+	// Build disk summary for logging
+	diskSummary := make([]string, len(metrics.Disks))
+	for i, disk := range metrics.Disks {
+		diskSummary[i] = fmt.Sprintf("%s:%.1f%%", disk.Drive, disk.FreePercent)
+	}
+
 	// Log success immediately (the actual publish happens in background)
 	s.logger.Info("Queued metrics publish",
 		zap.String("subject", subject),
 		zap.Float64("cpu_percent", metrics.CPUUsagePercent),
 		zap.Float64("memory_free_gb", metrics.MemoryFreeGB),
-		zap.Float64("disk_free_percent", metrics.DiskFreePercent))
+		zap.Int("disk_count", len(metrics.Disks)),
+		zap.String("disks", strings.Join(diskSummary, ", ")))
 }
 
 // publishServiceStatus checks and publishes service status
