@@ -55,6 +55,14 @@ func main() {
 	}
 	prg.logger = logger
 
+	// Consume service logger errors in background
+	// These are errors from the service framework itself
+	go func() {
+		for err := range errs {
+			log.Printf("Service framework error: %v", err)
+		}
+	}()
+
 	// Handle service control commands
 	if len(svcFlag) != 0 {
 		err := service.Control(s, svcFlag)
