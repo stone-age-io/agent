@@ -78,7 +78,203 @@ func TestValidateDeviceID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID: tt.deviceID,
+				DeviceID:      tt.deviceID,
+				SubjectPrefix: "agents",
+				NATS: NATSConfig{
+					URLs: []string{"nats://localhost:4222"},
+					Auth: AuthConfig{Type: "none"},
+				},
+				Tasks: TasksConfig{
+					Heartbeat:     HeartbeatConfig{Enabled: true, Interval: 1 * time.Minute},
+					SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute},
+					ServiceCheck:  ServiceCheckConfig{Enabled: false},
+					Inventory:     InventoryConfig{Enabled: true, Interval: 24 * time.Hour},
+				},
+				Commands: CommandsConfig{
+					Timeout: 30 * time.Second,
+				},
+				Logging: LoggingConfig{
+					Level:      "info",
+					File:       "test.log",
+					MaxSizeMB:  100,
+					MaxBackups: 3,
+				},
+			}
+
+			err := validate(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errText != "" && err != nil {
+				if indexOf(err.Error(), tt.errText) < 0 {
+					t.Errorf("validate() error = %v, want error containing %q", err, tt.errText)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateSubjectPrefix tests subject prefix validation
+func TestValidateSubjectPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+		errText string
+	}{
+		// Valid prefixes
+		{
+			name:    "simple prefix",
+			prefix:  "agents",
+			wantErr: false,
+		},
+		{
+			name:    "with dash",
+			prefix:  "win-agents",
+			wantErr: false,
+		},
+		{
+			name:    "with underscore",
+			prefix:  "win_agents",
+			wantErr: false,
+		},
+		{
+			name:    "hierarchical two levels",
+			prefix:  "production.agents",
+			wantErr: false,
+		},
+		{
+			name:    "hierarchical three levels",
+			prefix:  "region.dev.agents",
+			wantErr: false,
+		},
+		{
+			name:    "complex hierarchical",
+			prefix:  "us-east-1.production.win-agents",
+			wantErr: false,
+		},
+		{
+			name:    "with numbers",
+			prefix:  "region1.env2.agents3",
+			wantErr: false,
+		},
+		{
+			name:    "mixed characters",
+			prefix:  "my_region.dev-env.agents",
+			wantErr: false,
+		},
+
+		// Invalid prefixes
+		{
+			name:    "leading dot",
+			prefix:  ".agents",
+			wantErr: true,
+			errText: "cannot start or end with a dot",
+		},
+		{
+			name:    "trailing dot",
+			prefix:  "agents.",
+			wantErr: true,
+			errText: "cannot start or end with a dot",
+		},
+		{
+			name:    "consecutive dots",
+			prefix:  "region..agents",
+			wantErr: true,
+			errText: "consecutive dots not allowed",
+		},
+		{
+			name:    "only dot",
+			prefix:  ".",
+			wantErr: true,
+			errText: "cannot start or end with a dot",
+		},
+		{
+			name:    "special characters in token",
+			prefix:  "region@dev.agents",
+			wantErr: true,
+			errText: "contains invalid characters",
+		},
+		{
+			name:    "spaces",
+			prefix:  "my region.agents",
+			wantErr: true,
+			errText: "contains invalid characters",
+		},
+		{
+			name:    "forward slash",
+			prefix:  "region/dev.agents",
+			wantErr: true,
+			errText: "contains invalid characters",
+		},
+		{
+			name:    "wildcard",
+			prefix:  "region.*.agents",
+			wantErr: true,
+			errText: "contains invalid characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSubjectPrefix(tt.prefix)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateSubjectPrefix() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errText != "" && err != nil {
+				if indexOf(err.Error(), tt.errText) < 0 {
+					t.Errorf("validateSubjectPrefix() error = %v, want error containing %q", err, tt.errText)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateSubjectPrefixInConfig tests subject prefix validation through full config validation
+func TestValidateSubjectPrefixInConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		subjectPrefix string
+		wantErr       bool
+		errText       string
+	}{
+		{
+			name:          "default prefix",
+			subjectPrefix: "agents",
+			wantErr:       false,
+		},
+		{
+			name:          "hierarchical prefix",
+			subjectPrefix: "us-west.production.agents",
+			wantErr:       false,
+		},
+		{
+			name:          "too long",
+			subjectPrefix: "this-is-a-very-long-prefix-that-exceeds-the-maximum-allowed-length-of-fifty-characters",
+			wantErr:       true,
+			errText:       "must not exceed 50 characters",
+		},
+		{
+			name:          "leading dot",
+			subjectPrefix: ".agents",
+			wantErr:       true,
+			errText:       "cannot start or end with a dot",
+		},
+		{
+			name:          "empty prefix",
+			subjectPrefix: "",
+			wantErr:       true,
+			errText:       "subject_prefix is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				DeviceID:      "test-device",
+				SubjectPrefix: tt.subjectPrefix,
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
 					Auth: AuthConfig{Type: "none"},
@@ -188,7 +384,8 @@ func TestValidateNATSAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID: "test-device",
+				DeviceID:      "test-device",
+				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
 					Auth: tt.auth,
@@ -339,7 +536,8 @@ func TestValidateTLS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID: "test-device",
+				DeviceID:      "test-device",
+				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
 					Auth: AuthConfig{Type: "none"},
@@ -426,7 +624,8 @@ func TestValidateTaskIntervals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID: "test-device",
+				DeviceID:      "test-device",
+				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
 					Auth: AuthConfig{Type: "none"},
@@ -502,7 +701,8 @@ func TestValidateCommandTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID: "test-device",
+				DeviceID:      "test-device",
+				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
 					Auth: AuthConfig{Type: "none"},

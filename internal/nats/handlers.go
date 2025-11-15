@@ -17,16 +17,18 @@ type CommandHandlers struct {
 	logger       *zap.Logger
 	config       *config.Config
 	deviceID     string
+	subjectPrefix string
 	taskExecutor *tasks.Executor
 }
 
 // NewCommandHandlers creates a new command handler manager
 func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor) *CommandHandlers {
 	return &CommandHandlers{
-		logger:       logger,
-		config:       cfg,
-		deviceID:     cfg.DeviceID,
-		taskExecutor: executor,
+		logger:        logger,
+		config:        cfg,
+		deviceID:      cfg.DeviceID,
+		subjectPrefix: cfg.SubjectPrefix,
+		taskExecutor:  executor,
 	}
 }
 
@@ -63,7 +65,7 @@ func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandle
 func (h *CommandHandlers) SubscribeAll(client *Client) error {
 	// Subscribe to ping command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("agents.%s.cmd.ping", h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.ping", h.subjectPrefix, h.deviceID),
 		h.handleWithRecovery("ping", h.handlePing),
 	); err != nil {
 		return err
@@ -71,7 +73,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to service control command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("agents.%s.cmd.service", h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.service", h.subjectPrefix, h.deviceID),
 		h.handleWithRecovery("service", h.handleServiceControl),
 	); err != nil {
 		return err
@@ -79,7 +81,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to log fetch command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("agents.%s.cmd.logs", h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.logs", h.subjectPrefix, h.deviceID),
 		h.handleWithRecovery("logs", h.handleLogFetch),
 	); err != nil {
 		return err
@@ -87,7 +89,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to custom exec command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("agents.%s.cmd.exec", h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.exec", h.subjectPrefix, h.deviceID),
 		h.handleWithRecovery("exec", h.handleCustomExec),
 	); err != nil {
 		return err
@@ -95,7 +97,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to health check command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("agents.%s.cmd.health", h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.health", h.subjectPrefix, h.deviceID),
 		h.handleWithRecovery("health", h.handleHealth),
 	); err != nil {
 		return err

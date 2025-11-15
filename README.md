@@ -87,6 +87,7 @@ notepad "C:\ProgramData\WinAgent\config.yaml"
 
 Edit `config.yaml` to set:
 - `device_id`: Unique identifier for this agent
+- `subject_prefix`: NATS subject prefix. Default: agents.
 - `nats.urls`: Your NATS server URL(s)
 - `nats.auth`: Authentication credentials
 - `nats.tls`: TLS configuration (if using encrypted connections)

@@ -3,6 +3,14 @@
 # Agent Identity
 device_id: "device-12345"  # Unique identifier for this agent
 
+# NATS Subject Prefix (optional)
+# All NATS subjects will use this prefix: {prefix}.{device_id}.{subject}
+# Default: "agents" (results in: agents.device-12345.heartbeat, agents.device-12345.cmd.ping, etc.)
+# Supports hierarchical prefixes with dots: "region.env.agents" or "production.us-east.agents"
+# Each token (separated by dots) can contain: alphanumeric, dashes, underscores
+# Max 50 characters total. No leading/trailing dots or consecutive dots.
+subject_prefix: "agents"
+
 # NATS Connection
 nats:
   urls: 
@@ -99,4 +107,3 @@ logging:
   file: "C:\\ProgramData\\WinAgent\\agent.log"
   max_size_mb: 100
   max_backups: 3
-

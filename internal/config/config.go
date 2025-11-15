@@ -11,11 +11,12 @@ import (
 
 // Config represents the complete agent configuration
 type Config struct {
-	DeviceID string         `mapstructure:"device_id"`
-	NATS     NATSConfig     `mapstructure:"nats"`
-	Tasks    TasksConfig    `mapstructure:"tasks"`
-	Commands CommandsConfig `mapstructure:"commands"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
+	DeviceID      string         `mapstructure:"device_id"`
+	SubjectPrefix string         `mapstructure:"subject_prefix"`
+	NATS          NATSConfig     `mapstructure:"nats"`
+	Tasks         TasksConfig    `mapstructure:"tasks"`
+	Commands      CommandsConfig `mapstructure:"commands"`
+	Logging       LoggingConfig  `mapstructure:"logging"`
 }
 
 // NATSConfig holds NATS connection settings
@@ -127,6 +128,9 @@ func Load(configPath string) (*Config, error) {
 
 // setDefaults sets sensible default values
 func setDefaults(v *viper.Viper) {
+	// Subject prefix default
+	v.SetDefault("subject_prefix", "agents")
+
 	// NATS defaults
 	v.SetDefault("nats.max_reconnects", -1) // infinite
 	v.SetDefault("nats.reconnect_wait", "2s")
@@ -169,6 +173,18 @@ func validate(cfg *Config) error {
 	validDeviceID := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	if !validDeviceID.MatchString(cfg.DeviceID) {
 		return fmt.Errorf("device_id must contain only alphanumeric characters, dashes, and underscores (got: %s)", cfg.DeviceID)
+	}
+
+	// Validate subject_prefix format
+	// Allows hierarchical prefixes like "region.dev.agents" or simple prefixes like "agents"
+	if cfg.SubjectPrefix == "" {
+		return fmt.Errorf("subject_prefix is required (should default to 'agents')")
+	}
+	if len(cfg.SubjectPrefix) > 50 {
+		return fmt.Errorf("subject_prefix must not exceed 50 characters (got: %d)", len(cfg.SubjectPrefix))
+	}
+	if err := validateSubjectPrefix(cfg.SubjectPrefix); err != nil {
+		return fmt.Errorf("invalid subject_prefix: %w", err)
 	}
 
 	// Validate NATS URLs
@@ -282,6 +298,32 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Logging.MaxBackups < 0 || cfg.Logging.MaxBackups > 100 {
 		return fmt.Errorf("log max_backups must be between 0 and 100 (got: %d)", cfg.Logging.MaxBackups)
+	}
+
+	return nil
+}
+
+// validateSubjectPrefix validates a NATS subject prefix
+// Allows hierarchical prefixes like "region.dev.agents" where each token
+// contains only alphanumeric characters, dashes, and underscores
+func validateSubjectPrefix(prefix string) error {
+	// Check for leading or trailing dots
+	if len(prefix) > 0 && (prefix[0] == '.' || prefix[len(prefix)-1] == '.') {
+		return fmt.Errorf("cannot start or end with a dot (got: %s)", prefix)
+	}
+
+	// Split into tokens by dots
+	tokens := regexp.MustCompile(`\.`).Split(prefix, -1)
+	
+	// Validate each token
+	validToken := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	for i, token := range tokens {
+		if token == "" {
+			return fmt.Errorf("empty token at position %d (consecutive dots not allowed)", i)
+		}
+		if !validToken.MatchString(token) {
+			return fmt.Errorf("token '%s' contains invalid characters (only alphanumeric, dash, and underscore allowed)", token)
+		}
 	}
 
 	return nil

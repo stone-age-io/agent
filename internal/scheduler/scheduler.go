@@ -15,12 +15,13 @@ import (
 
 // Scheduler manages periodic task execution
 type Scheduler struct {
-	scheduler gocron.Scheduler
-	logger    *zap.Logger
-	nats      *natsclient.Client
-	executor  *tasks.Executor
-	config    *config.Config
-	version   string
+	scheduler     gocron.Scheduler
+	logger        *zap.Logger
+	nats          *natsclient.Client
+	executor      *tasks.Executor
+	config        *config.Config
+	version       string
+	subjectPrefix string
 }
 
 // New creates a new scheduler with configured tasks
@@ -38,12 +39,13 @@ func New(
 	}
 
 	scheduler := &Scheduler{
-		scheduler: s,
-		logger:    logger,
-		nats:      natsClient,
-		executor:  executor,
-		config:    cfg,
-		version:   version,
+		scheduler:     s,
+		logger:        logger,
+		nats:          natsClient,
+		executor:      executor,
+		config:        cfg,
+		version:       version,
+		subjectPrefix: cfg.SubjectPrefix,
 	}
 
 	// Schedule tasks based on configuration
@@ -199,7 +201,7 @@ func (s *Scheduler) Shutdown() error {
 // publishHeartbeat publishes a heartbeat message
 // SIMPLIFIED: No retry loops, PublishAsync handles everything!
 func (s *Scheduler) publishHeartbeat(deviceID string) {
-	subject := fmt.Sprintf("agents.%s.heartbeat", deviceID)
+	subject := fmt.Sprintf("%s.%s.heartbeat", s.subjectPrefix, deviceID)
 
 	heartbeat := s.executor.CreateHeartbeat(s.version)
 	data, err := json.Marshal(heartbeat)
@@ -220,7 +222,7 @@ func (s *Scheduler) publishHeartbeat(deviceID string) {
 
 // publishMetrics scrapes and publishes system metrics
 func (s *Scheduler) publishMetrics(deviceID string) {
-	subject := fmt.Sprintf("agents.%s.telemetry.system", deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, deviceID)
 
 	metrics, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
 	if err != nil {
@@ -259,7 +261,7 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 
 // publishServiceStatus checks and publishes service status
 func (s *Scheduler) publishServiceStatus(deviceID string) {
-	subject := fmt.Sprintf("agents.%s.telemetry.service", deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.service", s.subjectPrefix, deviceID)
 
 	statuses, err := s.executor.GetServiceStatuses(s.config.Tasks.ServiceCheck.Services)
 	if err != nil {
@@ -303,7 +305,7 @@ func (s *Scheduler) publishServiceStatus(deviceID string) {
 
 // publishInventory collects and publishes system inventory
 func (s *Scheduler) publishInventory(deviceID string) {
-	subject := fmt.Sprintf("agents.%s.telemetry.inventory", deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.inventory", s.subjectPrefix, deviceID)
 
 	inventory, err := s.executor.CollectInventory(s.version)
 	if err != nil {
