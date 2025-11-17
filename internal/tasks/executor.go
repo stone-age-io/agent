@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"net/http"
 	"runtime"
 	"sync"
@@ -18,6 +19,7 @@ type Executor struct {
 	stats          *ExecutorStats
 	metricsCache   *metricsCache // Moved from global variable in metrics.go
 	taskStats      *TaskStats
+	ctx            context.Context // ADDED: Context for cancellation and timeouts
 }
 
 // ExecutorStats tracks executor statistics for self-monitoring
@@ -90,7 +92,8 @@ type TaskHealthMetrics struct {
 }
 
 // NewExecutor creates a new task executor
-func NewExecutor(logger *zap.Logger, commandTimeout time.Duration) *Executor {
+// MODIFIED: Now accepts context for cancellation and timeouts
+func NewExecutor(logger *zap.Logger, commandTimeout time.Duration, ctx context.Context) *Executor {
 	return &Executor{
 		logger:         logger,
 		commandTimeout: commandTimeout,
@@ -102,6 +105,7 @@ func NewExecutor(logger *zap.Logger, commandTimeout time.Duration) *Executor {
 			lastDiskMetrics: make(map[string]DiskCounters), // Initialize per-drive counters map
 		},
 		taskStats: &TaskStats{},
+		ctx:       ctx, // ADDED: Store context
 	}
 }
 

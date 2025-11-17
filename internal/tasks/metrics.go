@@ -15,6 +15,9 @@ import (
 	"github.com/stone-age-io/agent/internal/utils"
 )
 
+// ADDED: Maximum age for metrics cache before reset
+const maxMetricsCacheAge = 10 * time.Minute
+
 // SystemMetrics represents system metrics collected from Prometheus exporters
 type SystemMetrics struct {
 	CPUUsagePercent float64       `json:"cpu_usage_percent"`
@@ -66,8 +69,8 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 		zap.String("platform", runtime.GOOS),
 		zap.String("exporter", GetExporterName()))
 
-	// Create context with timeout for additional safety
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// MODIFIED: Create context from executor's context with timeout
+	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
 	defer cancel()
 
 	// Create request with context
@@ -86,6 +89,9 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 		// Provide more context about the error
 		if ctx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("metrics scrape timeout after 30s: %w", err)
+		}
+		if ctx.Err() == context.Canceled {
+			return nil, fmt.Errorf("metrics scrape cancelled: %w", err)
 		}
 		return nil, fmt.Errorf("failed to fetch metrics: %w", err)
 	}
@@ -127,6 +133,9 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 // parsePrometheusMetrics parses Prometheus format metrics using expfmt
 // Now platform-agnostic using GetMetricNames()
 func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, error) {
+	// ADDED: Check and reset stale cache before parsing
+	e.resetMetricsCacheIfStale()
+
 	// Use NewDecoder with FmtText format for proper initialization
 	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
 
@@ -406,6 +415,31 @@ func (e *Executor) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, err
 	}
 
 	return metrics, nil
+}
+
+// ADDED: resetMetricsCacheIfStale checks cache age and resets if too old
+func (e *Executor) resetMetricsCacheIfStale() {
+	e.metricsCache.mu.Lock()
+	defer e.metricsCache.mu.Unlock()
+
+	// Skip if cache was never initialized
+	if e.metricsCache.lastTimestamp.IsZero() {
+		return
+	}
+
+	age := time.Since(e.metricsCache.lastTimestamp)
+	if age > maxMetricsCacheAge {
+		e.logger.Warn("Resetting stale metrics cache",
+			zap.Duration("cache_age", age),
+			zap.Duration("max_age", maxMetricsCacheAge),
+			zap.String("impact", "Next metrics will have no CPU/disk I/O rates (baseline reset)"))
+
+		// Reset cache to force new baseline
+		e.metricsCache.lastTimestamp = time.Time{}
+		e.metricsCache.lastCPUTotal = 0
+		e.metricsCache.lastCPUIdle = 0
+		e.metricsCache.lastDiskMetrics = make(map[string]DiskCounters)
+	}
 }
 
 // validateMetrics performs sanity checks on metrics values

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
@@ -23,15 +24,18 @@ type Scheduler struct {
 	config        *config.Config
 	version       string
 	subjectPrefix string
+	ctx           context.Context // ADDED: Context for cancellation
 }
 
 // New creates a new scheduler with configured tasks
+// MODIFIED: Now accepts context for cancellation
 func New(
 	logger *zap.Logger,
 	natsClient *natsclient.Client,
 	executor *tasks.Executor,
 	cfg *config.Config,
 	version string,
+	ctx context.Context,
 ) (*Scheduler, error) {
 	// Create gocron scheduler
 	s, err := gocron.NewScheduler()
@@ -47,6 +51,7 @@ func New(
 		config:        cfg,
 		version:       version,
 		subjectPrefix: cfg.SubjectPrefix,
+		ctx:           ctx, // ADDED: Store context
 	}
 
 	// Schedule tasks based on configuration
@@ -57,10 +62,20 @@ func New(
 	return scheduler, nil
 }
 
-// wrapTaskWithRecovery wraps a task function with panic recovery
-// This prevents one task's panic from crashing the entire agent
+// wrapTaskWithRecovery wraps a task function with panic recovery AND context checking
+// MODIFIED: Now checks context before execution
 func (s *Scheduler) wrapTaskWithRecovery(taskName string, taskFunc func()) func() {
 	return func() {
+		// ADDED: Check if context is cancelled before executing
+		select {
+		case <-s.ctx.Done():
+			s.logger.Debug("Skipping task execution due to shutdown",
+				zap.String("task", taskName))
+			return
+		default:
+			// Continue with task execution
+		}
+
 		defer func() {
 			if r := recover(); r != nil {
 				// Log the panic with stack trace
@@ -90,6 +105,13 @@ func (s *Scheduler) scheduleTasks() error {
 
 		var baselineErr error
 		for attempt := 1; attempt <= maxRetries; attempt++ {
+			// ADDED: Check context before retry
+			select {
+			case <-s.ctx.Done():
+				return fmt.Errorf("shutdown during baseline establishment")
+			default:
+			}
+
 			_, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
 			if err == nil {
 				s.logger.Info("Metrics baseline established successfully")
@@ -108,7 +130,13 @@ func (s *Scheduler) scheduleTasks() error {
 				s.logger.Info("Retrying baseline in 2 seconds...",
 					zap.Int("attempt", attempt),
 					zap.Int("max", maxRetries))
-				time.Sleep(retryDelay)
+				
+				// ADDED: Use context-aware sleep
+				select {
+				case <-s.ctx.Done():
+					return fmt.Errorf("shutdown during baseline retry delay")
+				case <-time.After(retryDelay):
+				}
 			}
 		}
 
@@ -121,7 +149,7 @@ func (s *Scheduler) scheduleTasks() error {
 		}
 	}
 
-	// Schedule heartbeat task WITH PANIC RECOVERY
+	// Schedule heartbeat task WITH PANIC RECOVERY AND CONTEXT CHECK
 	if s.config.Tasks.Heartbeat.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.Heartbeat.Interval),
@@ -136,7 +164,7 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.Heartbeat.Interval))
 	}
 
-	// Schedule system metrics task WITH PANIC RECOVERY
+	// Schedule system metrics task WITH PANIC RECOVERY AND CONTEXT CHECK
 	if s.config.Tasks.SystemMetrics.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.SystemMetrics.Interval),
@@ -151,7 +179,7 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.SystemMetrics.Interval))
 	}
 
-	// Schedule service check task WITH PANIC RECOVERY
+	// Schedule service check task WITH PANIC RECOVERY AND CONTEXT CHECK
 	if s.config.Tasks.ServiceCheck.Enabled {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.ServiceCheck.Interval),
@@ -166,7 +194,7 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.ServiceCheck.Interval))
 	}
 
-	// Schedule inventory task WITH PANIC RECOVERY (but run it once immediately first)
+	// Schedule inventory task WITH PANIC RECOVERY AND CONTEXT CHECK (but run it once immediately first)
 	if s.config.Tasks.Inventory.Enabled {
 		// Run immediately on startup (wrapped with panic recovery)
 		go s.wrapTaskWithRecovery("inventory_startup", func() {

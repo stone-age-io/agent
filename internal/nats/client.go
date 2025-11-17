@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -254,8 +255,9 @@ func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subsc
 
 // Drain gracefully closes the connection by draining all subscriptions
 // and waiting for in-flight messages to complete
-func (c *Client) Drain(timeout time.Duration) error {
-	c.logger.Info("Draining NATS connection", zap.Duration("timeout", timeout))
+// MODIFIED: Now accepts context for cancellation
+func (c *Client) Drain(ctx context.Context) error {
+	c.logger.Info("Draining NATS connection")
 
 	// Check if connection is already closed
 	if !c.conn.IsConnected() && c.conn.IsClosed() {
@@ -271,7 +273,7 @@ func (c *Client) Drain(timeout time.Duration) error {
 		drainDone <- c.conn.Drain()
 	}()
 
-	// Wait for drain to complete or timeout
+	// Wait for drain to complete, timeout, or context cancellation
 	select {
 	case err := <-drainDone:
 		if err != nil {
@@ -281,10 +283,10 @@ func (c *Client) Drain(timeout time.Duration) error {
 		c.logger.Info("NATS drain completed successfully")
 		return nil
 
-	case <-time.After(timeout):
-		c.logger.Warn("NATS drain timeout, forcing close")
+	case <-ctx.Done():
+		c.logger.Warn("NATS drain cancelled by context, forcing close")
 		c.conn.Close()
-		return fmt.Errorf("drain timeout after %v", timeout)
+		return fmt.Errorf("drain cancelled: %w", ctx.Err())
 	}
 }
 

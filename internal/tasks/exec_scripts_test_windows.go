@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"testing"
 )
 
@@ -253,7 +254,8 @@ func TestExecuteCommand(t *testing.T) {
 	// Note: These tests validate the whitelist logic, not actual PowerShell execution
 	// Actual PowerShell execution tests would require Windows and are integration tests
 	
-	executor := NewExecutor(nil, 0)
+	// FIXED: Pass context.Background() as third parameter
+	executor := NewExecutor(nil, 0, context.Background())
 
 	tests := []struct {
 		name            string

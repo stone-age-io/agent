@@ -4,6 +4,7 @@ package tasks
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,8 +42,8 @@ func (e *Executor) ExecuteCommand(command string, allowedCommands []string, scri
 		zap.String("resolved", fullCommand),
 		zap.Duration("timeout", timeout))
 
-	// Execute via PowerShell with configured timeout
-	output, exitCode, err := executePowerShell(fullCommand, timeout)
+	// MODIFIED: Execute via PowerShell with context and configured timeout
+	output, exitCode, err := executePowerShell(e.ctx, fullCommand, timeout)
 	if err != nil {
 		e.logger.Error("Command execution failed",
 			zap.String("command", command),
@@ -148,10 +149,15 @@ func normalizeWhitespace(s string) string {
 }
 
 // executePowerShell executes a PowerShell command and returns output and exit code
-func executePowerShell(command string, timeout time.Duration) (string, int, error) {
-	// Create the PowerShell command with proper escaping
-	// Use -NoProfile for faster startup and -NonInteractive for non-interactive mode
-	cmd := exec.Command("powershell.exe",
+// MODIFIED: Now accepts context for cancellation
+func executePowerShell(ctx context.Context, command string, timeout time.Duration) (string, int, error) {
+	// MODIFIED: Create context with timeout from parent context
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// MODIFIED: Use CommandContext instead of Command
+	cmd := exec.CommandContext(cmdCtx,
+		"powershell.exe",
 		"-NoProfile",
 		"-NonInteractive",
 		"-ExecutionPolicy", "Bypass",
@@ -162,47 +168,41 @@ func executePowerShell(command string, timeout time.Duration) (string, int, erro
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Set timeout for command execution (from config)
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Run()
-	}()
-
-	// Wait for command or timeout
-	select {
-	case err := <-done:
-		// Get exit code
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				// Non-exit error (e.g., command not found)
-				return "", -1, fmt.Errorf("failed to execute command: %w", err)
-			}
-		}
-
-		// Combine stdout and stderr
-		output := stdout.String()
-		if stderr.Len() > 0 {
-			if output != "" {
-				output += "\n"
-			}
-			output += "STDERR:\n" + stderr.String()
-		}
-
-		// Return error if exit code is non-zero
-		if exitCode != 0 {
-			return output, exitCode, fmt.Errorf("command exited with code %d", exitCode)
-		}
-
-		return output, exitCode, nil
-
-	case <-time.After(timeout):
-		// Kill the process if it times out
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
+	// Execute command
+	err := cmd.Run()
+	
+	// Handle context cancellation
+	if cmdCtx.Err() == context.DeadlineExceeded {
 		return "", -1, fmt.Errorf("command execution timeout (%v)", timeout)
 	}
+	if cmdCtx.Err() == context.Canceled {
+		return "", -1, fmt.Errorf("command execution cancelled")
+	}
+
+	// Get exit code
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			// Non-exit error (e.g., command not found)
+			return "", -1, fmt.Errorf("failed to execute command: %w", err)
+		}
+	}
+
+	// Combine stdout and stderr
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += "STDERR:\n" + stderr.String()
+	}
+
+	// Return error if exit code is non-zero
+	if exitCode != 0 {
+		return output, exitCode, fmt.Errorf("command exited with code %d", exitCode)
+	}
+
+	return output, exitCode, nil
 }

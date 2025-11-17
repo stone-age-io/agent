@@ -3,6 +3,7 @@
 package tasks
 
 import (
+	"context"
 	"testing"
 )
 
@@ -189,8 +190,8 @@ func TestIsPathAllowed(t *testing.T) {
 
 // TestFetchLogLines tests the log fetching functionality
 func TestFetchLogLines(t *testing.T) {
-	// Create a mock executor for testing
-	executor := NewExecutor(nil, 0)
+	// FIXED: Create executor with context
+	executor := NewExecutor(nil, 0, context.Background())
 
 	tests := []struct {
 		name            string

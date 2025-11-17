@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,6 +24,8 @@ type Agent struct {
 	scheduler *scheduler.Scheduler
 	handlers  *natsclient.CommandHandlers
 	version   string
+	ctx       context.Context    // ADDED: Root context for clean shutdown
+	cancel    context.CancelFunc // ADDED: Cancel function for shutdown
 }
 
 // New creates a new agent instance
@@ -43,13 +46,17 @@ func New(configPath string, version string) (*Agent, error) {
 		zap.String("version", version),
 		zap.String("device_id", cfg.DeviceID))
 
-	// Create task executor with command timeout from config
-	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout)
+	// ADDED: Create root context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create task executor with command timeout from config and context
+	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout, ctx)
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")
 	natsClient, err := natsclient.NewClient(&cfg.NATS, logger)
 	if err != nil {
+		cancel() // ADDED: Cancel context on error
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
@@ -59,14 +66,16 @@ func New(configPath string, version string) (*Agent, error) {
 	// Subscribe to commands
 	logger.Info("Subscribing to commands...")
 	if err := handlers.SubscribeAll(natsClient); err != nil {
+		cancel() // ADDED: Cancel context on error
 		natsClient.Close()
 		return nil, fmt.Errorf("failed to subscribe to commands: %w", err)
 	}
 
 	// Create and start scheduler
 	logger.Info("Starting scheduler...")
-	sched, err := scheduler.New(logger, natsClient, executor, cfg, version)
+	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, ctx)
 	if err != nil {
+		cancel() // ADDED: Cancel context on error
 		natsClient.Close()
 		return nil, fmt.Errorf("failed to create scheduler: %w", err)
 	}
@@ -78,6 +87,8 @@ func New(configPath string, version string) (*Agent, error) {
 		scheduler: sched,
 		handlers:  handlers,
 		version:   version,
+		ctx:       ctx,    // ADDED: Store context
+		cancel:    cancel, // ADDED: Store cancel function
 	}, nil
 }
 
@@ -94,8 +105,12 @@ func (a *Agent) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	<-sigChan
-	a.logger.Info("Received shutdown signal")
+	select {
+	case <-sigChan:
+		a.logger.Info("Received shutdown signal")
+	case <-a.ctx.Done():
+		a.logger.Info("Context cancelled")
+	}
 
 	return a.Shutdown()
 }
@@ -104,13 +119,20 @@ func (a *Agent) Run() error {
 func (a *Agent) Shutdown() error {
 	a.logger.Info("Shutting down agent gracefully")
 
+	// ADDED: Cancel context to signal all operations to stop
+	a.cancel()
+
 	// Stop accepting new scheduled tasks
 	if err := a.scheduler.Shutdown(); err != nil {
 		a.logger.Error("Error shutting down scheduler", zap.Error(err))
 	}
 
+	// MODIFIED: Use context for drain timeout
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), a.config.NATS.DrainTimeout)
+	defer drainCancel()
+
 	// Drain NATS connection (wait for in-flight messages)
-	if err := a.nats.Drain(a.config.NATS.DrainTimeout); err != nil {
+	if err := a.nats.Drain(drainCtx); err != nil {
 		a.logger.Error("Error draining NATS", zap.Error(err))
 	}
 
