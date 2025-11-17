@@ -1,7 +1,10 @@
 package tasks
 
 import (
+	"context"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // TestIsServiceAllowed tests service whitelist validation
@@ -58,11 +61,11 @@ func TestIsServiceAllowed(t *testing.T) {
 			reason: "service not in whitelist must be rejected",
 		},
 		{
-			name:        "empty whitelist",
-			serviceName: "MyAppService",
+			name:            "empty whitelist",
+			serviceName:     "MyAppService",
 			allowedServices: []string{},
-			want:   false,
-			reason: "empty whitelist means nothing allowed",
+			want:            false,
+			reason:          "empty whitelist means nothing allowed",
 		},
 		{
 			name:        "case sensitivity",
@@ -126,7 +129,8 @@ func TestControlService(t *testing.T) {
 	// Note: These tests validate the whitelist logic only
 	// Actual service control tests would require Windows services and are integration tests
 	
-	executor := NewExecutor(nil, 0)
+	// FIXED: Use zap.NewNop() instead of nil to avoid panic
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string

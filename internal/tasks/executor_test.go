@@ -1,15 +1,20 @@
 package tasks
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // TestNewExecutor tests executor creation
 func TestNewExecutor(t *testing.T) {
 	timeout := 30 * time.Second
-	executor := NewExecutor(nil, timeout)
+	ctx := context.Background()
+	logger := zap.NewNop()
+	executor := NewExecutor(logger, timeout, ctx)
 
 	if executor == nil {
 		t.Fatal("NewExecutor() returned nil")
@@ -31,6 +36,14 @@ func TestNewExecutor(t *testing.T) {
 		t.Error("NewExecutor() httpClient is nil")
 	}
 
+	if executor.ctx != ctx {
+		t.Error("NewExecutor() ctx not set correctly")
+	}
+
+	if executor.logger != logger {
+		t.Error("NewExecutor() logger not set correctly")
+	}
+
 	// Verify stats are initialized
 	if executor.stats.startTime.IsZero() {
 		t.Error("NewExecutor() stats.startTime not initialized")
@@ -39,7 +52,7 @@ func TestNewExecutor(t *testing.T) {
 
 // TestRecordCommandSuccess tests success counter
 func TestRecordCommandSuccess(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -73,7 +86,7 @@ func TestRecordCommandSuccess(t *testing.T) {
 
 // TestRecordCommandError tests error counter and tracking
 func TestRecordCommandError(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -129,7 +142,7 @@ func TestRecordCommandError(t *testing.T) {
 
 // TestGetAgentMetrics tests metrics retrieval
 func TestGetAgentMetrics(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Get initial metrics
 	metrics := executor.GetAgentMetrics()
@@ -166,7 +179,7 @@ func TestGetAgentMetrics(t *testing.T) {
 
 // TestUptimeCalculation tests that uptime increases over time
 func TestUptimeCalculation(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Get initial uptime
 	metrics1 := executor.GetAgentMetrics()
@@ -187,7 +200,7 @@ func TestUptimeCalculation(t *testing.T) {
 
 // TestConcurrentCommandRecording tests thread-safety of command recording
 func TestConcurrentCommandRecording(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Record commands concurrently
 	done := make(chan bool)
@@ -227,7 +240,7 @@ func TestConcurrentCommandRecording(t *testing.T) {
 
 // TestMetricsCacheInitialization tests that metrics cache is properly initialized
 func TestMetricsCacheInitialization(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Access the cache through the executor
 	if executor.metricsCache == nil {
@@ -248,7 +261,7 @@ func TestMetricsCacheInitialization(t *testing.T) {
 		t.Error("Initial lastCPUIdle should be zero")
 	}
 	
-	// NEW: Check per-drive disk metrics map is initialized
+	// Check per-drive disk metrics map is initialized
 	if executor.metricsCache.lastDiskMetrics == nil {
 		t.Error("Initial lastDiskMetrics map should be initialized (not nil)")
 	}
@@ -259,7 +272,7 @@ func TestMetricsCacheInitialization(t *testing.T) {
 
 // TestDiskMetricsCacheStorage tests per-drive disk metrics storage
 func TestDiskMetricsCacheStorage(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Simulate storing metrics for multiple drives
 	executor.metricsCache.mu.Lock()
@@ -314,7 +327,7 @@ func TestDiskMetricsCacheStorage(t *testing.T) {
 
 // TestDiskMetricsCacheUpdate tests updating disk metrics for existing drive
 func TestDiskMetricsCacheUpdate(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	executor.metricsCache.mu.Lock()
 
@@ -347,7 +360,7 @@ func TestDiskMetricsCacheUpdate(t *testing.T) {
 
 // TestHTTPClientInitialization tests that HTTP client is created and cached
 func TestHTTPClientInitialization(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	if executor.httpClient == nil {
 		t.Fatal("httpClient should be initialized, got nil")
@@ -369,7 +382,7 @@ func TestHTTPClientInitialization(t *testing.T) {
 
 // TestTaskStatsRecording tests task execution tracking
 func TestTaskStatsRecording(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state - all timestamps should be zero
 	metrics := executor.GetTaskMetrics()

@@ -5,6 +5,8 @@ package tasks
 import (
 	"context"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // TestIsPathAllowed tests the log path whitelist validation
@@ -190,8 +192,8 @@ func TestIsPathAllowed(t *testing.T) {
 
 // TestFetchLogLines tests the log fetching functionality
 func TestFetchLogLines(t *testing.T) {
-	// FIXED: Create executor with context
-	executor := NewExecutor(nil, 0, context.Background())
+	// FIXED: Use zap.NewNop() instead of nil to avoid panic
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string

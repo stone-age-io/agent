@@ -1,7 +1,10 @@
 package tasks
 
 import (
+	"context"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // TestIsCommandAllowed tests command whitelist validation
@@ -253,7 +256,8 @@ func TestExecuteCommand(t *testing.T) {
 	// Note: These tests validate the whitelist logic, not actual PowerShell execution
 	// Actual PowerShell execution tests would require Windows and are integration tests
 	
-	executor := NewExecutor(nil, 0)
+	// FIXED: Use zap.NewNop() instead of nil to avoid panic
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string

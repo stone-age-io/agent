@@ -1,13 +1,17 @@
 package tasks
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // TestCreateHeartbeat tests heartbeat message creation
 func TestCreateHeartbeat(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	// FIXED: Use zap.NewNop() instead of nil to avoid panic
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 	version := "1.0.0"
 
 	// Create heartbeat
@@ -40,7 +44,7 @@ func TestCreateHeartbeat(t *testing.T) {
 
 // TestCreateHeartbeatFormat tests that heartbeat uses correct time format
 func TestCreateHeartbeatFormat(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	hb := executor.CreateHeartbeat("1.0.0")
 
@@ -59,7 +63,7 @@ func TestCreateHeartbeatFormat(t *testing.T) {
 
 // TestCreateHeartbeatConsistency tests that multiple heartbeats have consistent format
 func TestCreateHeartbeatConsistency(t *testing.T) {
-	executor := NewExecutor(nil, 0)
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 	version := "1.0.0"
 
 	// Create multiple heartbeats
