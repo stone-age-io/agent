@@ -211,9 +211,6 @@ commands:
     - "df -h"
 ```
 
-**[Configuration Reference →](docs/configuration.md)**
-
----
 
 ## Use Cases
 
@@ -244,13 +241,6 @@ commands:
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
 - **[Script Development](docs/script-development.md)** - Write custom scripts
-- **[Configuration Reference](docs/configuration.md)** - Complete config options
-- **[Migration Guide](docs/migration-from-win-agent.md)** - Upgrade from win-agent
-
-### Operations
-- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
-- **[Security](docs/security.md)** - Security model and best practices
-- **[Performance Tuning](docs/performance.md)** - Optimization guide
 
 ---
 
@@ -290,29 +280,6 @@ make test
 - **Issues**: [GitHub Issues](https://github.com/stone-age-io/agent/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/stone-age-io/agent/discussions)
 - **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
-
----
-
-## Comparison
-
-### vs Traditional RMM Tools
-| Feature | Traditional RMM | Agent |
-|---------|----------------|-------|
-| Cost | $2-15/endpoint/month | **Free (self-hosted)** |
-| Memory Usage | 200-400MB | **<50MB** |
-| CPU Usage | 3-5% | **<1%** |
-| Open Source | ❌ | **✅** |
-| Multi-Tenant | App-layer filtering | **NATS accounts (infrastructure-layer)** |
-| Data Location | SaaS (vendor cloud) | **Your infrastructure** |
-
-### vs Metrics-Only Agents
-| Feature | Telegraf/Prometheus | Agent |
-|---------|---------------------|-------|
-| Metrics Collection | ✅ | ✅ |
-| Service Control | ❌ | **✅** |
-| Command Execution | ❌ | **✅** |
-| Log Retrieval | ❌ | **✅** |
-| Multi-Tenant Ready | ❌ | **✅** |
 
 ---
 
