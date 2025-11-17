@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"win-agent/internal/utils"
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // Executor handles all task execution for both scheduled tasks and commands

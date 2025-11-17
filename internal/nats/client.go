@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"win-agent/internal/config"
+	"github.com/stone-age-io/agent/internal/config"
 	"go.uber.org/zap"
 )
 

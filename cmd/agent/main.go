@@ -6,7 +6,8 @@ import (
 	"log"
 
 	"github.com/kardianos/service"
-	"win-agent/internal/agent"
+	"github.com/stone-age-io/agent/internal/agent"
+	"github.com/stone-age-io/agent/internal/config"
 )
 
 var (
@@ -25,15 +26,18 @@ func main() {
 	var configPath string
 	var svcFlag string
 
-	flag.StringVar(&configPath, "config", "C:\\ProgramData\\WinAgent\\config.yaml", "Path to configuration file")
+	// Use platform-specific default config path
+	defaultConfigPath := config.GetDefaultConfigPath()
+
+	flag.StringVar(&configPath, "config", defaultConfigPath, "Path to configuration file")
 	flag.StringVar(&svcFlag, "service", "", "Control the system service: install, uninstall, start, stop, restart")
 	flag.Parse()
 
 	// Service configuration
 	svcConfig := &service.Config{
-		Name:        "win-agent",
-		DisplayName: "Windows Agent",
-		Description: "Lightweight Windows management and observability agent",
+		Name:        "agent",
+		DisplayName: "Stone Age Agent",
+		Description: "Lightweight NATS-native management and observability agent",
 		Arguments:   []string{"-config", configPath},
 	}
 
@@ -82,7 +86,7 @@ func main() {
 
 // Start implements service.Interface
 func (p *program) Start(s service.Service) error {
-	p.logger.Infof("Starting win-agent version %s", version)
+	p.logger.Infof("Starting agent version %s", version)
 
 	// Create agent
 	ag, err := agent.New(p.configPath, version)
@@ -104,7 +108,7 @@ func (p *program) Start(s service.Service) error {
 
 // Stop implements service.Interface
 func (p *program) Stop(s service.Service) error {
-	p.logger.Info("Stopping win-agent")
+	p.logger.Info("Stopping agent")
 
 	if p.agent != nil {
 		if err := p.agent.Shutdown(); err != nil {

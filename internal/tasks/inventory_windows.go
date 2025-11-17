@@ -12,56 +12,8 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/windows/registry"
-	"win-agent/internal/utils"
+	"github.com/stone-age-io/agent/internal/utils"
 )
-
-// Inventory represents complete system inventory information
-type Inventory struct {
-	OS        OSInfo      `json:"os"`
-	CPU       CPUInfo     `json:"cpu"`
-	Memory    MemoryInfo  `json:"memory"`
-	Disks     []DiskInfo  `json:"disks"`
-	Network   NetworkInfo `json:"network"`
-	Agent     AgentInfo   `json:"agent"`
-	Timestamp string      `json:"timestamp"`
-}
-
-// OSInfo contains operating system information
-type OSInfo struct {
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Build    string `json:"build"`
-	Platform string `json:"platform"` // runtime.GOOS value: "windows", "linux", "freebsd"
-}
-
-// CPUInfo contains CPU information
-type CPUInfo struct {
-	Cores int    `json:"cores"`
-	Model string `json:"model"`
-}
-
-// MemoryInfo contains memory information
-type MemoryInfo struct {
-	TotalGB     float64 `json:"total_gb"`
-	AvailableGB float64 `json:"available_gb"`
-}
-
-// DiskInfo contains disk information
-type DiskInfo struct {
-	Drive   string  `json:"drive"`
-	TotalGB float64 `json:"total_gb"`
-	FreeGB  float64 `json:"free_gb"`
-}
-
-// NetworkInfo contains network information
-type NetworkInfo struct {
-	PrimaryIP string `json:"primary_ip"`
-}
-
-// AgentInfo contains agent version information
-type AgentInfo struct {
-	Version string `json:"version"`
-}
 
 // CollectInventory gathers system inventory using only stdlib (no WMI)
 func (e *Executor) CollectInventory(version string) (*Inventory, error) {

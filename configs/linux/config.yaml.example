@@ -1,0 +1,98 @@
+# Linux Agent Configuration Example
+
+# Agent Identity
+device_id: "device-12345"  # Unique identifier for this agent
+
+# NATS Subject Prefix (optional)
+subject_prefix: "agents"
+
+# NATS Connection
+nats:
+  urls: 
+    - "nats://connect.your-service.com:4222"
+  
+  # Authentication (choose one method)
+  auth:
+    # Option 1: Credentials file (RECOMMENDED for production)
+    type: "creds"
+    creds_file: "/etc/agent/device.creds"
+    
+    # Option 2: Token authentication
+    # type: "token"
+    # token: "your-token-here"
+    
+    # Option 3: Username/Password authentication
+    # type: "userpass"
+    # username: "user"
+    # password: "pass"
+  
+  # TLS Configuration (optional but recommended for production)
+  tls:
+    enabled: false
+    cert_file: "/etc/agent/client-cert.pem"
+    key_file: "/etc/agent/client-key.pem"
+    ca_file: "/etc/agent/ca-cert.pem"
+    insecure_skip_verify: false
+  
+  max_reconnects: -1
+  reconnect_wait: "2s"
+  drain_timeout: "30s"
+
+# Scheduled Tasks
+tasks:
+  # Heartbeat - Periodic "I'm alive" message
+  heartbeat:
+    enabled: true
+    interval: "1m"
+  
+  # System Metrics - Scrape node_exporter
+  system_metrics:
+    enabled: true
+    interval: "5m"
+    exporter_url: "http://localhost:9100/metrics"
+  
+  # Service Check - Monitor systemd services
+  service_check:
+    enabled: true
+    interval: "1m"
+    services:
+      - "nginx"
+      - "postgresql"
+      - "redis"
+  
+  # Inventory - System hardware/software inventory
+  inventory:
+    enabled: true
+    interval: "24h"
+
+# Command Execution
+commands:
+  # Scripts Directory (optional)
+  scripts_directory: "/opt/agent/scripts"
+  
+  # Whitelist of services that can be controlled
+  allowed_services:
+    - "nginx"
+    - "postgresql"
+    - "redis"
+  
+  # Whitelist of allowed shell commands
+  allowed_commands:
+    - "df -h | grep -E '^/dev/'"
+    - "uptime"
+    - "ps aux | sort -rk 3 | head -10"
+  
+  # Allowed log file paths (glob patterns supported)
+  allowed_log_paths:
+    - "/var/log/nginx/*.log"
+    - "/var/log/app/*.log"
+  
+  # Command execution timeout
+  timeout: "30s"
+
+# Logging
+logging:
+  level: "info"  # debug, info, warn, error
+  file: "/var/log/agent/agent.log"
+  max_size_mb: 100
+  max_backups: 3

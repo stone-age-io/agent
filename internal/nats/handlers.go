@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"win-agent/internal/config"
-	"win-agent/internal/tasks"
+	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/tasks"
 	"go.uber.org/zap"
 )
 

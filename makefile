@@ -1,10 +1,10 @@
-# Windows Agent Makefile
+# Agent Makefile
 
 # Version can be overridden: make build VERSION=1.2.3
 VERSION ?= 1.0.0
 
 # Binary names
-BINARY_NAME := win-agent.exe
+BINARY_BASE := agent
 BUILD_DIR := build
 
 # Go build flags
@@ -17,18 +17,34 @@ all: clean test build
 # Build for current platform (development)
 .PHONY: build
 build:
-	@echo "Building $(BINARY_NAME) version $(VERSION) for current platform..."
-	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/win-agent
-	@echo "Build complete: $(BINARY_NAME)"
+	@echo "Building $(BINARY_BASE) version $(VERSION) for current platform..."
+	go build -ldflags="$(LDFLAGS)" -o $(BINARY_BASE) ./cmd/agent
+	@echo "Build complete: $(BINARY_BASE)"
 
-# Build for Windows AMD64 (release)
-.PHONY: build-release
-build-release:
-	@echo "Building $(BINARY_NAME) version $(VERSION) for Windows AMD64..."
+# Build for all platforms (release)
+.PHONY: build-all
+build-all:
+	@echo "Building $(BINARY_BASE) version $(VERSION) for all platforms..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/win-agent
-	@echo "Release build complete: $(BUILD_DIR)/$(BINARY_NAME)"
-	@echo "Size: $$(du -h $(BUILD_DIR)/$(BINARY_NAME) | cut -f1)"
+	
+	# Linux AMD64
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/agent-linux-amd64 ./cmd/agent
+	
+	# Linux ARM64
+	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/agent-linux-arm64 ./cmd/agent
+	
+	# Windows AMD64
+	GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/agent-windows-amd64.exe ./cmd/agent
+	
+	# FreeBSD AMD64
+	GOOS=freebsd GOARCH=amd64 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/agent-freebsd-amd64 ./cmd/agent
+	
+	@echo "Multi-platform build complete:"
+	@ls -lh $(BUILD_DIR)/
 
 # Run tests
 .PHONY: test
@@ -73,7 +89,7 @@ verify:
 .PHONY: clean
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_BASE) $(BINARY_BASE).exe
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
 	@echo "Clean complete"
@@ -86,11 +102,6 @@ install-tools:
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	@echo "Tools installed"
 
-# Generate example config
-.PHONY: example-config
-example-config:
-	@echo "Example config is available at: config.yaml.example"
-
 # Show version
 .PHONY: version
 version:
@@ -99,13 +110,13 @@ version:
 # Help
 .PHONY: help
 help:
-	@echo "Windows Agent Build System"
+	@echo "Agent Build System"
 	@echo ""
 	@echo "Usage: make [target] [VERSION=x.y.z]"
 	@echo ""
 	@echo "Targets:"
 	@echo "  build              Build for current platform"
-	@echo "  build-release      Build for Windows AMD64 (production)"
+	@echo "  build-all          Build for all platforms (Linux, Windows, FreeBSD)"
 	@echo "  test               Run tests"
 	@echo "  test-coverage      Run tests with coverage report"
 	@echo "  lint               Run linter"
@@ -119,5 +130,5 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build"
-	@echo "  make build-release VERSION=1.2.3"
+	@echo "  make build-all VERSION=1.2.3"
 	@echo "  make test"

@@ -9,9 +9,9 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"go.uber.org/zap"
-	"win-agent/internal/config"
-	natsclient "win-agent/internal/nats"
-	"win-agent/internal/tasks"
+	"github.com/stone-age-io/agent/internal/config"
+	natsclient "github.com/stone-age-io/agent/internal/nats"
+	"github.com/stone-age-io/agent/internal/tasks"
 )
 
 // Scheduler manages periodic task execution

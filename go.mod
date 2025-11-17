@@ -1,4 +1,4 @@
-module win-agent
+module github.com/stone-age-io/agent
 
 go 1.24.0
 

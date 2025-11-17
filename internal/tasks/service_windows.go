@@ -11,19 +11,16 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-// ServiceStatus represents the status of a Windows service
-type ServiceStatus struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-}
-
-// ControlService starts, stops, or restarts a Windows service
-// Only services in the allowedServices list can be controlled
+// ControlService manages Windows services using the Windows Service Control Manager API
 func (e *Executor) ControlService(name, action string, allowedServices []string) (string, error) {
 	// Validate service is in whitelist
 	if !isServiceAllowed(name, allowedServices) {
 		return "", fmt.Errorf("service not in allowed list: %s", name)
 	}
+
+	e.logger.Info("Controlling Windows service",
+		zap.String("service", name),
+		zap.String("action", action))
 
 	// Connect to service manager
 	m, err := mgr.Connect()
@@ -32,62 +29,72 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 	}
 	defer m.Disconnect()
 
-	// Open the service
+	// Open service
 	s, err := m.OpenService(name)
 	if err != nil {
 		return "", fmt.Errorf("failed to open service %s: %w", name, err)
 	}
 	defer s.Close()
 
-	// Perform the requested action
+	// Execute action
 	switch action {
 	case "start":
-		if err := s.Start(); err != nil {
+		err = s.Start()
+		if err != nil {
 			return "", fmt.Errorf("failed to start service: %w", err)
 		}
-		return fmt.Sprintf("Service %s started successfully", name), nil
-
 	case "stop":
+		// Send stop control and wait for service to stop
 		status, err := s.Control(svc.Stop)
 		if err != nil {
 			return "", fmt.Errorf("failed to stop service: %w", err)
 		}
 		// Wait for service to stop (with timeout)
-		if err := waitForServiceState(s, svc.Stopped, 30*time.Second); err != nil {
-			return "", fmt.Errorf("service did not stop in time: %w", err)
+		timeout := time.Now().Add(30 * time.Second)
+		for status.State != svc.Stopped {
+			if time.Now().After(timeout) {
+				return "", fmt.Errorf("timeout waiting for service to stop")
+			}
+			time.Sleep(300 * time.Millisecond)
+			status, err = s.Query()
+			if err != nil {
+				return "", fmt.Errorf("failed to query service status: %w", err)
+			}
 		}
-		return fmt.Sprintf("Service %s stopped successfully (status: %v)", name, status.State), nil
-
 	case "restart":
 		// Stop the service first
-		if _, err := s.Control(svc.Stop); err != nil {
+		status, err := s.Control(svc.Stop)
+		if err != nil {
 			return "", fmt.Errorf("failed to stop service for restart: %w", err)
 		}
-		
 		// Wait for service to stop
-		if err := waitForServiceState(s, svc.Stopped, 30*time.Second); err != nil {
-			return "", fmt.Errorf("service did not stop for restart: %w", err)
+		timeout := time.Now().Add(30 * time.Second)
+		for status.State != svc.Stopped {
+			if time.Now().After(timeout) {
+				return "", fmt.Errorf("timeout waiting for service to stop during restart")
+			}
+			time.Sleep(300 * time.Millisecond)
+			status, err = s.Query()
+			if err != nil {
+				return "", fmt.Errorf("failed to query service status during restart: %w", err)
+			}
 		}
-
 		// Start the service
-		if err := s.Start(); err != nil {
-			return "", fmt.Errorf("failed to start service after restart: %w", err)
+		err = s.Start()
+		if err != nil {
+			return "", fmt.Errorf("failed to start service after stop: %w", err)
 		}
-
-		// Wait for service to start
-		if err := waitForServiceState(s, svc.Running, 30*time.Second); err != nil {
-			return "", fmt.Errorf("service did not start after restart: %w", err)
-		}
-
-		return fmt.Sprintf("Service %s restarted successfully", name), nil
-
 	default:
 		return "", fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
 	}
+
+	return fmt.Sprintf("Service %s %s successfully", name, action), nil
 }
 
-// GetServiceStatuses retrieves the status of all configured services
+// GetServiceStatuses retrieves status for all configured services
 func (e *Executor) GetServiceStatuses(services []string) ([]ServiceStatus, error) {
+	var statuses []ServiceStatus
+
 	// Connect to service manager
 	m, err := mgr.Connect()
 	if err != nil {
@@ -95,42 +102,65 @@ func (e *Executor) GetServiceStatuses(services []string) ([]ServiceStatus, error
 	}
 	defer m.Disconnect()
 
-	var statuses []ServiceStatus
-
 	for _, name := range services {
-		s, err := m.OpenService(name)
+		status, err := e.getServiceStatus(m, name)
 		if err != nil {
-			e.logger.Warn("Failed to open service",
+			e.logger.Warn("Failed to get service status",
 				zap.String("service", name),
 				zap.Error(err))
 			statuses = append(statuses, ServiceStatus{
 				Name:   name,
-				Status: "Error",
+				Status: ServiceStatusError,
 			})
 			continue
 		}
-
-		status, err := s.Query()
-		s.Close()
-
-		if err != nil {
-			e.logger.Warn("Failed to query service",
-				zap.String("service", name),
-				zap.Error(err))
-			statuses = append(statuses, ServiceStatus{
-				Name:   name,
-				Status: "Error",
-			})
-			continue
-		}
-
-		statuses = append(statuses, ServiceStatus{
-			Name:   name,
-			Status: stateToString(status.State),
-		})
+		statuses = append(statuses, *status)
 	}
 
 	return statuses, nil
+}
+
+// getServiceStatus queries Windows Service Control Manager for service status
+func (e *Executor) getServiceStatus(m *mgr.Mgr, name string) (*ServiceStatus, error) {
+	s, err := m.OpenService(name)
+	if err != nil {
+		// Service doesn't exist
+		return &ServiceStatus{
+			Name:   name,
+			Status: ServiceStatusNotInstalled,
+		}, nil
+	}
+	defer s.Close()
+
+	status, err := s.Query()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query service: %w", err)
+	}
+
+	// Map Windows service state to our standard status
+	return &ServiceStatus{
+		Name:   name,
+		Status: mapWindowsServiceState(status.State),
+	}, nil
+}
+
+// mapWindowsServiceState converts Windows service state to standard status string
+func mapWindowsServiceState(state svc.State) string {
+	switch state {
+	case svc.Running:
+		return ServiceStatusRunning
+	case svc.Stopped:
+		return ServiceStatusStopped
+	case svc.StartPending:
+		return ServiceStatusStarting
+	case svc.StopPending:
+		return ServiceStatusStopping
+	case svc.Paused, svc.PausePending, svc.ContinuePending:
+		// Treat paused services as stopped for simplicity
+		return ServiceStatusStopped
+	default:
+		return ServiceStatusUnknown
+	}
 }
 
 // isServiceAllowed checks if a service is in the allowed list
@@ -141,46 +171,4 @@ func isServiceAllowed(name string, allowedServices []string) bool {
 		}
 	}
 	return false
-}
-
-// waitForServiceState waits for a service to reach a specific state
-func waitForServiceState(s *mgr.Service, targetState svc.State, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	
-	for time.Now().Before(deadline) {
-		status, err := s.Query()
-		if err != nil {
-			return err
-		}
-		
-		if status.State == targetState {
-			return nil
-		}
-		
-		time.Sleep(500 * time.Millisecond)
-	}
-	
-	return fmt.Errorf("timeout waiting for service state")
-}
-
-// stateToString converts a service state to a human-readable string
-func stateToString(state svc.State) string {
-	switch state {
-	case svc.Stopped:
-		return "Stopped"
-	case svc.StartPending:
-		return "StartPending"
-	case svc.StopPending:
-		return "StopPending"
-	case svc.Running:
-		return "Running"
-	case svc.ContinuePending:
-		return "ContinuePending"
-	case svc.PausePending:
-		return "PausePending"
-	case svc.Paused:
-		return "Paused"
-	default:
-		return "Unknown"
-	}
 }

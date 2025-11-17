@@ -129,6 +129,9 @@ func Load(configPath string) (*Config, error) {
 
 // setDefaults sets sensible default values
 func setDefaults(v *viper.Viper) {
+	// Get platform-specific defaults
+	defaults := GetPlatformDefaults()
+
 	// Subject prefix default
 	v.SetDefault("subject_prefix", "agents")
 
@@ -141,24 +144,24 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.tls.enabled", false)
 	v.SetDefault("nats.tls.insecure_skip_verify", false)
 
-	// Task defaults
+	// Task defaults with platform-specific exporter URL
 	v.SetDefault("tasks.heartbeat.enabled", true)
 	v.SetDefault("tasks.heartbeat.interval", "1m")
 	v.SetDefault("tasks.system_metrics.enabled", true)
 	v.SetDefault("tasks.system_metrics.interval", "5m")
-	v.SetDefault("tasks.system_metrics.exporter_url", "http://localhost:9182/metrics")
+	v.SetDefault("tasks.system_metrics.exporter_url", defaults.ExporterURL)
 	v.SetDefault("tasks.service_check.enabled", true)
 	v.SetDefault("tasks.service_check.interval", "1m")
 	v.SetDefault("tasks.inventory.enabled", true)
 	v.SetDefault("tasks.inventory.interval", "24h")
 
-	// Command defaults
+	// Command defaults with platform-specific scripts directory
 	v.SetDefault("commands.timeout", "30s")
-	v.SetDefault("commands.scripts_directory", "") // Empty by default - feature is optional
+	v.SetDefault("commands.scripts_directory", defaults.ScriptsDirectory)
 
-	// Logging defaults
+	// Logging defaults with platform-specific log file path
 	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.file", "C:\\ProgramData\\WinAgent\\agent.log")
+	v.SetDefault("logging.file", defaults.LogFile)
 	v.SetDefault("logging.max_size_mb", 100)
 	v.SetDefault("logging.max_backups", 3)
 }
