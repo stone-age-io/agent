@@ -129,8 +129,11 @@ func TestControlService(t *testing.T) {
 	// Note: These tests validate the whitelist logic only
 	// Actual service control tests would require Windows services and are integration tests
 	
-	// FIXED: Use zap.NewNop() instead of nil to avoid panic
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	// Create executor with builtin metrics source for tests
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("Failed to create executor: %v", err)
+	}
 
 	tests := []struct {
 		name            string

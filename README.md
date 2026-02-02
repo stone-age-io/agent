@@ -19,13 +19,13 @@ Agent is a purpose-built system management tool that provides remote management 
 
 ## Platform Support
 
-| Platform | Service Manager | Metrics Exporter | Status |
-|----------|----------------|------------------|--------|
-| **Windows Server 2016+** | Windows Service | [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
-| **Windows 10/11** | Windows Service | [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
-| **Ubuntu 22.04+** | systemd | [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
-| **Debian 11+** | systemd | [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
-| **FreeBSD 13+** | rc.d | [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
+| Platform | Service Manager | Metrics Source | Status |
+|----------|----------------|----------------|--------|
+| **Windows Server 2016+** | Windows Service | Built-in (default) or [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
+| **Windows 10/11** | Windows Service | Built-in (default) or [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
+| **Ubuntu 22.04+** | systemd | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
+| **Debian 11+** | systemd | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
+| **FreeBSD 13+** | rc.d | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
 
 ---
 
@@ -56,27 +56,26 @@ Choose your platform:
 <summary><b>Windows</b></summary>
 
 ```powershell
-# 1. Install windows_exporter
-# Download from: https://github.com/prometheus-community/windows_exporter/releases
-
-# 2. Download agent
+# 1. Download agent
 # Get latest release from: https://github.com/stone-age-io/agent/releases
 
-# 3. Install
+# 2. Install
 New-Item -ItemType Directory -Force -Path "C:\Program Files\Agent"
 Copy-Item agent.exe "C:\Program Files\Agent\"
 Copy-Item config.yaml "C:\ProgramData\Agent\"
 
-# 4. Configure
+# 3. Configure
 notepad "C:\ProgramData\Agent\config.yaml"
 
-# 5. Install as service
+# 4. Install as service
 cd "C:\Program Files\Agent"
 .\agent.exe -service install
 
-# 6. Start service
+# 5. Start service
 Start-Service agent
 ```
+
+> **Note**: By default, the agent uses built-in metrics collection. Optionally install [windows_exporter](https://github.com/prometheus-community/windows_exporter) for additional metrics and set `source: "exporter"` in config.
 
 **[Detailed Windows Guide →](docs/windows.md)**
 
@@ -86,28 +85,24 @@ Start-Service agent
 <summary><b>Linux</b></summary>
 
 ```bash
-# 1. Install node_exporter
-wget https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
-tar xvfz node_exporter-*.tar.gz
-sudo mv node_exporter-*/node_exporter /usr/local/bin/
-sudo systemctl enable --now node_exporter
-
-# 2. Install agent
+# 1. Install agent
 wget https://github.com/stone-age-io/agent/releases/download/v1.0.0/agent-linux-amd64
 sudo mv agent-linux-amd64 /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
-# 3. Configure
+# 2. Configure
 sudo mkdir -p /etc/agent
 sudo cp config.yaml /etc/agent/
 sudo nano /etc/agent/config.yaml
 
-# 4. Install as service
+# 3. Install as service
 sudo /usr/local/bin/agent -service install
 
-# 5. Start service
+# 4. Start service
 sudo systemctl start agent
 ```
+
+> **Note**: By default, the agent uses built-in metrics collection. Optionally install [node_exporter](https://github.com/prometheus/node_exporter) for additional metrics and set `source: "exporter"` in config.
 
 **[Detailed Linux Guide →](docs/linux.md)**
 
@@ -117,27 +112,24 @@ sudo systemctl start agent
 <summary><b>FreeBSD</b></summary>
 
 ```bash
-# 1. Install node_exporter
-sudo pkg install node_exporter
-sudo sysrc node_exporter_enable="YES"
-sudo service node_exporter start
-
-# 2. Install agent
+# 1. Install agent
 fetch https://github.com/stone-age-io/agent/releases/download/v1.0.0/agent-freebsd-amd64
 sudo mv agent-freebsd-amd64 /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
-# 3. Configure
+# 2. Configure
 sudo mkdir -p /usr/local/etc/agent
 sudo cp config.yaml /usr/local/etc/agent/
 sudo ee /usr/local/etc/agent/config.yaml
 
-# 4. Install as service
+# 3. Install as service
 sudo /usr/local/bin/agent -service install
 
-# 5. Start service
+# 4. Start service
 sudo service agent start
 ```
+
+> **Note**: By default, the agent uses built-in metrics collection. Optionally install [node_exporter](https://github.com/prometheus/node_exporter) (`pkg install node_exporter`) for additional metrics and set `source: "exporter"` in config.
 
 **[Detailed FreeBSD Guide →](docs/freebsd.md)**
 
@@ -159,7 +151,7 @@ sudo service agent start
          │
     ┌────▼─────┐
     │  Agent   │      Edge (Windows/Linux/FreeBSD)
-    └──────────┘      - Metrics collection
+    └──────────┘      - Built-in metrics (gopsutil) or exporter
                       - Command execution
                       - Service control
 ```
@@ -191,11 +183,13 @@ tasks:
   heartbeat:
     enabled: true
     interval: "1m"
-  
+
   system_metrics:
     enabled: true
     interval: "5m"
-  
+    source: "builtin"  # "builtin" (default) or "exporter"
+    # exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
+
   service_check:
     enabled: true
     services:

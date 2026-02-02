@@ -49,15 +49,13 @@ Understanding the design and components of the agent platform.
 │  │   Agent     │  │   Agent     │  │   Agent     │    │
 │  │  (Windows)  │  │   (Linux)   │  │  (FreeBSD)  │    │
 │  │             │  │             │  │             │    │
-│  │ - Metrics   │  │ - Metrics   │  │ - Metrics   │    │
+│  │ - Metrics*  │  │ - Metrics*  │  │ - Metrics*  │    │
 │  │ - Commands  │  │ - Commands  │  │ - Commands  │    │
 │  │ - Services  │  │ - Services  │  │ - Services  │    │
 │  └─────────────┘  └─────────────┘  └─────────────┘    │
 │                                                          │
-│  ┌─────────────┐  ┌─────────────┐                      │
-│  │  windows_   │  │   node_     │                      │
-│  │  exporter   │  │  exporter   │                      │
-│  └─────────────┘  └─────────────┘                      │
+│  * Metrics: Built-in (gopsutil) by default               │
+│    Optional: windows_exporter / node_exporter            │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +89,7 @@ Understanding the design and components of the agent platform.
 **Purpose**: Lightweight executor on target systems
 
 **Responsibilities:**
-- Collect system metrics from Prometheus exporters
+- Collect system metrics (built-in gopsutil or Prometheus exporters)
 - Execute whitelisted commands/scripts
 - Control system services
 - Report health and inventory
@@ -107,7 +105,7 @@ Understanding the design and components of the agent platform.
 - **Language**: Go 1.24+
 - **Service Management**: kardianos/service (cross-platform)
 - **Messaging**: NATS Core + JetStream
-- **Metrics Parsing**: Prometheus expfmt
+- **Metrics Collection**: gopsutil (default), Prometheus expfmt (optional)
 - **Logging**: zap (structured logging)
 
 ---
@@ -193,23 +191,19 @@ Understanding the design and components of the agent platform.
 ┌─────────┐
 │  Agent  │ Every 5 minutes
 └────┬────┘
-     │ 1. Scrape http://localhost:9182/metrics
-     ▼
-┌────────────────┐
-│ windows_       │ Returns Prometheus metrics
-│ exporter       │
-└────┬───────────┘
-     │ 2. Parse metrics
+     │ 1. Collect metrics via:
+     │    - Built-in (gopsutil) [default]
+     │    - Prometheus exporter (optional)
      ▼
 ┌─────────┐
-│  Agent  │ 3. Publish to JetStream
+│  Agent  │ 2. Publish to JetStream
 └────┬────┘      agents.device-123.telemetry.system
      │            {"cpu_percent":15.2,...}
      ▼
 ┌─────────┐
-│  NATS   │ 4. Store in JetStream stream
+│  NATS   │ 3. Store in JetStream stream
 └────┬────┘
-     │ 5. Consumers can subscribe
+     │ 4. Consumers can subscribe
      ▼
 ┌──────────────┐
 │ Dashboard /  │ Real-time display

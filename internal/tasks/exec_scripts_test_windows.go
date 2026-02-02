@@ -1,3 +1,5 @@
+//go:build windows
+
 package tasks
 
 import (
@@ -254,8 +256,11 @@ func TestExecuteCommand(t *testing.T) {
 	// Note: These tests validate the whitelist logic, not actual PowerShell execution
 	// Actual PowerShell execution tests would require Windows and are integration tests
 	
-	// FIXED: Pass context.Background() as third parameter
-	executor := NewExecutor(nil, 0, context.Background())
+	// Create executor with builtin metrics source for tests
+	executor, err := NewExecutor(nil, 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("Failed to create executor: %v", err)
+	}
 
 	tests := []struct {
 		name            string

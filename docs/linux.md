@@ -13,73 +13,7 @@ Complete guide for installing and configuring the agent on Linux systems.
 
 ## Installation Steps
 
-### 1. Install node_exporter
-
-The agent collects system metrics from Prometheus node_exporter.
-
-#### Option A: Download Binary (Recommended)
-
-```bash
-# Download latest release
-cd /tmp
-wget https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
-
-# Extract
-tar xvfz node_exporter-1.7.0.linux-amd64.tar.gz
-
-# Install binary
-sudo mv node_exporter-1.7.0.linux-amd64/node_exporter /usr/local/bin/
-sudo chmod +x /usr/local/bin/node_exporter
-
-# Create systemd service
-sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<'EOF'
-[Unit]
-Description=Prometheus Node Exporter
-Documentation=https://github.com/prometheus/node_exporter
-After=network-online.target
-
-[Service]
-Type=simple
-User=node_exporter
-Group=node_exporter
-ExecStart=/usr/local/bin/node_exporter \
-    --collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)' \
-    --collector.netclass.ignored-devices='^(veth.*)$'
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Create user
-sudo useradd --no-create-home --shell /bin/false node_exporter
-
-# Enable and start service
-sudo systemctl daemon-reload
-sudo systemctl enable node_exporter
-sudo systemctl start node_exporter
-
-# Verify it's running
-systemctl status node_exporter
-curl -s http://localhost:9100/metrics | head -20
-```
-
-#### Option B: Install via Package Manager
-
-**Ubuntu/Debian:**
-```bash
-sudo apt update
-sudo apt install prometheus-node-exporter
-sudo systemctl enable prometheus-node-exporter
-sudo systemctl start prometheus-node-exporter
-```
-
-**Note**: Package manager versions may be outdated. Binary installation is recommended.
-
----
-
-### 2. Install Agent
+### 1. Install Agent
 
 ```bash
 # Download agent binary (replace VERSION with latest release)
@@ -104,7 +38,7 @@ sudo chmod 755 /var/log/agent
 
 ---
 
-### 3. Configure Agent
+### 2. Configure Agent
 
 Create configuration file:
 
@@ -148,7 +82,8 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    exporter_url: "http://localhost:9100/metrics"
+    source: "builtin"  # "builtin" (default) or "exporter"
+    # exporter_url: "http://localhost:9100/metrics"  # Only for exporter mode
   
   service_check:
     enabled: true
@@ -212,7 +147,7 @@ sudo chmod 600 /etc/agent/device.creds
 
 ---
 
-### 4. Install as systemd Service
+### 3. Install as systemd Service
 
 ```bash
 # Install service (kardianos/service handles systemd setup)
@@ -236,7 +171,7 @@ sudo systemctl status agent
 
 ---
 
-### 5. Verify Installation
+### 4. Verify Installation
 
 #### Check Service Status
 
@@ -277,6 +212,73 @@ nats request "agents.linux-server-01.cmd.health" '{}'
 
 # Subscribe to telemetry
 nats sub "agents.linux-server-01.>"
+```
+
+---
+
+## Optional: Install node_exporter
+
+By default, the agent uses built-in metrics collection. If you prefer to use Prometheus node_exporter for additional metrics, follow these steps:
+
+### Download and Install Binary
+
+```bash
+# Download latest release
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+
+# Extract
+tar xvfz node_exporter-1.7.0.linux-amd64.tar.gz
+
+# Install binary
+sudo mv node_exporter-1.7.0.linux-amd64/node_exporter /usr/local/bin/
+sudo chmod +x /usr/local/bin/node_exporter
+
+# Create systemd service
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<'EOF'
+[Unit]
+Description=Prometheus Node Exporter
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+
+[Service]
+Type=simple
+User=node_exporter
+Group=node_exporter
+ExecStart=/usr/local/bin/node_exporter \
+    --collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)' \
+    --collector.netclass.ignored-devices='^(veth.*)$'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create user
+sudo useradd --no-create-home --shell /bin/false node_exporter
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable node_exporter
+sudo systemctl start node_exporter
+
+# Verify it's running
+systemctl status node_exporter
+curl -s http://localhost:9100/metrics | head -20
+```
+
+### Configure Agent for Exporter Mode
+
+Update your config.yaml:
+
+```yaml
+tasks:
+  system_metrics:
+    enabled: true
+    interval: "5m"
+    source: "exporter"
+    exporter_url: "http://localhost:9100/metrics"
 ```
 
 ---
@@ -459,22 +461,20 @@ sudo journalctl -u agent -n 50 --no-pager
 
 ### No Metrics Being Published
 
-**Check node_exporter:**
+**Check agent logs:**
+```bash
+sudo journalctl -u agent | grep metrics
+```
+
+**If using exporter mode, verify node_exporter:**
 ```bash
 # Verify node_exporter is running
 systemctl status node_exporter
 
 # Test metrics endpoint
 curl http://localhost:9100/metrics | head -20
-```
 
-**Check agent logs:**
-```bash
-sudo journalctl -u agent | grep metrics
-```
-
-**Verify exporter URL in config:**
-```bash
+# Verify exporter URL in config
 grep exporter_url /etc/agent/config.yaml
 ```
 
@@ -523,7 +523,7 @@ sudo systemctl start agent
 sudo journalctl -u agent | grep "Starting agent version"
 ```
 
-### Upgrade node_exporter
+### Upgrade node_exporter (If Using Exporter Mode)
 
 ```bash
 # Stop service

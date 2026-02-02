@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -61,11 +62,12 @@ type HeartbeatConfig struct {
 	Interval time.Duration `mapstructure:"interval"`
 }
 
-// SystemMetricsConfig configures metrics scraping
+// SystemMetricsConfig configures metrics collection
 type SystemMetricsConfig struct {
 	Enabled     bool          `mapstructure:"enabled"`
 	Interval    time.Duration `mapstructure:"interval"`
-	ExporterURL string        `mapstructure:"exporter_url"`
+	Source      string        `mapstructure:"source"`       // "builtin" (default) or "exporter"
+	ExporterURL string        `mapstructure:"exporter_url"` // Only used when Source="exporter"
 }
 
 // ServiceCheckConfig configures service status monitoring
@@ -149,6 +151,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.heartbeat.interval", "1m")
 	v.SetDefault("tasks.system_metrics.enabled", true)
 	v.SetDefault("tasks.system_metrics.interval", "5m")
+	v.SetDefault("tasks.system_metrics.source", "builtin") // Default to builtin (gopsutil)
 	v.SetDefault("tasks.system_metrics.exporter_url", defaults.ExporterURL)
 	v.SetDefault("tasks.service_check.enabled", true)
 	v.SetDefault("tasks.service_check.interval", "1m")
@@ -279,6 +282,21 @@ func validate(cfg *Config) error {
 
 	if cfg.Tasks.SystemMetrics.Enabled && cfg.Tasks.SystemMetrics.Interval < 30*time.Second {
 		return fmt.Errorf("system_metrics interval must be at least 30 seconds (got: %v)", cfg.Tasks.SystemMetrics.Interval)
+	}
+
+	// Validate metrics source
+	if cfg.Tasks.SystemMetrics.Enabled {
+		source := strings.ToLower(cfg.Tasks.SystemMetrics.Source)
+		if source == "" {
+			source = "builtin" // Default
+		}
+		if source != "builtin" && source != "exporter" {
+			return fmt.Errorf("invalid system_metrics.source: %s (must be 'builtin' or 'exporter')", cfg.Tasks.SystemMetrics.Source)
+		}
+		// If exporter mode, URL is required
+		if source == "exporter" && cfg.Tasks.SystemMetrics.ExporterURL == "" {
+			return fmt.Errorf("exporter_url is required when system_metrics.source is 'exporter'")
+		}
 	}
 
 	// Validate heartbeat is more frequent than metrics (best practice)

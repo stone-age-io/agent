@@ -11,7 +11,7 @@ import (
 // TestCreateHeartbeat tests heartbeat message creation
 func TestCreateHeartbeat(t *testing.T) {
 	// FIXED: Use zap.NewNop() instead of nil to avoid panic
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 	version := "1.0.0"
 
 	// Create heartbeat
@@ -44,7 +44,7 @@ func TestCreateHeartbeat(t *testing.T) {
 
 // TestCreateHeartbeatFormat tests that heartbeat uses correct time format
 func TestCreateHeartbeatFormat(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 
 	hb := executor.CreateHeartbeat("1.0.0")
 
@@ -63,7 +63,7 @@ func TestCreateHeartbeatFormat(t *testing.T) {
 
 // TestCreateHeartbeatConsistency tests that multiple heartbeats have consistent format
 func TestCreateHeartbeatConsistency(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 	version := "1.0.0"
 
 	// Create multiple heartbeats

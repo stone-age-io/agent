@@ -7,19 +7,19 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/stone-age-io/agent/internal/utils"
+	"go.uber.org/zap"
 )
 
 // Executor handles all task execution for both scheduled tasks and commands
 type Executor struct {
-	logger         *zap.Logger
-	commandTimeout time.Duration
-	httpClient     *http.Client  // Cached HTTP client for metrics scraping (created once, reused)
-	stats          *ExecutorStats
-	metricsCache   *metricsCache // Moved from global variable in metrics.go
-	taskStats      *TaskStats
-	ctx            context.Context // ADDED: Context for cancellation and timeouts
+	logger           *zap.Logger
+	commandTimeout   time.Duration
+	httpClient       *http.Client       // Cached HTTP client for metrics scraping (created once, reused)
+	stats            *ExecutorStats
+	metricsCollector MetricsCollector   // Metrics collector (builtin or exporter)
+	taskStats        *TaskStats
+	ctx              context.Context    // Context for cancellation and timeouts
 }
 
 // ExecutorStats tracks executor statistics for self-monitoring
@@ -50,17 +50,8 @@ type TaskStats struct {
 	inventoryCount    int64
 }
 
-// metricsCache stores previous counter values for rate calculation
-// Counter-based metrics (CPU, disk I/O) need two measurements to calculate rates
-type metricsCache struct {
-	mu              sync.RWMutex
-	lastCPUTotal    float64
-	lastCPUIdle     float64
-	lastDiskMetrics map[string]DiskCounters  // Per-drive counters for I/O rate calculation
-	lastTimestamp   time.Time
-}
-
 // DiskCounters stores previous disk counter values for rate calculation
+// Used by collectors for I/O rate calculation
 type DiskCounters struct {
 	ReadBytes  float64
 	WriteBytes float64
@@ -92,21 +83,26 @@ type TaskHealthMetrics struct {
 }
 
 // NewExecutor creates a new task executor
-// MODIFIED: Now accepts context for cancellation and timeouts
-func NewExecutor(logger *zap.Logger, commandTimeout time.Duration, ctx context.Context) *Executor {
-	return &Executor{
-		logger:         logger,
-		commandTimeout: commandTimeout,
-		httpClient:     createHTTPClient(), // Create HTTP client ONCE and reuse for all scrapes
-		stats: &ExecutorStats{
-			startTime: time.Now(),
-		},
-		metricsCache: &metricsCache{
-			lastDiskMetrics: make(map[string]DiskCounters), // Initialize per-drive counters map
-		},
-		taskStats: &TaskStats{},
-		ctx:       ctx, // ADDED: Store context
+// source: "builtin" (default) or "exporter"
+// exporterURL: only used when source="exporter"
+func NewExecutor(logger *zap.Logger, commandTimeout time.Duration, ctx context.Context, source, exporterURL string) (*Executor, error) {
+	httpClient := createHTTPClient()
+
+	// Create metrics collector based on source
+	collector, err := NewMetricsCollector(source, exporterURL, logger, httpClient)
+	if err != nil {
+		return nil, err
 	}
+
+	return &Executor{
+		logger:           logger,
+		commandTimeout:   commandTimeout,
+		httpClient:       httpClient,
+		stats:            &ExecutorStats{startTime: time.Now()},
+		metricsCollector: collector,
+		taskStats:        &TaskStats{},
+		ctx:              ctx,
+	}, nil
 }
 
 // GetAgentMetrics returns current agent performance metrics
@@ -216,9 +212,29 @@ func (e *Executor) RecordCommandSuccess() {
 func (e *Executor) RecordCommandError(err error) {
 	e.stats.mu.Lock()
 	defer e.stats.mu.Unlock()
-	
+
 	e.stats.commandsErrored++
 	e.stats.commandsProcessed++ // Still counts as processed
 	e.stats.lastError = err.Error()
 	e.stats.lastErrorTime = time.Now()
+}
+
+// ScrapeMetrics collects system metrics using the configured collector
+// The exporterURL parameter is kept for backward compatibility but is ignored
+// when using the builtin collector (the collector was configured at creation time)
+func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
+	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
+	defer cancel()
+
+	metrics, err := e.metricsCollector.Collect(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate metrics
+	if err := validateMetrics(metrics, e.metricsCollector); err != nil {
+		return nil, err
+	}
+
+	return metrics, nil
 }

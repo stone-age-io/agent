@@ -192,8 +192,11 @@ func TestIsPathAllowed(t *testing.T) {
 
 // TestFetchLogLines tests the log fetching functionality
 func TestFetchLogLines(t *testing.T) {
-	// FIXED: Use zap.NewNop() instead of nil to avoid panic
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	// Create executor with builtin metrics source for tests
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("Failed to create executor: %v", err)
+	}
 
 	tests := []struct {
 		name            string

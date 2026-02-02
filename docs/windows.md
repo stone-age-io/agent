@@ -14,58 +14,7 @@ Complete guide for installing and configuring the agent on Windows systems.
 
 ## Installation Steps
 
-### 1. Install windows_exporter
-
-The agent collects system metrics from Prometheus windows_exporter.
-
-**Download and install:**
-
-```powershell
-# Run as Administrator
-
-# Download latest release
-$exporterVersion = "0.25.1"
-$downloadUrl = "https://github.com/prometheus-community/windows_exporter/releases/download/v$exporterVersion/windows_exporter-$exporterVersion-amd64.msi"
-$installerPath = "$env:TEMP\windows_exporter.msi"
-
-Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
-
-# Install MSI (installs as Windows service)
-Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet" -Wait
-
-# Verify service is running
-Get-Service windows_exporter
-
-# Test metrics endpoint
-Invoke-WebRequest -Uri "http://localhost:9182/metrics" -UseBasicParsing | Select-Object -ExpandProperty Content | Select-Object -First 20
-```
-
-**Alternative: Manual Installation**
-
-If you prefer to install manually without MSI:
-
-```powershell
-# Download binary
-$exporterVersion = "0.25.1"
-$downloadUrl = "https://github.com/prometheus-community/windows_exporter/releases/download/v$exporterVersion/windows_exporter-$exporterVersion-amd64.exe"
-$installPath = "C:\Program Files\windows_exporter"
-
-# Create directory
-New-Item -ItemType Directory -Force -Path $installPath
-
-# Download
-Invoke-WebRequest -Uri $downloadUrl -OutFile "$installPath\windows_exporter.exe"
-
-# Install as service
-& "$installPath\windows_exporter.exe" --service.install
-
-# Start service
-Start-Service windows_exporter
-```
-
----
-
-### 2. Install Agent
+### 1. Install Agent
 
 ```powershell
 # Run as Administrator
@@ -96,7 +45,7 @@ Set-Acl $agentPath $acl
 
 ---
 
-### 3. Configure Agent
+### 2. Configure Agent
 
 Create configuration file:
 
@@ -141,7 +90,8 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    exporter_url: "http://localhost:9182/metrics"
+    source: "builtin"  # "builtin" (default) or "exporter"
+    # exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
   
   service_check:
     enabled: true
@@ -205,7 +155,7 @@ Copy-Item "\\path\to\device.creds" -Destination "$configPath\device.creds"
 
 ---
 
-### 4. Install as Windows Service
+### 3. Install as Windows Service
 
 ```powershell
 # Install service
@@ -226,7 +176,7 @@ Get-Service agent | Format-List *
 
 ---
 
-### 5. Verify Installation
+### 4. Verify Installation
 
 #### Check Service Status
 
@@ -270,6 +220,47 @@ nats request "agents.windows-server-01.cmd.health" '{}'
 
 # Subscribe to telemetry
 nats sub "agents.windows-server-01.>"
+```
+
+---
+
+## Optional: Install windows_exporter
+
+By default, the agent uses built-in metrics collection. If you prefer to use Prometheus windows_exporter for additional metrics, follow these steps:
+
+### Install windows_exporter
+
+```powershell
+# Run as Administrator
+
+# Download latest release
+$exporterVersion = "0.25.1"
+$downloadUrl = "https://github.com/prometheus-community/windows_exporter/releases/download/v$exporterVersion/windows_exporter-$exporterVersion-amd64.msi"
+$installerPath = "$env:TEMP\windows_exporter.msi"
+
+Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
+
+# Install MSI (installs as Windows service)
+Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet" -Wait
+
+# Verify service is running
+Get-Service windows_exporter
+
+# Test metrics endpoint
+Invoke-WebRequest -Uri "http://localhost:9182/metrics" -UseBasicParsing | Select-Object -ExpandProperty Content | Select-Object -First 20
+```
+
+### Configure Agent for Exporter Mode
+
+Update your config.yaml:
+
+```yaml
+tasks:
+  system_metrics:
+    enabled: true
+    interval: "5m"
+    source: "exporter"
+    exporter_url: "http://localhost:9182/metrics"
 ```
 
 ---
@@ -488,22 +479,20 @@ Get-EventLog -LogName Application -Source agent -Newest 50
 
 ### No Metrics Being Published
 
-**Check windows_exporter:**
+**Check agent logs:**
+```powershell
+Select-String -Path "C:\ProgramData\Agent\agent.log" -Pattern "metrics"
+```
+
+**If using exporter mode, verify windows_exporter:**
 ```powershell
 # Verify service is running
 Get-Service windows_exporter
 
 # Test metrics endpoint
 Invoke-WebRequest -Uri "http://localhost:9182/metrics" -UseBasicParsing
-```
 
-**Check agent logs:**
-```powershell
-Select-String -Path "C:\ProgramData\Agent\agent.log" -Pattern "metrics"
-```
-
-**Verify exporter URL in config:**
-```powershell
+# Verify exporter URL in config
 Select-String -Path "C:\ProgramData\Agent\config.yaml" -Pattern "exporter_url"
 ```
 
@@ -559,7 +548,7 @@ Start-Service agent
 Get-Content "C:\ProgramData\Agent\agent.log" -Tail 20 | Select-String "version"
 ```
 
-### Upgrade windows_exporter
+### Upgrade windows_exporter (If Using Exporter Mode)
 
 ```powershell
 # Stop service

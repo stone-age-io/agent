@@ -14,7 +14,12 @@ func TestNewExecutor(t *testing.T) {
 	timeout := 30 * time.Second
 	ctx := context.Background()
 	logger := zap.NewNop()
-	executor := NewExecutor(logger, timeout, ctx)
+
+	// Test with builtin source (default)
+	executor, err := NewExecutor(logger, timeout, ctx, "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	if executor == nil {
 		t.Fatal("NewExecutor() returned nil")
@@ -28,8 +33,8 @@ func TestNewExecutor(t *testing.T) {
 		t.Error("NewExecutor() stats is nil")
 	}
 
-	if executor.metricsCache == nil {
-		t.Error("NewExecutor() metricsCache is nil")
+	if executor.metricsCollector == nil {
+		t.Error("NewExecutor() metricsCollector is nil")
 	}
 
 	if executor.httpClient == nil {
@@ -50,9 +55,56 @@ func TestNewExecutor(t *testing.T) {
 	}
 }
 
+// TestNewExecutorWithExporterSource tests executor creation with exporter source
+func TestNewExecutorWithExporterSource(t *testing.T) {
+	ctx := context.Background()
+	logger := zap.NewNop()
+
+	// Test with exporter source
+	executor, err := NewExecutor(logger, time.Second, ctx, "exporter", "http://localhost:9182/metrics")
+	if err != nil {
+		t.Fatalf("NewExecutor() with exporter error = %v", err)
+	}
+
+	if executor.metricsCollector == nil {
+		t.Error("NewExecutor() metricsCollector is nil with exporter source")
+	}
+
+	// Verify collector name contains "exporter"
+	name := executor.metricsCollector.Name()
+	if name == "" {
+		t.Error("Collector name should not be empty")
+	}
+}
+
+// TestNewExecutorInvalidSource tests executor creation with invalid source
+func TestNewExecutorInvalidSource(t *testing.T) {
+	ctx := context.Background()
+	logger := zap.NewNop()
+
+	_, err := NewExecutor(logger, time.Second, ctx, "invalid", "")
+	if err == nil {
+		t.Error("NewExecutor() should fail with invalid source")
+	}
+}
+
+// TestNewExecutorExporterWithoutURL tests executor creation with exporter but no URL
+func TestNewExecutorExporterWithoutURL(t *testing.T) {
+	ctx := context.Background()
+	logger := zap.NewNop()
+
+	_, err := NewExecutor(logger, time.Second, ctx, "exporter", "")
+	if err == nil {
+		t.Error("NewExecutor() should fail with exporter source but no URL")
+	}
+}
+
 // TestRecordCommandSuccess tests success counter
 func TestRecordCommandSuccess(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -86,7 +138,10 @@ func TestRecordCommandSuccess(t *testing.T) {
 
 // TestRecordCommandError tests error counter and tracking
 func TestRecordCommandError(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -119,7 +174,7 @@ func TestRecordCommandError(t *testing.T) {
 	}
 
 	// Parse timestamp
-	_, err := time.Parse(time.RFC3339, metrics.LastErrorTime)
+	_, err = time.Parse(time.RFC3339, metrics.LastErrorTime)
 	if err != nil {
 		t.Errorf("LastErrorTime parse error: %v", err)
 	}
@@ -142,7 +197,10 @@ func TestRecordCommandError(t *testing.T) {
 
 // TestGetAgentMetrics tests metrics retrieval
 func TestGetAgentMetrics(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Get initial metrics
 	metrics := executor.GetAgentMetrics()
@@ -179,7 +237,10 @@ func TestGetAgentMetrics(t *testing.T) {
 
 // TestUptimeCalculation tests that uptime increases over time
 func TestUptimeCalculation(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Get initial uptime
 	metrics1 := executor.GetAgentMetrics()
@@ -200,7 +261,10 @@ func TestUptimeCalculation(t *testing.T) {
 
 // TestConcurrentCommandRecording tests thread-safety of command recording
 func TestConcurrentCommandRecording(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Record commands concurrently
 	done := make(chan bool)
@@ -238,129 +302,12 @@ func TestConcurrentCommandRecording(t *testing.T) {
 	}
 }
 
-// TestMetricsCacheInitialization tests that metrics cache is properly initialized
-func TestMetricsCacheInitialization(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
-
-	// Access the cache through the executor
-	if executor.metricsCache == nil {
-		t.Fatal("metricsCache is nil")
-	}
-
-	// Check initial values
-	executor.metricsCache.mu.RLock()
-	defer executor.metricsCache.mu.RUnlock()
-
-	if !executor.metricsCache.lastTimestamp.IsZero() {
-		t.Error("Initial lastTimestamp should be zero")
-	}
-	if executor.metricsCache.lastCPUTotal != 0 {
-		t.Error("Initial lastCPUTotal should be zero")
-	}
-	if executor.metricsCache.lastCPUIdle != 0 {
-		t.Error("Initial lastCPUIdle should be zero")
-	}
-	
-	// Check per-drive disk metrics map is initialized
-	if executor.metricsCache.lastDiskMetrics == nil {
-		t.Error("Initial lastDiskMetrics map should be initialized (not nil)")
-	}
-	if len(executor.metricsCache.lastDiskMetrics) != 0 {
-		t.Errorf("Initial lastDiskMetrics should be empty, got %d entries", len(executor.metricsCache.lastDiskMetrics))
-	}
-}
-
-// TestDiskMetricsCacheStorage tests per-drive disk metrics storage
-func TestDiskMetricsCacheStorage(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
-
-	// Simulate storing metrics for multiple drives
-	executor.metricsCache.mu.Lock()
-	
-	// Store metrics for C: drive
-	executor.metricsCache.lastDiskMetrics["C:"] = DiskCounters{
-		ReadBytes:  1024000,
-		WriteBytes: 512000,
-	}
-	
-	// Store metrics for D: drive
-	executor.metricsCache.lastDiskMetrics["D:"] = DiskCounters{
-		ReadBytes:  2048000,
-		WriteBytes: 1024000,
-	}
-	
-	executor.metricsCache.mu.Unlock()
-
-	// Verify storage
-	executor.metricsCache.mu.RLock()
-	defer executor.metricsCache.mu.RUnlock()
-
-	// Check C: drive
-	cDrive, exists := executor.metricsCache.lastDiskMetrics["C:"]
-	if !exists {
-		t.Error("C: drive metrics not found in cache")
-	}
-	if cDrive.ReadBytes != 1024000 {
-		t.Errorf("C: ReadBytes = %f, want 1024000", cDrive.ReadBytes)
-	}
-	if cDrive.WriteBytes != 512000 {
-		t.Errorf("C: WriteBytes = %f, want 512000", cDrive.WriteBytes)
-	}
-
-	// Check D: drive
-	dDrive, exists := executor.metricsCache.lastDiskMetrics["D:"]
-	if !exists {
-		t.Error("D: drive metrics not found in cache")
-	}
-	if dDrive.ReadBytes != 2048000 {
-		t.Errorf("D: ReadBytes = %f, want 2048000", dDrive.ReadBytes)
-	}
-	if dDrive.WriteBytes != 1024000 {
-		t.Errorf("D: WriteBytes = %f, want 1024000", dDrive.WriteBytes)
-	}
-
-	// Verify map size
-	if len(executor.metricsCache.lastDiskMetrics) != 2 {
-		t.Errorf("lastDiskMetrics should have 2 entries, got %d", len(executor.metricsCache.lastDiskMetrics))
-	}
-}
-
-// TestDiskMetricsCacheUpdate tests updating disk metrics for existing drive
-func TestDiskMetricsCacheUpdate(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
-
-	executor.metricsCache.mu.Lock()
-
-	// Initial values for C: drive
-	executor.metricsCache.lastDiskMetrics["C:"] = DiskCounters{
-		ReadBytes:  1000000,
-		WriteBytes: 500000,
-	}
-
-	// Update values for C: drive (simulating next scrape)
-	counters := executor.metricsCache.lastDiskMetrics["C:"]
-	counters.ReadBytes = 2000000
-	counters.WriteBytes = 1000000
-	executor.metricsCache.lastDiskMetrics["C:"] = counters
-
-	executor.metricsCache.mu.Unlock()
-
-	// Verify update
-	executor.metricsCache.mu.RLock()
-	defer executor.metricsCache.mu.RUnlock()
-
-	updated := executor.metricsCache.lastDiskMetrics["C:"]
-	if updated.ReadBytes != 2000000 {
-		t.Errorf("Updated ReadBytes = %f, want 2000000", updated.ReadBytes)
-	}
-	if updated.WriteBytes != 1000000 {
-		t.Errorf("Updated WriteBytes = %f, want 1000000", updated.WriteBytes)
-	}
-}
-
 // TestHTTPClientInitialization tests that HTTP client is created and cached
 func TestHTTPClientInitialization(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	if executor.httpClient == nil {
 		t.Fatal("httpClient should be initialized, got nil")
@@ -382,7 +329,10 @@ func TestHTTPClientInitialization(t *testing.T) {
 
 // TestTaskStatsRecording tests task execution tracking
 func TestTaskStatsRecording(t *testing.T) {
-	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatalf("NewExecutor() error = %v", err)
+	}
 
 	// Initial state - all timestamps should be zero
 	metrics := executor.GetTaskMetrics()

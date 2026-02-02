@@ -46,11 +46,21 @@ func New(configPath string, version string) (*Agent, error) {
 		zap.String("version", version),
 		zap.String("device_id", cfg.DeviceID))
 
-	// ADDED: Create root context with cancellation
+	// Create root context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create task executor with command timeout from config and context
-	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout, ctx)
+	// Create task executor with command timeout, context, and metrics source config
+	executor, err := tasks.NewExecutor(
+		logger,
+		cfg.Commands.Timeout,
+		ctx,
+		cfg.Tasks.SystemMetrics.Source,
+		cfg.Tasks.SystemMetrics.ExporterURL,
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create executor: %w", err)
+	}
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")

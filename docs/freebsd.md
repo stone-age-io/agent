@@ -13,90 +13,7 @@ Complete guide for installing and configuring the agent on FreeBSD systems.
 
 ## Installation Steps
 
-### 1. Install node_exporter
-
-The agent collects system metrics from Prometheus node_exporter.
-
-#### Option A: Install from Packages (Recommended)
-
-```bash
-# Install via pkg
-sudo pkg install node_exporter
-
-# Enable in rc.conf
-sudo sysrc node_exporter_enable="YES"
-
-# Start service
-sudo service node_exporter start
-
-# Verify it's running
-service node_exporter status
-fetch -qo - http://localhost:9100/metrics | head -20
-```
-
-#### Option B: Install from Ports
-
-```bash
-# Update ports tree
-sudo portsnap fetch update
-
-# Install node_exporter
-cd /usr/ports/sysutils/node_exporter
-sudo make install clean
-
-# Enable and start
-sudo sysrc node_exporter_enable="YES"
-sudo service node_exporter start
-```
-
-#### Option C: Install Binary Manually
-
-```bash
-# Download latest release
-cd /tmp
-fetch https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.freebsd-amd64.tar.gz
-
-# Extract
-tar xvfz node_exporter-1.7.0.freebsd-amd64.tar.gz
-
-# Install binary
-sudo mv node_exporter-1.7.0.freebsd-amd64/node_exporter /usr/local/bin/
-sudo chmod +x /usr/local/bin/node_exporter
-
-# Create rc.d script
-sudo tee /usr/local/etc/rc.d/node_exporter > /dev/null <<'EOF'
-#!/bin/sh
-#
-# PROVIDE: node_exporter
-# REQUIRE: NETWORKING
-# KEYWORD: shutdown
-
-. /etc/rc.subr
-
-name="node_exporter"
-rcvar="${name}_enable"
-command="/usr/local/bin/node_exporter"
-node_exporter_user="nobody"
-
-load_rc_config $name
-: ${node_exporter_enable:="NO"}
-
-pidfile="/var/run/${name}.pid"
-command_args="&"
-
-run_rc_command "$1"
-EOF
-
-sudo chmod +x /usr/local/etc/rc.d/node_exporter
-
-# Enable and start
-sudo sysrc node_exporter_enable="YES"
-sudo service node_exporter start
-```
-
----
-
-### 2. Install Agent
+### 1. Install Agent
 
 ```bash
 # Download agent binary (replace VERSION with latest release)
@@ -120,7 +37,7 @@ sudo chmod 755 /var/log/agent
 
 ---
 
-### 3. Configure Agent
+### 2. Configure Agent
 
 Create configuration file:
 
@@ -164,7 +81,8 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    exporter_url: "http://localhost:9100/metrics"
+    source: "builtin"  # "builtin" (default) or "exporter"
+    # exporter_url: "http://localhost:9100/metrics"  # Only for exporter mode
   
   service_check:
     enabled: true
@@ -229,7 +147,7 @@ sudo chmod 600 /usr/local/etc/agent/device.creds
 
 ---
 
-### 4. Install as rc.d Service
+### 3. Install as rc.d Service
 
 ```bash
 # Install service (kardianos/service handles rc.d setup)
@@ -250,7 +168,7 @@ sudo service agent status
 
 ---
 
-### 5. Verify Installation
+### 4. Verify Installation
 
 #### Check Service Status
 
@@ -294,6 +212,42 @@ nats request "agents.freebsd-server-01.cmd.health" '{}'
 
 # Subscribe to telemetry
 nats sub "agents.freebsd-server-01.>"
+```
+
+---
+
+## Optional: Install node_exporter
+
+By default, the agent uses built-in metrics collection. If you prefer to use Prometheus node_exporter for additional metrics, follow these steps:
+
+### Install from Packages (Recommended)
+
+```bash
+# Install via pkg
+sudo pkg install node_exporter
+
+# Enable in rc.conf
+sudo sysrc node_exporter_enable="YES"
+
+# Start service
+sudo service node_exporter start
+
+# Verify it's running
+service node_exporter status
+fetch -qo - http://localhost:9100/metrics | head -20
+```
+
+### Configure Agent for Exporter Mode
+
+Update your config.yaml:
+
+```yaml
+tasks:
+  system_metrics:
+    enabled: true
+    interval: "5m"
+    source: "exporter"
+    exporter_url: "http://localhost:9100/metrics"
 ```
 
 ---
@@ -500,22 +454,20 @@ sudo tail -50 /var/log/agent/agent.log
 
 ### No Metrics Being Published
 
-**Check node_exporter:**
+**Check agent logs:**
+```bash
+sudo grep metrics /var/log/agent/agent.log
+```
+
+**If using exporter mode, verify node_exporter:**
 ```bash
 # Verify node_exporter is running
 service node_exporter status
 
 # Test metrics endpoint
 fetch -qo - http://localhost:9100/metrics | head -20
-```
 
-**Check agent logs:**
-```bash
-sudo grep metrics /var/log/agent/agent.log
-```
-
-**Verify exporter URL in config:**
-```bash
+# Verify exporter URL in config
 grep exporter_url /usr/local/etc/agent/config.yaml
 ```
 
@@ -564,7 +516,7 @@ sudo service agent start
 sudo tail -20 /var/log/agent/agent.log | grep version
 ```
 
-### Upgrade node_exporter
+### Upgrade node_exporter (If Using Exporter Mode)
 
 ```bash
 # Using pkg
