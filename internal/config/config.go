@@ -32,11 +32,23 @@ type NATSConfig struct {
 
 // AuthConfig holds NATS authentication credentials
 type AuthConfig struct {
-	Type      string `mapstructure:"type"`       // creds, token, userpass, none
-	CredsFile string `mapstructure:"creds_file"` // for creds auth
-	Token     string `mapstructure:"token"`      // for token auth
-	Username  string `mapstructure:"username"`   // for userpass auth
-	Password  string `mapstructure:"password"`   // for userpass auth
+	Type       string         `mapstructure:"type"`       // creds, token, userpass, pocketbase, none
+	CredsFile  string         `mapstructure:"creds_file"` // for creds and pocketbase auth
+	Token      string         `mapstructure:"token"`      // for token auth
+	Username   string         `mapstructure:"username"`   // for userpass auth
+	Password   string         `mapstructure:"password"`   // for userpass auth
+	PocketBase PocketBaseAuth `mapstructure:"pocketbase"` // for pocketbase bootstrap
+}
+
+// PocketBaseAuth holds PocketBase bootstrap configuration for fetching NATS credentials
+type PocketBaseAuth struct {
+	URL            string `mapstructure:"url"`             // PocketBase server URL
+	AuthCollection string `mapstructure:"auth_collection"` // Auth collection (default: _superusers)
+	Identity       string `mapstructure:"identity"`        // Login identity (email/username)
+	PasswordEnv    string `mapstructure:"password_env"`    // Env var containing password
+	Collection     string `mapstructure:"collection"`      // Collection holding creds records
+	DeviceIDField  string `mapstructure:"device_id_field"` // Field name for device ID lookup (default: device_id)
+	CredsField     string `mapstructure:"creds_field"`     // Field name containing creds content (default: nats_creds)
 }
 
 // TLSConfig holds TLS connection settings
@@ -142,6 +154,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.reconnect_wait", "2s")
 	v.SetDefault("nats.drain_timeout", "30s")
 
+	// PocketBase bootstrap defaults
+	v.SetDefault("nats.auth.pocketbase.auth_collection", "_superusers")
+	v.SetDefault("nats.auth.pocketbase.device_id_field", "device_id")
+	v.SetDefault("nats.auth.pocketbase.creds_field", "nats_creds")
+
 	// TLS defaults
 	v.SetDefault("nats.tls.enabled", false)
 	v.SetDefault("nats.tls.insecure_skip_verify", false)
@@ -210,6 +227,24 @@ func validate(cfg *Config) error {
 		if _, err := os.Stat(cfg.NATS.Auth.CredsFile); err != nil {
 			return fmt.Errorf("credentials file not found: %s (%w)", cfg.NATS.Auth.CredsFile, err)
 		}
+	case "pocketbase":
+		if cfg.NATS.Auth.CredsFile == "" {
+			return fmt.Errorf("creds_file is required for pocketbase auth type (path where .creds will be written)")
+		}
+		pb := cfg.NATS.Auth.PocketBase
+		if pb.URL == "" {
+			return fmt.Errorf("pocketbase.url is required for pocketbase auth type")
+		}
+		if pb.Identity == "" {
+			return fmt.Errorf("pocketbase.identity is required for pocketbase auth type")
+		}
+		if pb.PasswordEnv == "" {
+			return fmt.Errorf("pocketbase.password_env is required for pocketbase auth type")
+		}
+		if pb.Collection == "" {
+			return fmt.Errorf("pocketbase.collection is required for pocketbase auth type")
+		}
+		// .creds file may not exist yet — bootstrap will create it
 	case "token":
 		if cfg.NATS.Auth.Token == "" {
 			return fmt.Errorf("token is required for token auth type")
@@ -221,7 +256,7 @@ func validate(cfg *Config) error {
 	case "none":
 		// No validation needed
 	default:
-		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, or none)", cfg.NATS.Auth.Type)
+		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, pocketbase, or none)", cfg.NATS.Auth.Type)
 	}
 
 	// Validate TLS configuration

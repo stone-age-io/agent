@@ -21,12 +21,24 @@ nats:
     # Option 1: Credentials file (RECOMMENDED for production)
     type: "creds"
     creds_file: "C:\\ProgramData\\WinAgent\\device.creds"
-    
-    # Option 2: Token authentication
+
+    # Option 2: PocketBase bootstrap (auto-fetch .creds on first start)
+    # type: "pocketbase"
+    # creds_file: "C:\\ProgramData\\WinAgent\\device.creds"
+    # pocketbase:
+    #   url: "https://pb.example.com"
+    #   auth_collection: "_superusers"        # default: _superusers
+    #   identity: "agent-svc@example.com"
+    #   password_env: "AGENT_PB_PASSWORD"     # reads password from this env var
+    #   collection: "device_credentials"
+    #   device_id_field: "device_id"          # default: device_id
+    #   creds_field: "nats_creds"             # default: nats_creds
+
+    # Option 3: Token authentication
     # type: "token"
     # token: "your-token-here"
-    
-    # Option 3: Username/Password authentication
+
+    # Option 4: Username/Password authentication
     # type: "userpass"
     # username: "user"
     # password: "pass"

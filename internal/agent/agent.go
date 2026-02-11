@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/stone-age-io/agent/internal/bootstrap"
 	"github.com/stone-age-io/agent/internal/config"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
 	"github.com/stone-age-io/agent/internal/scheduler"
@@ -45,6 +46,15 @@ func New(configPath string, version string) (*Agent, error) {
 	logger.Info("Starting win-agent",
 		zap.String("version", version),
 		zap.String("device_id", cfg.DeviceID))
+
+	// Bootstrap NATS credentials from PocketBase if configured
+	if cfg.NATS.Auth.Type == "pocketbase" {
+		if err := bootstrap.FetchCredentials(cfg, logger); err != nil {
+			return nil, fmt.Errorf("failed to bootstrap credentials: %w", err)
+		}
+		// Switch auth type to creds for the NATS client — .creds file now exists
+		cfg.NATS.Auth.Type = "creds"
+	}
 
 	// Create root context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
