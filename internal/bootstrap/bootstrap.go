@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,13 +108,13 @@ func authenticate(client *http.Client, baseURL, collection, identity, password s
 // extracts the creds file content from the specified field
 func fetchCredsRecord(client *http.Client, baseURL, token, collection, deviceIDField, deviceID, credsField string) (string, error) {
 	filter := fmt.Sprintf("%s='%s'", deviceIDField, deviceID)
-	url := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1",
+	reqURL := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1",
 		strings.TrimRight(baseURL, "/"),
 		collection,
-		filter,
+		url.QueryEscape(filter),
 	)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

@@ -144,7 +144,7 @@ notepad "$configPath\config.yaml"
 **Required changes:**
 1. Set unique `device_id`
 2. Update `nats.urls` with your NATS server
-3. Configure authentication (credentials file, token, or userpass)
+3. Configure authentication (credentials file, PocketBase bootstrap, token, or userpass)
 4. Adjust monitored services in `tasks.service_check.services`
 
 **Copy NATS credentials (if using creds auth):**
@@ -152,6 +152,27 @@ notepad "$configPath\config.yaml"
 ```powershell
 Copy-Item "\\path\to\device.creds" -Destination "$configPath\device.creds"
 ```
+
+**Or use PocketBase bootstrap (auto-fetch credentials on first start):**
+
+```yaml
+nats:
+  auth:
+    type: "pocketbase"
+    creds_file: "C:\\ProgramData\\Agent\\device.creds"
+    pocketbase:
+      url: "https://pb.example.com"
+      identity: "agent-svc@example.com"
+      password_env: "AGENT_PB_PASSWORD"
+      collection: "device_credentials"
+```
+
+Set the environment variable before starting the agent:
+```powershell
+[Environment]::SetEnvironmentVariable("AGENT_PB_PASSWORD", "your-password", "Machine")
+```
+
+See **[PocketBase Bootstrap Guide](bootstrap.md)** for full setup details.
 
 ---
 

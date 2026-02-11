@@ -185,6 +185,38 @@ Understanding the design and components of the agent platform.
 
 ## Message Flow Examples
 
+### 0. Credential Bootstrap (First Start)
+
+```
+┌─────────┐
+│  Agent  │ First startup (auth type: "pocketbase")
+└────┬────┘
+     │ 1. Check if .creds file exists → skip if yes
+     │
+     │ 2. Read password from env var (AGENT_PB_PASSWORD)
+     ▼
+┌────────────┐
+│ PocketBase │ 3. POST /api/collections/_superusers/auth-with-password
+└────┬───────┘    → Returns JWT token
+     │
+     │ 4. GET /api/collections/device_credentials/records
+     │    ?filter=device_id='server-prod-01'
+     │    → Returns NATS .creds content
+     ▼
+┌─────────┐
+│  Agent  │ 5. Write .creds file (permissions: 0600)
+└────┬────┘ 6. Switch auth type to "creds"
+     │ 7. Connect to NATS using .creds
+     ▼
+┌─────────┐
+│  NATS   │ Normal operation begins
+└─────────┘
+```
+
+After initial bootstrap, the agent uses the stored `.creds` file on subsequent starts (no PocketBase dependency at runtime).
+
+---
+
 ### 1. Metrics Collection (Telemetry)
 
 ```
@@ -288,6 +320,12 @@ Understanding the design and components of the agent platform.
 - JWT-based authentication (issued by pb-nats)
 - Account isolation (tenant cannot access another tenant's subjects)
 - Subject-based permissions
+
+**Bootstrap (PocketBase):**
+- Credentials fetched over HTTPS from PocketBase
+- Password stored in environment variable (never in config files)
+- `.creds` file written with owner-only permissions (0600)
+- Bootstrap runs once; subsequent starts use stored credentials
 
 **Agent Level:**
 - Whitelists for services, commands, log paths

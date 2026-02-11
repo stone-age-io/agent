@@ -135,7 +135,7 @@ sudo nano /etc/agent/config.yaml
 **Required changes:**
 1. Set unique `device_id`
 2. Update `nats.urls` with your NATS server
-3. Configure authentication (credentials file, token, or userpass)
+3. Configure authentication (credentials file, PocketBase bootstrap, token, or userpass)
 4. Adjust monitored services in `tasks.service_check.services`
 
 **Copy NATS credentials (if using creds auth):**
@@ -144,6 +144,28 @@ sudo nano /etc/agent/config.yaml
 sudo cp /path/to/device.creds /etc/agent/device.creds
 sudo chmod 600 /etc/agent/device.creds
 ```
+
+**Or use PocketBase bootstrap (auto-fetch credentials on first start):**
+
+```yaml
+nats:
+  auth:
+    type: "pocketbase"
+    creds_file: "/etc/agent/device.creds"
+    pocketbase:
+      url: "https://pb.example.com"
+      identity: "agent-svc@example.com"
+      password_env: "AGENT_PB_PASSWORD"
+      collection: "device_credentials"
+```
+
+Set the environment variable before starting the agent:
+```bash
+sudo systemctl edit agent
+# Add: Environment="AGENT_PB_PASSWORD=your-password"
+```
+
+See **[PocketBase Bootstrap Guide](bootstrap.md)** for full setup details.
 
 ---
 

@@ -46,6 +46,11 @@ Agent is a purpose-built system management tool that provides remote management 
 - **Multi-Tenant**: NATS account isolation
 - **TLS Support**: Encrypted communication
 
+### Provisioning
+- **PocketBase Bootstrap**: Auto-fetch NATS credentials on first start
+- **Manual Credentials**: Pre-distribute `.creds` files
+- **Token / UserPass**: Simple auth for development
+
 ---
 
 ## Quick Start
@@ -175,8 +180,18 @@ device_id: "server-prod-01"
 nats:
   urls: ["nats://nats.example.com:4222"]
   auth:
+    # Option 1: Credentials file (pre-distributed)
     type: "creds"
     creds_file: "/path/to/device.creds"
+
+    # Option 2: PocketBase bootstrap (auto-fetch .creds on first start)
+    # type: "pocketbase"
+    # creds_file: "/etc/agent/device.creds"
+    # pocketbase:
+    #   url: "https://pb.example.com"
+    #   identity: "agent-svc@example.com"
+    #   password_env: "AGENT_PB_PASSWORD"
+    #   collection: "device_credentials"
 
 # Scheduled Tasks
 tasks:
@@ -234,6 +249,7 @@ commands:
 
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
+- **[PocketBase Bootstrap](docs/bootstrap.md)** - Auto-provisioning credentials from PocketBase
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 
 ---
