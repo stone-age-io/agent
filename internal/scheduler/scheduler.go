@@ -197,9 +197,10 @@ func (s *Scheduler) scheduleTasks() error {
 	// Schedule inventory task WITH PANIC RECOVERY AND CONTEXT CHECK (but run it once immediately first)
 	if s.config.Tasks.Inventory.Enabled {
 		// Run immediately on startup (wrapped with panic recovery)
-		go s.wrapTaskWithRecovery("inventory_startup", func() {
+		startupTask := s.wrapTaskWithRecovery("inventory_startup", func() {
 			s.publishInventory(deviceID)
-		})()
+		})
+		go startupTask()
 
 		// Then schedule for periodic execution
 		_, err := s.scheduler.NewJob(
@@ -233,6 +234,12 @@ func (s *Scheduler) Shutdown() error {
 // publishHeartbeat publishes a heartbeat message
 // SIMPLIFIED: No retry loops, PublishAsync handles everything!
 func (s *Scheduler) publishHeartbeat(deviceID string) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
 	subject := fmt.Sprintf("%s.%s.heartbeat", s.subjectPrefix, deviceID)
 
 	heartbeat := s.executor.CreateHeartbeat(s.version)
@@ -258,6 +265,12 @@ func (s *Scheduler) publishHeartbeat(deviceID string) {
 
 // publishMetrics scrapes and publishes system metrics
 func (s *Scheduler) publishMetrics(deviceID string) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
 	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, deviceID)
 
 	metrics, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
@@ -314,6 +327,12 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 
 // publishServiceStatus checks and publishes service status
 func (s *Scheduler) publishServiceStatus(deviceID string) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
 	subject := fmt.Sprintf("%s.%s.telemetry.service", s.subjectPrefix, deviceID)
 
 	statuses, err := s.executor.GetServiceStatuses(s.config.Tasks.ServiceCheck.Services)
@@ -365,6 +384,12 @@ func (s *Scheduler) publishServiceStatus(deviceID string) {
 
 // publishInventory collects and publishes system inventory
 func (s *Scheduler) publishInventory(deviceID string) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
 	subject := fmt.Sprintf("%s.%s.telemetry.inventory", s.subjectPrefix, deviceID)
 
 	inventory, err := s.executor.CollectInventory(s.version)

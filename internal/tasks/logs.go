@@ -143,6 +143,7 @@ func readAllLines(file *os.File, n int) ([]string, error) {
 func readLastNLines(file *os.File, fileSize int64, n int) ([]string, error) {
 	const bufferSize = 4096
 	buffer := make([]byte, bufferSize)
+	// Collect lines in reverse order (last line first), then reverse at the end
 	var lines []string
 	var currentLine strings.Builder
 
@@ -168,33 +169,27 @@ func readLastNLines(file *os.File, fileSize int64, n int) ([]string, error) {
 		for i := int(readSize) - 1; i >= 0; i-- {
 			if buffer[i] == '\n' {
 				if currentLine.Len() > 0 {
-					lines = append([]string{currentLine.String()}, lines...)
+					lines = append(lines, reverseString(currentLine.String()))
 					currentLine.Reset()
 				}
 				if len(lines) >= n {
 					break
 				}
 			} else if buffer[i] != '\r' {
-				// Prepend character (we're going backwards)
+				// Build character backwards (we're scanning right-to-left)
 				currentLine.WriteByte(buffer[i])
 			}
 		}
 	}
 
 	// Add any remaining content as the first line
-	if currentLine.Len() > 0 {
-		// Reverse the string since we built it backwards
-		line := currentLine.String()
-		reversed := reverseString(line)
-		lines = append([]string{reversed}, lines...)
+	if currentLine.Len() > 0 && len(lines) < n {
+		lines = append(lines, reverseString(currentLine.String()))
 	}
 
-	// Reverse each line (since we built them backwards)
-	for i := range lines {
-		if i == 0 && currentLine.Len() > 0 {
-			continue // First line already reversed
-		}
-		lines[i] = reverseString(lines[i])
+	// Reverse the slice so lines are in file order (first to last)
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
 	}
 
 	return lines, nil

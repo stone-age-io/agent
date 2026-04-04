@@ -88,7 +88,7 @@ func authenticate(client *http.Client, baseURL, collection, identity, password s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
 		return "", fmt.Errorf("auth returned %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -127,7 +127,7 @@ func fetchCredsRecord(client *http.Client, baseURL, token, collection, deviceIDF
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
 		return "", fmt.Errorf("request returned %d: %s", resp.StatusCode, string(body))
 	}
 
