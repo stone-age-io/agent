@@ -268,9 +268,7 @@ func (c *BuiltinCollector) getDeviceName(partition disk.PartitionStat) string {
 	// Linux/FreeBSD: use device name (e.g., "sda1", "nvme0n1p1")
 	// Strip /dev/ prefix
 	device := partition.Device
-	if strings.HasPrefix(device, "/dev/") {
-		device = device[5:]
-	}
+	device = strings.TrimPrefix(device, "/dev/")
 	return device
 }
 

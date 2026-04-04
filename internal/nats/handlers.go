@@ -57,7 +57,12 @@ func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandle
 					Error:     fmt.Sprintf("Internal error: handler panicked: %v", r),
 					Timestamp: time.Now().UTC().Format(time.RFC3339),
 				}
-				responseBytes, _ := json.Marshal(response)
+				responseBytes, err := json.Marshal(response)
+				if err != nil {
+					h.logger.Error("Failed to marshal panic response", zap.Error(err))
+					msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+					return
+				}
 				msg.Respond(responseBytes)
 			}
 		}()
@@ -204,7 +209,12 @@ func (h *CommandHandlers) handlePing(msg *nats.Msg) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal ping response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 
 	h.logger.Debug("Sent pong response")
@@ -242,7 +252,12 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 			Error:     err.Error(),
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		}
-		responseBytes, _ := json.Marshal(response)
+		responseBytes, err := json.Marshal(response)
+		if err != nil {
+			h.logger.Error("Failed to marshal service control error response", zap.Error(err))
+			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+			return
+		}
 		msg.Respond(responseBytes)
 		return
 	}
@@ -258,7 +273,12 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 	}
 
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal service control response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 
 	h.logger.Info("Service control succeeded",
@@ -297,7 +317,12 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 			Error:     err.Error(),
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		}
-		responseBytes, _ := json.Marshal(response)
+		responseBytes, err := json.Marshal(response)
+		if err != nil {
+			h.logger.Error("Failed to marshal log fetch error response", zap.Error(err))
+			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+			return
+		}
 		msg.Respond(responseBytes)
 		return
 	}
@@ -313,7 +338,12 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal log fetch response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 
 	h.logger.Info("Log fetch succeeded",
@@ -355,7 +385,12 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 			Error:     err.Error(),
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		}
-		responseBytes, _ := json.Marshal(response)
+		responseBytes, err := json.Marshal(response)
+		if err != nil {
+			h.logger.Error("Failed to marshal exec error response", zap.Error(err))
+			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+			return
+		}
 		msg.Respond(responseBytes)
 		return
 	}
@@ -376,7 +411,11 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		h.logger.Debug("Command output is valid JSON, including as parsed object")
 	} else {
 		// Not valid JSON (or empty) - encode as string
-		jsonStr, _ := json.Marshal(output)
+		jsonStr, err := json.Marshal(output)
+		if err != nil {
+			h.logger.Error("Failed to marshal command output", zap.Error(err))
+			jsonStr = []byte(`"output marshal error"`)
+		}
 		outputData = json.RawMessage(jsonStr)
 		h.logger.Debug("Command output is plain text, encoding as JSON string")
 	}
@@ -390,7 +429,12 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal exec response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 
 	h.logger.Info("Command execution succeeded",
@@ -430,7 +474,12 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		OS:        osInfo,
 	}
 
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal health response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 
 	h.logger.Debug("Sent health response",
@@ -536,6 +585,11 @@ func (h *CommandHandlers) respondError(msg *nats.Msg, errorMsg string) {
 		Error:     errorMsg,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
-	responseBytes, _ := json.Marshal(response)
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal error response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
 	msg.Respond(responseBytes)
 }

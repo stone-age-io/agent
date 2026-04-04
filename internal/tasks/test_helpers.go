@@ -11,7 +11,3 @@ func indexOf(s, substr string) int {
 	return -1
 }
 
-// containsString is a test helper to check if a string contains a substring
-func containsString(s, substr string) bool {
-	return indexOf(s, substr) >= 0
-}

@@ -114,7 +114,7 @@ func (c *ExporterCollector) Collect(ctx context.Context) (*SystemMetrics, error)
 // parsePrometheusMetrics parses Prometheus format metrics using expfmt
 func (c *ExporterCollector) parsePrometheusMetrics(reader io.Reader) (*SystemMetrics, error) {
 	// Use NewDecoder with FmtText format for proper initialization
-	decoder := expfmt.NewDecoder(reader, expfmt.FmtText)
+	decoder := expfmt.NewDecoder(reader, expfmt.NewFormat(expfmt.TypeTextPlain))
 
 	metricFamilies := make(map[string]*dto.MetricFamily)
 

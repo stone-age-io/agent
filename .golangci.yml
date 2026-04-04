@@ -1,0 +1,57 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - errcheck
+    - gosec
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        # Subprocess launching with variables is expected — agent's purpose is controlled command execution
+        - G204
+        # File opens with variables are expected — agent reads log files and config
+        - G304
+
+  exclusions:
+    rules:
+      # NATS msg.Respond is fire-and-forget
+      - linters: [errcheck, gosec]
+        source: "msg\\.Respond"
+      # defer .Close() is idiomatic Go — errors on close of read-only resources are not actionable
+      - linters: [errcheck]
+        source: "defer .+\\.Close\\(\\)"
+      # zap logger.Sync() can fail on stderr/stdout and is called during shutdown
+      - linters: [errcheck, gosec]
+        source: "\\.Sync\\(\\)"
+      # Service logger methods are best-effort
+      - linters: [errcheck, gosec]
+        path: cmd/agent/main.go
+        source: "(logger|p\\.logger)\\."
+      # Test files can ignore write errors for fixture setup
+      - linters: [errcheck, gosec]
+        path: _test\.go
+      # fmt.Sscanf return value is not critical when parsing /proc files
+      - linters: [errcheck, gosec]
+        source: "fmt\\.Sscanf"
+      # G115 integer overflow conversions in Linux inventory are safe (block sizes are always positive)
+      - linters: [gosec]
+        path: internal/tasks/inventory_linux.go
+        text: "G115"
+      # G704 SSRF: bootstrap URL comes from user config, not untrusted input
+      - linters: [gosec]
+        path: internal/bootstrap/
+        text: "G704"
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5

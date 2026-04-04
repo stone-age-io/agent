@@ -269,7 +269,11 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 
 		// Publish error message so control plane knows scraping failed
 		errorMsg := tasks.CreateMetricsError(err)
-		data, _ := json.Marshal(errorMsg)
+		data, marshalErr := json.Marshal(errorMsg)
+		if marshalErr != nil {
+			s.logger.Error("Failed to marshal metrics error message", zap.Error(marshalErr))
+			return
+		}
 		
 		// Even errors are published async - fire and forget
 		if err := s.nats.PublishTelemetry(subject, data); err != nil {
@@ -322,8 +326,12 @@ func (s *Scheduler) publishServiceStatus(deviceID string) {
 			"error":     err.Error(),
 			"timestamp": s.executor.CreateHeartbeat(s.version).Timestamp,
 		}
-		data, _ := json.Marshal(errorMsg)
-		
+		data, marshalErr := json.Marshal(errorMsg)
+		if marshalErr != nil {
+			s.logger.Error("Failed to marshal service status error message", zap.Error(marshalErr))
+			return
+		}
+
 		if err := s.nats.PublishTelemetry(subject, data); err != nil {
 			s.logger.Error("Failed to queue service status error publish", zap.Error(err))
 		}

@@ -286,11 +286,8 @@ func validate(cfg *Config) error {
 			}
 		}
 
-		// Warn about insecure_skip_verify (but allow it for development)
-		if cfg.NATS.TLS.InsecureSkipVerify {
-			// This will be logged as a warning in the agent startup
-			// We don't block it here to allow development/testing scenarios
-		}
+		// Note: InsecureSkipVerify is allowed for development/testing.
+		// A warning is logged during NATS connection setup in nats/client.go.
 	}
 
 	// Validate scripts directory if specified
