@@ -10,9 +10,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
 	"golang.org/x/sys/windows/registry"
-	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // CollectInventory gathers system inventory using only stdlib (no WMI)

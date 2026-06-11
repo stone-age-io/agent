@@ -57,11 +57,12 @@ tasks:
     enabled: true
     interval: "1m"
   
-  # System Metrics - Scrape node_exporter
+  # System Metrics - CPU, memory, disk
   system_metrics:
     enabled: true
     interval: "5m"
-    exporter_url: "http://localhost:9100/metrics"
+    source: "builtin"  # "builtin" (gopsutil, default) or "exporter" (scrape node_exporter)
+    # exporter_url: "http://localhost:9100/metrics"  # Only used when source: "exporter"
   
   # Service Check - Monitor rc.d services
   service_check:

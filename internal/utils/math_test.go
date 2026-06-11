@@ -143,7 +143,7 @@ func TestRound(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Round(tt.input)
-			
+
 			// Use a small epsilon for floating-point comparison
 			epsilon := 0.001
 			if math.Abs(got-tt.want) > epsilon {
@@ -165,7 +165,7 @@ func TestRoundPrecision(t *testing.T) {
 
 	for _, input := range tests {
 		result := Round(input)
-		
+
 		// Convert to string and check decimal places
 		// This ensures we're actually maintaining precision
 		rounded := Round(result)
@@ -185,7 +185,7 @@ func BenchmarkRound(b *testing.B) {
 		1234567.89123,
 		-45.678901,
 	}
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = Round(values[i%len(values)])

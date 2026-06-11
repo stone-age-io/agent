@@ -4,6 +4,7 @@ package tasks
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -256,7 +257,7 @@ func TestFetchLogLines(t *testing.T) {
 				return
 			}
 			if tt.wantErr && tt.errContains != "" {
-				if err == nil || !containsString(err.Error(), tt.errContains) {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("FetchLogLines() error = %v, want error containing %q", err, tt.errContains)
 				}
 			}

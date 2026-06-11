@@ -15,11 +15,11 @@ import (
 type Executor struct {
 	logger           *zap.Logger
 	commandTimeout   time.Duration
-	httpClient       *http.Client       // Cached HTTP client for metrics scraping (created once, reused)
+	httpClient       *http.Client // Cached HTTP client for metrics scraping (created once, reused)
 	stats            *ExecutorStats
-	metricsCollector MetricsCollector   // Metrics collector (builtin or exporter)
+	metricsCollector MetricsCollector // Metrics collector (builtin or exporter)
 	taskStats        *TaskStats
-	ctx              context.Context    // Context for cancellation and timeouts
+	ctx              context.Context // Context for cancellation and timeouts
 }
 
 // ExecutorStats tracks executor statistics for self-monitoring
@@ -35,13 +35,13 @@ type ExecutorStats struct {
 // TaskStats tracks scheduled task execution for monitoring
 type TaskStats struct {
 	mu sync.RWMutex
-	
+
 	// Execution timestamps
 	lastHeartbeat    time.Time
 	lastMetrics      time.Time
 	lastServiceCheck time.Time
 	lastInventory    time.Time
-	
+
 	// Execution counters
 	heartbeatCount    int64
 	metricsCount      int64
@@ -74,7 +74,7 @@ type TaskHealthMetrics struct {
 	LastMetrics      string `json:"last_metrics,omitempty"`
 	LastServiceCheck string `json:"last_service_check,omitempty"`
 	LastInventory    string `json:"last_inventory,omitempty"`
-	
+
 	HeartbeatCount    int64 `json:"heartbeat_count"`
 	MetricsCount      int64 `json:"metrics_count"`
 	MetricsFailures   int64 `json:"metrics_failures"`

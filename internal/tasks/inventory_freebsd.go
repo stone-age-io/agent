@@ -3,6 +3,7 @@
 package tasks
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os/exec"
@@ -142,8 +143,10 @@ func getMemoryInfo() (MemoryInfo, error) {
 // getDiskInfo retrieves disk information for mounted filesystems
 func getDiskInfo() ([]DiskInfo, error) {
 	// Use mount command to get mounted filesystems
-	cmd := exec.Command("mount")
-	output, err := cmd.Output()
+	// Timeout guards against stalled mounts (e.g. unresponsive NFS) hanging inventory
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "mount").Output()
 	if err != nil {
 		return nil, fmt.Errorf("mount command failed: %w", err)
 	}
@@ -172,7 +175,7 @@ func getDiskInfo() ([]DiskInfo, error) {
 			if err := syscall.Statfs(mountpoint, &stat); err == nil {
 				// FreeBSD: Bavail is int64, need to handle sign and convert properly
 				totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
-				
+
 				// Handle potential negative Bavail (shouldn't happen, but be safe)
 				var freeBytes uint64
 				if stat.Bavail >= 0 {

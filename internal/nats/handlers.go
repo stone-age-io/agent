@@ -167,13 +167,13 @@ type customExecResponse struct {
 
 // Enhanced health response structures
 type healthResponse struct {
-	Status    string                       `json:"status"` // "healthy", "degraded", "unhealthy"
-	Timestamp string                       `json:"timestamp"`
-	Agent     *tasks.AgentMetrics          `json:"agent"`
-	NATS      *NATSHealth                  `json:"nats"`
-	Tasks     *tasks.TaskHealthMetrics     `json:"tasks"`
-	Config    *ConfigInfo                  `json:"config"`
-	OS        *tasks.OSInfo                `json:"os"` // Operating system information
+	Status    string                   `json:"status"` // "healthy", "degraded", "unhealthy"
+	Timestamp string                   `json:"timestamp"`
+	Agent     *tasks.AgentMetrics      `json:"agent"`
+	NATS      *NATSHealth              `json:"nats"`
+	Tasks     *tasks.TaskHealthMetrics `json:"tasks"`
+	Config    *ConfigInfo              `json:"config"`
+	OS        *tasks.OSInfo            `json:"os"` // Operating system information
 }
 
 type NATSHealth struct {
@@ -402,7 +402,7 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 	// This prevents false positives like "[ERROR] message" being treated as JSON
 	var outputData json.RawMessage
 	trimmedOutput := strings.TrimSpace(output)
-	
+
 	// Try to parse as JSON
 	var testJSON interface{}
 	if len(trimmedOutput) > 0 && json.Unmarshal([]byte(trimmedOutput), &testJSON) == nil {
@@ -492,7 +492,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 // getNATSHealth collects NATS connection health information
 func (h *CommandHandlers) getNATSHealth() *NATSHealth {
 	stats := h.natsClient.Stats()
-	
+
 	health := &NATSHealth{
 		Connected:  h.natsClient.IsConnected(),
 		Reconnects: uint64(stats.Reconnects),
@@ -514,7 +514,7 @@ func (h *CommandHandlers) getNATSHealth() *NATSHealth {
 // getConfigInfo returns configuration summary
 func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 	enabledTasks := []string{}
-	
+
 	if h.config.Tasks.Heartbeat.Enabled {
 		enabledTasks = append(enabledTasks, "heartbeat")
 	}

@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -128,7 +129,7 @@ func TestIsServiceAllowed(t *testing.T) {
 func TestControlService(t *testing.T) {
 	// Note: These tests validate the whitelist logic only
 	// Actual service control tests would require Windows services and are integration tests
-	
+
 	// Create executor with builtin metrics source for tests
 	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 	if err != nil {
@@ -180,14 +181,14 @@ func TestControlService(t *testing.T) {
 			// Note: This will fail at the Windows service API stage if allowed
 			// We're testing whitelist and action validation here
 			_, err := executor.ControlService(tt.serviceName, tt.action, tt.allowedServices)
-			
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ControlService() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			
+
 			if tt.wantErr && tt.errContains != "" {
-				if err == nil || indexOf(err.Error(), tt.errContains) < 0 {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ControlService() error = %v, want error containing %q", err, tt.errContains)
 				}
 			}

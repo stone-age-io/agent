@@ -1,5 +1,12 @@
 package tasks
 
+import "time"
+
+// serviceCommandTimeout bounds external service-control commands (systemctl,
+// rc.d) so a hung service manager cannot block the NATS command handler
+// indefinitely. Matches the 30s wait used by the Windows SCM implementation.
+const serviceCommandTimeout = 30 * time.Second
+
 // ServiceStatus represents the status of a system service
 // This structure is shared across all platforms (Windows, Linux, FreeBSD)
 type ServiceStatus struct {

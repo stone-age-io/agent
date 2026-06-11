@@ -4,6 +4,7 @@ package tasks
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -31,7 +32,9 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 	}
 
 	// Execute service command
-	cmd := exec.Command("service", name, action)
+	ctx, cancel := context.WithTimeout(context.Background(), serviceCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "service", name, action)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -73,7 +76,9 @@ func (e *Executor) GetServiceStatuses(services []string) ([]ServiceStatus, error
 // getServiceStatus queries rc.d for service status
 func (e *Executor) getServiceStatus(name string) (*ServiceStatus, error) {
 	// Use 'service <name> status' for status check
-	cmd := exec.Command("service", name, "status")
+	ctx, cancel := context.WithTimeout(context.Background(), serviceCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "service", name, "status")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

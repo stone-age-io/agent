@@ -289,7 +289,6 @@ make test
 
 - **Issues**: [GitHub Issues](https://github.com/stone-age-io/agent/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/stone-age-io/agent/discussions)
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 

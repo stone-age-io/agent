@@ -631,9 +631,6 @@ grep exec /var/log/agent/agent.log
 ## Next Steps
 
 - **[Architecture](architecture.md)** - Understand how scripts fit in
-- **[Configuration](configuration.md)** - Configure script execution
-- **[Security](security.md)** - Harden your scripts
-- **[Troubleshooting](troubleshooting.md)** - Debug script issues
 
 ---
 

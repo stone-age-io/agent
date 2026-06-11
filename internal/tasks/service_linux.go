@@ -4,6 +4,7 @@ package tasks
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -23,17 +24,16 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 		zap.String("service", name),
 		zap.String("action", action))
 
-	var cmd *exec.Cmd
 	switch action {
-	case "start":
-		cmd = exec.Command("systemctl", "start", name)
-	case "stop":
-		cmd = exec.Command("systemctl", "stop", name)
-	case "restart":
-		cmd = exec.Command("systemctl", "restart", name)
+	case "start", "stop", "restart":
+		// Valid actions
 	default:
 		return "", fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), serviceCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", action, name)
 
 	// Execute systemctl command
 	var stdout, stderr bytes.Buffer
@@ -90,7 +90,9 @@ func (e *Executor) GetServiceStatuses(services []string) ([]ServiceStatus, error
 // getServiceStatus queries systemd for service status
 func (e *Executor) getServiceStatus(name string) (*ServiceStatus, error) {
 	// Use systemctl show for machine-readable output
-	cmd := exec.Command("systemctl", "show", name, "--property=ActiveState,SubState,LoadState")
+	ctx, cancel := context.WithTimeout(context.Background(), serviceCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", "show", name, "--property=ActiveState,SubState,LoadState")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

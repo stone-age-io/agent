@@ -381,7 +381,7 @@ func validateSubjectPrefix(prefix string) error {
 
 	// Split into tokens by dots
 	tokens := regexp.MustCompile(`\.`).Split(prefix, -1)
-	
+
 	// Validate each token
 	validToken := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	for i, token := range tokens {

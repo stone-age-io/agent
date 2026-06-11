@@ -4,6 +4,7 @@ package tasks
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -257,7 +258,7 @@ func TestNormalizeWhitespace(t *testing.T) {
 func TestExecuteCommand(t *testing.T) {
 	// Note: These tests validate the whitelist logic, not actual PowerShell execution
 	// Actual PowerShell execution tests would require Windows and are integration tests
-	
+
 	// Create executor with builtin metrics source for tests
 	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 	if err != nil {
@@ -307,14 +308,14 @@ func TestExecuteCommand(t *testing.T) {
 			// Note: This will fail at the PowerShell execution stage if allowed
 			// We're just testing whitelist validation here
 			_, _, err := executor.ExecuteCommand(tt.command, tt.allowedCommands, tt.scriptsDir, 0)
-			
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ExecuteCommand() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			
+
 			if tt.wantErr && tt.errContains != "" {
-				if err == nil || indexOf(err.Error(), tt.errContains) < 0 {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ExecuteCommand() error = %v, want error containing %q", err, tt.errContains)
 				}
 			}

@@ -54,13 +54,13 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TLS config: %w", err)
 		}
-		
+
 		opts = append(opts, nats.Secure(tlsConfig))
 		logger.Info("TLS enabled for NATS connection",
 			zap.Bool("client_cert", cfg.TLS.CertFile != ""),
 			zap.Bool("ca_cert", cfg.TLS.CAFile != ""),
 			zap.Bool("skip_verify", cfg.TLS.InsecureSkipVerify))
-		
+
 		// Warn if insecure skip verify is enabled
 		if cfg.TLS.InsecureSkipVerify {
 			logger.Warn("TLS certificate verification is DISABLED - this is insecure and should only be used in development")
@@ -140,7 +140,7 @@ func createTLSConfig(cfg *config.TLSConfig, logger *zap.Logger) (*tls.Config, er
 	// This is used to verify the server's certificate
 	if cfg.CAFile != "" {
 		logger.Info("Loading CA certificate", zap.String("file", cfg.CAFile))
-		
+
 		caCert, err := os.ReadFile(cfg.CAFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
@@ -260,7 +260,7 @@ func (c *Client) Drain(ctx context.Context) error {
 	c.logger.Info("Draining NATS connection")
 
 	// Check if connection is already closed
-	if !c.conn.IsConnected() && c.conn.IsClosed() {
+	if c.conn.IsClosed() {
 		c.logger.Info("Connection already closed")
 		return nil
 	}

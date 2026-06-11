@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
-	"go.uber.org/zap"
 	"github.com/stone-age-io/agent/internal/config"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
 	"github.com/stone-age-io/agent/internal/tasks"
+	"go.uber.org/zap"
 )
 
 // Scheduler manages periodic task execution
@@ -130,7 +130,7 @@ func (s *Scheduler) scheduleTasks() error {
 				s.logger.Info("Retrying baseline in 2 seconds...",
 					zap.Int("attempt", attempt),
 					zap.Int("max", maxRetries))
-				
+
 				// ADDED: Use context-aware sleep
 				select {
 				case <-s.ctx.Done():
@@ -287,7 +287,7 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 			s.logger.Error("Failed to marshal metrics error message", zap.Error(marshalErr))
 			return
 		}
-		
+
 		// Even errors are published async - fire and forget
 		if err := s.nats.PublishTelemetry(subject, data); err != nil {
 			s.logger.Error("Failed to queue metrics error publish", zap.Error(err))

@@ -557,10 +557,7 @@ Route messages based on content:
 
 ## Related Documentation
 
-- **[Configuration Reference](configuration.md)** - All configuration options
 - **[Script Development](script-development.md)** - Write custom scripts
-- **[Security Best Practices](security.md)** - Hardening guide
-- **[Troubleshooting](troubleshooting.md)** - Common issues
 
 ---
 

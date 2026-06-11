@@ -640,8 +640,6 @@ sudo userdel node_exporter
 
 - **[Architecture Overview](architecture.md)** - Understand the system design
 - **[Script Development Guide](script-development.md)** - Write custom scripts
-- **[Configuration Reference](configuration.md)** - All config options
-- **[Troubleshooting](troubleshooting.md)** - Common issues
 
 ---
 

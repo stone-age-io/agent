@@ -20,11 +20,11 @@ nats:
   auth:
     # Option 1: Credentials file (RECOMMENDED for production)
     type: "creds"
-    creds_file: "C:\\ProgramData\\WinAgent\\device.creds"
+    creds_file: "C:\\ProgramData\\Agent\\device.creds"
 
     # Option 2: PocketBase bootstrap (auto-fetch .creds on first start)
     # type: "pocketbase"
-    # creds_file: "C:\\ProgramData\\WinAgent\\device.creds"
+    # creds_file: "C:\\ProgramData\\Agent\\device.creds"
     # pocketbase:
     #   url: "https://pb.example.com"
     #   auth_collection: "_superusers"        # default: _superusers
@@ -50,12 +50,12 @@ nats:
     
     # Client certificate and key for mutual TLS authentication (optional)
     # Required if server requires client certificates
-    cert_file: "C:\\ProgramData\\WinAgent\\client-cert.pem"
-    key_file: "C:\\ProgramData\\WinAgent\\client-key.pem"
+    cert_file: "C:\\ProgramData\\Agent\\client-cert.pem"
+    key_file: "C:\\ProgramData\\Agent\\client-key.pem"
     
     # CA certificate for server verification (optional)
     # If not provided, system CA pool is used
-    ca_file: "C:\\ProgramData\\WinAgent\\ca-cert.pem"
+    ca_file: "C:\\ProgramData\\Agent\\ca-cert.pem"
     
     # Skip server certificate verification (NOT RECOMMENDED for production)
     # Only use this for development/testing with self-signed certificates
@@ -73,11 +73,12 @@ tasks:
     enabled: true
     interval: "1m"  # Every 1 minute
   
-  # System Metrics - Scrape windows_exporter
+  # System Metrics - CPU, memory, disk
   system_metrics:
     enabled: true
     interval: "5m"  # Every 5 minutes
-    exporter_url: "http://localhost:9182/metrics"
+    source: "builtin"  # "builtin" (gopsutil, default) or "exporter" (scrape windows_exporter)
+    # exporter_url: "http://localhost:9182/metrics"  # Only used when source: "exporter"
   
   # Service Check - Monitor Windows services
   service_check:
@@ -97,10 +98,10 @@ commands:
   # PowerShell Scripts Directory (optional)
   # If specified, any .ps1 file in this directory can be executed by filename
   # Example: Control plane sends command "Get-EventLog.ps1", agent executes
-  #          C:\ProgramData\WinAgent\Scripts\Get-EventLog.ps1
+  #          C:\ProgramData\Agent\Scripts\Get-EventLog.ps1
   # Benefits: Scripts are version controlled, testable, and self-documenting
   # Security: Only .ps1 files in this exact directory are allowed (no subdirectories)
-  scripts_directory: "C:\\ProgramData\\WinAgent\\Scripts"
+  scripts_directory: "C:\\ProgramData\\Agent\\Scripts"
   
   # Whitelist of services that can be controlled
   allowed_services:
@@ -126,6 +127,6 @@ commands:
 # Logging
 logging:
   level: "info"  # debug, info, warn, error
-  file: "C:\\ProgramData\\WinAgent\\agent.log"
+  file: "C:\\ProgramData\\Agent\\agent.log"
   max_size_mb: 100
   max_backups: 3

@@ -182,7 +182,7 @@ func initLogger(cfg config.LoggingConfig) (*zap.Logger, error) {
 	// Setup log rotation with lumberjack
 	fileWriter := &lumberjack.Logger{
 		Filename:   cfg.File,
-		MaxSize:    cfg.MaxSizeMB,  // megabytes
+		MaxSize:    cfg.MaxSizeMB, // megabytes
 		MaxBackups: cfg.MaxBackups,
 		MaxAge:     28, // days
 		Compress:   true,

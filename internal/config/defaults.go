@@ -51,20 +51,3 @@ func GetPlatformDefaults() PlatformDefaults {
 func GetDefaultConfigPath() string {
 	return GetPlatformDefaults().ConfigPath
 }
-
-// UpdateConfigDefaults updates viper defaults with platform-specific values
-// This should be called from setDefaults() in config.go
-func UpdateConfigDefaults(v interface{}) {
-	type viper interface {
-		SetDefault(key string, value interface{})
-	}
-	
-	if viperInstance, ok := v.(viper); ok {
-		defaults := GetPlatformDefaults()
-		
-		// Update platform-specific defaults
-		viperInstance.SetDefault("tasks.system_metrics.exporter_url", defaults.ExporterURL)
-		viperInstance.SetDefault("commands.scripts_directory", defaults.ScriptsDirectory)
-		viperInstance.SetDefault("logging.file", defaults.LogFile)
-	}
-}
