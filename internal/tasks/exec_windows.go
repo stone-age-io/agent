@@ -3,7 +3,6 @@
 package tasks
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -141,13 +140,6 @@ func resolveScriptPath(command string, scriptsDir string) (string, error) {
 	return command, nil
 }
 
-// normalizeWhitespace normalizes whitespace in a command for comparison
-func normalizeWhitespace(s string) string {
-	// Replace multiple spaces with single space and trim
-	fields := strings.Fields(s)
-	return strings.Join(fields, " ")
-}
-
 // executePowerShell executes a PowerShell command and returns output and exit code
 // MODIFIED: Now accepts context for cancellation
 func executePowerShell(ctx context.Context, command string, timeout time.Duration) (string, int, error) {
@@ -163,14 +155,14 @@ func executePowerShell(ctx context.Context, command string, timeout time.Duratio
 		"-ExecutionPolicy", "Bypass",
 		"-Command", command)
 
-	// Capture stdout and stderr
-	var stdout, stderr bytes.Buffer
+	// Capture stdout and stderr (capped to avoid unbounded memory use)
+	var stdout, stderr limitedBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	// Execute command
 	err := cmd.Run()
-	
+
 	// Handle context cancellation
 	if cmdCtx.Err() == context.DeadlineExceeded {
 		return "", -1, fmt.Errorf("command execution timeout (%v)", timeout)
@@ -191,13 +183,7 @@ func executePowerShell(ctx context.Context, command string, timeout time.Duratio
 	}
 
 	// Combine stdout and stderr
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" {
-			output += "\n"
-		}
-		output += "STDERR:\n" + stderr.String()
-	}
+	output := combineOutput(&stdout, &stderr)
 
 	// Return error if exit code is non-zero
 	if exitCode != 0 {

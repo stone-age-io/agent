@@ -3,7 +3,6 @@
 package tasks
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -122,12 +121,6 @@ func resolveScriptPath(command string, scriptsDir string) (string, error) {
 	return command, nil
 }
 
-// normalizeWhitespace normalizes whitespace for comparison
-func normalizeWhitespace(s string) string {
-	fields := strings.Fields(s)
-	return strings.Join(fields, " ")
-}
-
 // executeBash executes a bash command and returns output and exit code
 // MODIFIED: Now accepts context for cancellation
 func executeBash(ctx context.Context, command string, timeout time.Duration) (string, int, error) {
@@ -138,8 +131,8 @@ func executeBash(ctx context.Context, command string, timeout time.Duration) (st
 	// MODIFIED: Use CommandContext instead of Command
 	cmd := exec.CommandContext(cmdCtx, "/bin/bash", "-c", command)
 
-	// Capture stdout and stderr
-	var stdout, stderr bytes.Buffer
+	// Capture stdout and stderr (capped to avoid unbounded memory use)
+	var stdout, stderr limitedBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -165,13 +158,7 @@ func executeBash(ctx context.Context, command string, timeout time.Duration) (st
 	}
 
 	// Combine stdout and stderr
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" {
-			output += "\n"
-		}
-		output += "STDERR:\n" + stderr.String()
-	}
+	output := combineOutput(&stdout, &stderr)
 
 	// Return error if exit code is non-zero
 	if exitCode != 0 {
