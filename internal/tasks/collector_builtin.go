@@ -52,7 +52,7 @@ func (c *BuiltinCollector) Collect(ctx context.Context) (*SystemMetrics, error) 
 	c.resetCacheIfStale()
 
 	metrics := &SystemMetrics{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		TS: utils.NowRFC3339(),
 	}
 
 	// Collect CPU

@@ -101,7 +101,7 @@ func (c *ExporterCollector) Collect(ctx context.Context) (*SystemMetrics, error)
 		return nil, fmt.Errorf("failed to parse metrics: %w", err)
 	}
 
-	metrics.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	metrics.TS = utils.NowRFC3339()
 
 	c.logger.Debug("Metrics scrape completed successfully",
 		zap.Float64("cpu_percent", metrics.CPUUsagePercent),

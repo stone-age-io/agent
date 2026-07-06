@@ -132,7 +132,7 @@ Understanding the design and components of the agent platform.
    **Commands** (Core NATS Request/Reply):
    ```
    Request:  agents.device-123.cmd.ping
-   Response: {"status":"pong","timestamp":"..."}
+   Response: {"status":"pong","ts":"..."}
    ```
    - Synchronous
    - Ephemeral (no storage)
@@ -141,16 +141,29 @@ Understanding the design and components of the agent platform.
    **Telemetry** (JetStream Publish):
    ```
    Publish: agents.device-123.telemetry.system
-   Payload: {"cpu_percent":15.2,"memory_free_gb":8.5,...}
+   Payload: {"code":"device-123","location":"hq","cpu_usage_percent":15.2,"memory_free_gb":8.5,...,"ts":"..."}
    ```
    - Asynchronous
    - Durable (stored in JetStream)
    - Fire-and-forget
+   - Self-describing: every payload carries `code`, `location`, and `ts`
+
+   **Heartbeat** (Core NATS Publish):
+   ```
+   Publish: agents.device-123.heartbeat
+   Payload: {"code":"device-123","location":"hq","ts":"..."}
+   ```
+   - Last-write-wins liveness beacon
+   - Deliberately outside JetStream: a missed beat is the signal, so
+     durability/replay of stale beats would be harmful
+   - The JetStream stream must bind `agents.*.telemetry.>` (not `agents.>`)
+     so heartbeats stay out of the stream by subject construction
 
 3. **Subject Structure**
    ```
-   agents.<device-id>.cmd.<command>
-   agents.<device-id>.telemetry.<type>
+   agents.<code>.cmd.<command>
+   agents.<code>.telemetry.<type>
+   agents.<code>.heartbeat
    ```
 
 **Technology:**

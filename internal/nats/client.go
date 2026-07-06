@@ -174,8 +174,27 @@ func createTLSConfig(cfg *config.TLSConfig, logger *zap.Logger) (*tls.Config, er
 	return tlsConfig, nil
 }
 
+// Publish sends a message over core NATS (no JetStream, fire-and-forget).
+// This is used for heartbeats: a missed beat IS the signal consumers care
+// about, so durability/replay would be actively harmful — a reconnecting
+// agent should not deliver a backlog of stale liveness beacons. This matches
+// the heartbeat semantics of the other stone-age.io applications.
+func (c *Client) Publish(subject string, data []byte) error {
+	if err := c.conn.Publish(subject, data); err != nil {
+		c.logger.Warn("Failed to publish message",
+			zap.String("subject", subject),
+			zap.Error(err))
+		return fmt.Errorf("failed to publish to %s: %w", subject, err)
+	}
+
+	c.logger.Debug("Published message",
+		zap.String("subject", subject),
+		zap.Int("bytes", len(data)))
+	return nil
+}
+
 // PublishTelemetry publishes a message to JetStream asynchronously (fire-and-forget)
-// This is used for heartbeats, metrics, service status, and inventory
+// This is used for metrics, service status, and inventory
 // Uses PublishAsync for better performance and built-in retry handling
 func (c *Client) PublishTelemetry(subject string, data []byte) error {
 	// PublishAsync returns a PubAckFuture immediately (non-blocking)

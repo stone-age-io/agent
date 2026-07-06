@@ -14,6 +14,15 @@ type ServiceStatus struct {
 	Status string `json:"status"` // One of the ServiceStatus* constants below
 }
 
+// ServiceStatusMessage is the telemetry payload for a service check.
+// Code/Location are stamped by the scheduler before publishing.
+type ServiceStatusMessage struct {
+	Code     string          `json:"code"`
+	Location string          `json:"location"`
+	Services []ServiceStatus `json:"services"`
+	TS       string          `json:"ts"`
+}
+
 // Service status constants - platform-agnostic
 // All platform-specific implementations should map their native statuses to these constants
 const (

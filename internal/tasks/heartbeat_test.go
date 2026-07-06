@@ -10,35 +10,48 @@ import (
 
 // TestCreateHeartbeat tests heartbeat message creation
 func TestCreateHeartbeat(t *testing.T) {
-	// FIXED: Use zap.NewNop() instead of nil to avoid panic
 	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	version := "1.0.0"
 
-	// Create heartbeat
-	hb := executor.CreateHeartbeat(version)
+	hb := executor.CreateHeartbeat("server-01", "hq")
 
-	// Verify version is set
-	if hb.Version != version {
-		t.Errorf("CreateHeartbeat() version = %v, want %v", hb.Version, version)
+	if hb.Code != "server-01" {
+		t.Errorf("CreateHeartbeat() code = %v, want server-01", hb.Code)
+	}
+	if hb.Location != "hq" {
+		t.Errorf("CreateHeartbeat() location = %v, want hq", hb.Location)
 	}
 
 	// Verify timestamp is set and recent
-	if hb.Timestamp == "" {
-		t.Error("CreateHeartbeat() timestamp is empty")
+	if hb.TS == "" {
+		t.Error("CreateHeartbeat() ts is empty")
 	}
 
 	// Parse timestamp and verify it's recent (within last second)
-	ts, err := time.Parse(time.RFC3339, hb.Timestamp)
+	ts, err := time.Parse(time.RFC3339, hb.TS)
 	if err != nil {
-		t.Errorf("CreateHeartbeat() timestamp parse error: %v", err)
+		t.Errorf("CreateHeartbeat() ts parse error: %v", err)
 	}
 
 	timeDiff := time.Since(ts)
 	if timeDiff > time.Second {
-		t.Errorf("CreateHeartbeat() timestamp too old: %v", timeDiff)
+		t.Errorf("CreateHeartbeat() ts too old: %v", timeDiff)
 	}
 	if timeDiff < 0 {
-		t.Errorf("CreateHeartbeat() timestamp in future: %v", timeDiff)
+		t.Errorf("CreateHeartbeat() ts in future: %v", timeDiff)
+	}
+}
+
+// TestCreateHeartbeatEmptyLocation tests that an unset location is carried as-is
+func TestCreateHeartbeatEmptyLocation(t *testing.T) {
+	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+
+	hb := executor.CreateHeartbeat("server-01", "")
+
+	if hb.Location != "" {
+		t.Errorf("CreateHeartbeat() location = %v, want empty", hb.Location)
+	}
+	if hb.Code != "server-01" {
+		t.Errorf("CreateHeartbeat() code = %v, want server-01", hb.Code)
 	}
 }
 
@@ -46,44 +59,44 @@ func TestCreateHeartbeat(t *testing.T) {
 func TestCreateHeartbeatFormat(t *testing.T) {
 	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
 
-	hb := executor.CreateHeartbeat("1.0.0")
+	hb := executor.CreateHeartbeat("server-01", "hq")
 
 	// Verify it's valid RFC3339
-	_, err := time.Parse(time.RFC3339, hb.Timestamp)
+	_, err := time.Parse(time.RFC3339, hb.TS)
 	if err != nil {
-		t.Errorf("CreateHeartbeat() timestamp not RFC3339 format: %v", err)
+		t.Errorf("CreateHeartbeat() ts not RFC3339 format: %v", err)
 	}
 
 	// Verify UTC timezone
-	ts, _ := time.Parse(time.RFC3339, hb.Timestamp)
+	ts, _ := time.Parse(time.RFC3339, hb.TS)
 	if ts.Location() != time.UTC {
-		t.Errorf("CreateHeartbeat() timestamp not in UTC: %v", ts.Location())
+		t.Errorf("CreateHeartbeat() ts not in UTC: %v", ts.Location())
 	}
 }
 
 // TestCreateHeartbeatConsistency tests that multiple heartbeats have consistent format
 func TestCreateHeartbeatConsistency(t *testing.T) {
 	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	version := "1.0.0"
 
 	// Create multiple heartbeats
-	hb1 := executor.CreateHeartbeat(version)
+	hb1 := executor.CreateHeartbeat("server-01", "hq")
 	time.Sleep(1 * time.Second)
-	hb2 := executor.CreateHeartbeat(version)
+	hb2 := executor.CreateHeartbeat("server-01", "hq")
 
-	// Both should have same version
-	if hb1.Version != hb2.Version {
-		t.Errorf("Heartbeats have inconsistent versions: %v vs %v", hb1.Version, hb2.Version)
+	// Both should carry the same identity
+	if hb1.Code != hb2.Code || hb1.Location != hb2.Location {
+		t.Errorf("Heartbeats have inconsistent identity: %v/%v vs %v/%v",
+			hb1.Code, hb1.Location, hb2.Code, hb2.Location)
 	}
 
 	// Timestamps should be different (time has passed)
-	if hb1.Timestamp == hb2.Timestamp {
+	if hb1.TS == hb2.TS {
 		t.Error("Heartbeat timestamps should be different")
 	}
 
 	// Both timestamps should be valid
-	_, err1 := time.Parse(time.RFC3339, hb1.Timestamp)
-	_, err2 := time.Parse(time.RFC3339, hb2.Timestamp)
+	_, err1 := time.Parse(time.RFC3339, hb1.TS)
+	_, err2 := time.Parse(time.RFC3339, hb2.TS)
 	if err1 != nil || err2 != nil {
 		t.Errorf("Invalid timestamps: %v, %v", err1, err2)
 	}

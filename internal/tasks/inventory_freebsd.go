@@ -21,8 +21,8 @@ import (
 // CollectInventory gathers system inventory using sysctl and stdlib
 func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 	inv := &Inventory{
-		Agent:     AgentInfo{Version: version},
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Agent: AgentInfo{Version: version},
+		TS:    utils.NowRFC3339(),
 	}
 
 	// Collect OS information

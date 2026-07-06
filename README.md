@@ -41,7 +41,8 @@ Agent is a purpose-built system management tool that provides remote management 
 - **Health Monitoring**: Agent self-diagnostics
 
 ### Communication
-- **Telemetry Publishing**: JetStream for durable metrics
+- **Telemetry Publishing**: JetStream for durable metrics, service status, and inventory
+- **Heartbeats**: Core NATS liveness beacons (last-write-wins, no replay)
 - **Command Handling**: Core NATS request/reply
 - **Multi-Tenant**: NATS account isolation
 - **TLS Support**: Encrypted communication
@@ -174,7 +175,8 @@ sudo service agent start
 
 ```yaml
 # Agent Identity
-device_id: "server-prod-01"
+code: "server-prod-01"    # Identity token used in NATS subjects (legacy key: device_id)
+location: "hq"            # Optional deployment location, carried in telemetry payloads
 
 # NATS Connection
 nats:

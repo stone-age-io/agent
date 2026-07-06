@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// TestValidateDeviceID tests device ID validation
-func TestValidateDeviceID(t *testing.T) {
+// TestValidateCode tests agent code validation
+func TestValidateCode(t *testing.T) {
 	tests := []struct {
 		name     string
 		deviceID string
@@ -47,7 +47,7 @@ func TestValidateDeviceID(t *testing.T) {
 			name:     "empty",
 			deviceID: "",
 			wantErr:  true,
-			errText:  "device_id is required",
+			errText:  "code is required",
 		},
 		{
 			name:     "with spaces",
@@ -78,7 +78,7 @@ func TestValidateDeviceID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      tt.deviceID,
+				Code:          tt.deviceID,
 				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -273,7 +273,7 @@ func TestValidateSubjectPrefixInConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      "test-device",
+				Code:          "test-device",
 				SubjectPrefix: tt.subjectPrefix,
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -384,7 +384,7 @@ func TestValidateNATSAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      "test-device",
+				Code:          "test-device",
 				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -536,7 +536,7 @@ func TestValidateTLS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      "test-device",
+				Code:          "test-device",
 				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -624,7 +624,7 @@ func TestValidateTaskIntervals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      "test-device",
+				Code:          "test-device",
 				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -701,7 +701,7 @@ func TestValidateCommandTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				DeviceID:      "test-device",
+				Code:          "test-device",
 				SubjectPrefix: "agents",
 				NATS: NATSConfig{
 					URLs: []string{"nats://localhost:4222"},
@@ -733,6 +733,152 @@ func TestValidateCommandTimeout(t *testing.T) {
 				if indexOf(err.Error(), tt.errText) < 0 {
 					t.Errorf("validate() error = %v, want error containing %q", err, tt.errText)
 				}
+			}
+		})
+	}
+}
+
+// TestValidateLocation tests location validation (optional, single NATS token)
+func TestValidateLocation(t *testing.T) {
+	tests := []struct {
+		name     string
+		location string
+		wantErr  bool
+		errText  string
+	}{
+		{
+			name:     "empty location is allowed",
+			location: "",
+			wantErr:  false,
+		},
+		{
+			name:     "simple location",
+			location: "hq",
+			wantErr:  false,
+		},
+		{
+			name:     "location with dash and underscore",
+			location: "us-east_1",
+			wantErr:  false,
+		},
+		{
+			name:     "location with dots",
+			location: "hq.floor2",
+			wantErr:  true,
+			errText:  "location must contain only alphanumeric",
+		},
+		{
+			name:     "location with spaces",
+			location: "head quarters",
+			wantErr:  true,
+			errText:  "location must contain only alphanumeric",
+		},
+		{
+			name:     "location with wildcard",
+			location: "*",
+			wantErr:  true,
+			errText:  "location must contain only alphanumeric",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Code:          "test-device",
+				Location:      tt.location,
+				SubjectPrefix: "agents",
+				NATS: NATSConfig{
+					URLs: []string{"nats://localhost:4222"},
+					Auth: AuthConfig{Type: "none"},
+				},
+				Tasks: TasksConfig{
+					Heartbeat:     HeartbeatConfig{Enabled: true, Interval: 1 * time.Minute},
+					SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute},
+					ServiceCheck:  ServiceCheckConfig{Enabled: false},
+					Inventory:     InventoryConfig{Enabled: true, Interval: 24 * time.Hour},
+				},
+				Commands: CommandsConfig{
+					Timeout: 30 * time.Second,
+				},
+				Logging: LoggingConfig{
+					Level:      "info",
+					File:       "test.log",
+					MaxSizeMB:  100,
+					MaxBackups: 3,
+				},
+			}
+
+			err := validate(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errText != "" && err != nil {
+				if indexOf(err.Error(), tt.errText) < 0 {
+					t.Errorf("validate() error = %v, want error containing %q", err, tt.errText)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadLegacyDeviceID tests that the legacy device_id config key is
+// accepted as a fallback for code
+func TestLoadLegacyDeviceID(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantCode string
+	}{
+		{
+			name: "device_id falls back to code",
+			yaml: `
+device_id: "legacy-device"
+`,
+			wantCode: "legacy-device",
+		},
+		{
+			name: "code takes precedence over device_id",
+			yaml: `
+code: "new-code"
+device_id: "legacy-device"
+`,
+			wantCode: "new-code",
+		},
+		{
+			name: "code alone",
+			yaml: `
+code: "new-code"
+`,
+			wantCode: "new-code",
+		},
+	}
+
+	base := `
+nats:
+  urls: ["nats://localhost:4222"]
+  auth:
+    type: "none"
+tasks:
+  service_check:
+    enabled: false
+commands:
+  scripts_directory: ""
+`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml+base), 0644); err != nil {
+				t.Fatalf("failed to write config: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Code != tt.wantCode {
+				t.Errorf("Load() code = %q, want %q", cfg.Code, tt.wantCode)
 			}
 		})
 	}

@@ -7,17 +7,23 @@ import (
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
+
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // Maximum age for metrics cache before reset
 const maxMetricsCacheAge = 10 * time.Minute
 
-// SystemMetrics represents system metrics collected from various sources
+// SystemMetrics represents system metrics collected from various sources.
+// Code/Location are stamped by the scheduler before publishing so the
+// message is self-describing for any direct subscriber.
 type SystemMetrics struct {
+	Code            string        `json:"code"`
+	Location        string        `json:"location"`
 	CPUUsagePercent float64       `json:"cpu_usage_percent"`
 	MemoryFreeGB    float64       `json:"memory_free_gb"`
 	Disks           []DiskMetrics `json:"disks"` // All drives detected on system
-	Timestamp       string        `json:"timestamp"`
+	TS              string        `json:"ts"`
 }
 
 // DiskMetrics represents metrics for a single disk drive
@@ -30,19 +36,23 @@ type DiskMetrics struct {
 	WriteBytesPerSec float64 `json:"write_bytes_per_sec"` // Write rate (requires previous measurement)
 }
 
-// MetricsError represents an error that occurred during metrics collection
-type MetricsError struct {
-	Status    string `json:"status"`
-	Error     string `json:"error"`
-	Timestamp string `json:"timestamp"`
+// TelemetryError is the error message published on a telemetry subject when
+// collection fails (metrics scrape, service check). Code/Location are stamped
+// by the scheduler before publishing.
+type TelemetryError struct {
+	Code     string `json:"code"`
+	Location string `json:"location"`
+	Status   string `json:"status"`
+	Error    string `json:"error"`
+	TS       string `json:"ts"`
 }
 
-// CreateMetricsError creates an error message for metrics failures
-func CreateMetricsError(err error) *MetricsError {
-	return &MetricsError{
-		Status:    "error",
-		Error:     err.Error(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+// CreateTelemetryError creates an error message for telemetry failures
+func CreateTelemetryError(err error) *TelemetryError {
+	return &TelemetryError{
+		Status: "error",
+		Error:  err.Error(),
+		TS:     utils.NowRFC3339(),
 	}
 }
 

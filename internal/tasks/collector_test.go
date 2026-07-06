@@ -38,8 +38,8 @@ func TestBuiltinCollector_Collect(t *testing.T) {
 	}
 
 	// Timestamp should be set
-	if metrics1.Timestamp == "" {
-		t.Error("Timestamp not set")
+	if metrics1.TS == "" {
+		t.Error("TS not set")
 	}
 
 	// Wait a bit for CPU delta

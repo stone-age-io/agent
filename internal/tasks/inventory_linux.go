@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
@@ -19,8 +18,8 @@ import (
 // CollectInventory gathers system inventory using stdlib
 func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 	inv := &Inventory{
-		Agent:     AgentInfo{Version: version},
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Agent: AgentInfo{Version: version},
+		TS:    utils.NowRFC3339(),
 	}
 
 	// Collect OS information

@@ -43,9 +43,10 @@ func New(configPath string, version string) (*Agent, error) {
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
-	logger.Info("Starting win-agent",
+	logger.Info("Starting agent",
 		zap.String("version", version),
-		zap.String("device_id", cfg.DeviceID))
+		zap.String("code", cfg.Code),
+		zap.String("location", cfg.Location))
 
 	// Bootstrap NATS credentials from PocketBase if configured
 	if cfg.NATS.Auth.Type == "pocketbase" {
@@ -118,7 +119,7 @@ func (a *Agent) Run() error {
 	a.scheduler.Start()
 
 	a.logger.Info("Agent running",
-		zap.String("device_id", a.config.DeviceID),
+		zap.String("code", a.config.Code),
 		zap.String("version", a.version))
 
 	// Wait for shutdown signal

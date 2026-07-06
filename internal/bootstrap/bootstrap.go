@@ -55,7 +55,7 @@ func FetchCredentials(cfg *config.Config, logger *zap.Logger) error {
 	logger.Info("Authenticated with PocketBase")
 
 	// Step 2: Fetch the credentials record
-	credsContent, err := fetchCredsRecord(client, pb.URL, token, pb.Collection, pb.DeviceIDField, cfg.DeviceID, pb.CredsField)
+	credsContent, err := fetchCredsRecord(client, pb.URL, token, pb.Collection, pb.DeviceIDField, cfg.Code, pb.CredsField)
 	if err != nil {
 		return fmt.Errorf("bootstrap: failed to fetch credentials: %w", err)
 	}

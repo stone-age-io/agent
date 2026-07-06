@@ -1,15 +1,18 @@
 package tasks
 
-// Inventory represents a complete system inventory snapshot
-// This structure is shared across all platforms
+// Inventory represents a complete system inventory snapshot.
+// This structure is shared across all platforms. Code/Location are stamped
+// by the scheduler before publishing so the message is self-describing.
 type Inventory struct {
-	Agent     AgentInfo   `json:"agent"`
-	OS        OSInfo      `json:"os"`
-	CPU       CPUInfo     `json:"cpu"`
-	Memory    MemoryInfo  `json:"memory"`
-	Disks     []DiskInfo  `json:"disks"`
-	Network   NetworkInfo `json:"network"`
-	Timestamp string      `json:"timestamp"`
+	Code     string      `json:"code"`
+	Location string      `json:"location"`
+	Agent    AgentInfo   `json:"agent"`
+	OS       OSInfo      `json:"os"`
+	CPU      CPUInfo     `json:"cpu"`
+	Memory   MemoryInfo  `json:"memory"`
+	Disks    []DiskInfo  `json:"disks"`
+	Network  NetworkInfo `json:"network"`
+	TS       string      `json:"ts"`
 }
 
 // AgentInfo contains information about the agent itself

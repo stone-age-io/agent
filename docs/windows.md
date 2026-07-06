@@ -54,8 +54,10 @@ Create configuration file:
 $configContent = @'
 # Agent Configuration for Windows
 
-# Unique identifier for this agent
-device_id: "windows-server-01"
+# Agent identity: code is the NATS subject token (legacy key: device_id),
+# location is optional and carried in heartbeat/telemetry payloads
+code: "windows-server-01"
+location: "hq"
 
 # NATS subject prefix (optional)
 subject_prefix: "agents"
@@ -142,7 +144,7 @@ notepad "$configPath\config.yaml"
 ```
 
 **Required changes:**
-1. Set unique `device_id`
+1. Set unique `code` (and optionally `location`)
 2. Update `nats.urls` with your NATS server
 3. Configure authentication (credentials file, PocketBase bootstrap, token, or userpass)
 4. Adjust monitored services in `tasks.service_check.services`
@@ -234,7 +236,7 @@ From a machine with NATS CLI installed:
 nats request "agents.windows-server-01.cmd.ping" '{}'
 
 # Expected response:
-# {"status":"pong","timestamp":"2025-..."}
+# {"status":"pong","ts":"2026-..."}
 
 # Check health
 nats request "agents.windows-server-01.cmd.health" '{}'

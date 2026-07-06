@@ -12,6 +12,7 @@ import (
 	"github.com/stone-age-io/agent/internal/config"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
 	"github.com/stone-age-io/agent/internal/tasks"
+	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -93,7 +94,7 @@ func (s *Scheduler) wrapTaskWithRecovery(taskName string, taskFunc func()) func(
 
 // scheduleTasks sets up all periodic tasks
 func (s *Scheduler) scheduleTasks() error {
-	deviceID := s.config.DeviceID
+	code := s.config.Code
 
 	// If metrics are enabled, establish baseline with retries
 	// This is critical for counter-based metrics (CPU, disk I/O)
@@ -154,7 +155,7 @@ func (s *Scheduler) scheduleTasks() error {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.Heartbeat.Interval),
 			gocron.NewTask(s.wrapTaskWithRecovery("heartbeat", func() {
-				s.publishHeartbeat(deviceID)
+				s.publishHeartbeat(code)
 			})),
 		)
 		if err != nil {
@@ -169,7 +170,7 @@ func (s *Scheduler) scheduleTasks() error {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.SystemMetrics.Interval),
 			gocron.NewTask(s.wrapTaskWithRecovery("metrics", func() {
-				s.publishMetrics(deviceID)
+				s.publishMetrics(code)
 			})),
 		)
 		if err != nil {
@@ -184,7 +185,7 @@ func (s *Scheduler) scheduleTasks() error {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.ServiceCheck.Interval),
 			gocron.NewTask(s.wrapTaskWithRecovery("service_check", func() {
-				s.publishServiceStatus(deviceID)
+				s.publishServiceStatus(code)
 			})),
 		)
 		if err != nil {
@@ -198,7 +199,7 @@ func (s *Scheduler) scheduleTasks() error {
 	if s.config.Tasks.Inventory.Enabled {
 		// Run immediately on startup (wrapped with panic recovery)
 		startupTask := s.wrapTaskWithRecovery("inventory_startup", func() {
-			s.publishInventory(deviceID)
+			s.publishInventory(code)
 		})
 		go startupTask()
 
@@ -206,7 +207,7 @@ func (s *Scheduler) scheduleTasks() error {
 		_, err := s.scheduler.NewJob(
 			gocron.DurationJob(s.config.Tasks.Inventory.Interval),
 			gocron.NewTask(s.wrapTaskWithRecovery("inventory", func() {
-				s.publishInventory(deviceID)
+				s.publishInventory(code)
 			})),
 		)
 		if err != nil {
@@ -231,47 +232,45 @@ func (s *Scheduler) Shutdown() error {
 	return s.scheduler.Shutdown()
 }
 
-// publishHeartbeat publishes a heartbeat message
-// SIMPLIFIED: No retry loops, PublishAsync handles everything!
-func (s *Scheduler) publishHeartbeat(deviceID string) {
+// publishHeartbeat publishes a heartbeat message over core NATS.
+// Heartbeats are deliberately NOT JetStream: a missed beat is the signal
+// consumers care about, so last-write-wins semantics are correct and a
+// backlog of stale beats after a reconnect would be actively harmful.
+func (s *Scheduler) publishHeartbeat(code string) {
 	select {
 	case <-s.ctx.Done():
 		return
 	default:
 	}
 
-	subject := fmt.Sprintf("%s.%s.heartbeat", s.subjectPrefix, deviceID)
+	subject := fmt.Sprintf("%s.%s.heartbeat", s.subjectPrefix, code)
 
-	heartbeat := s.executor.CreateHeartbeat(s.version)
+	heartbeat := s.executor.CreateHeartbeat(code, s.config.Location)
 	data, err := json.Marshal(heartbeat)
 	if err != nil {
 		s.logger.Error("Failed to marshal heartbeat", zap.Error(err))
 		return
 	}
 
-	// PublishAsync is fire-and-forget with built-in retries
-	// Errors are logged automatically in the async callback
-	if err := s.nats.PublishTelemetry(subject, data); err != nil {
-		// This only fails if we can't queue (extremely rare)
-		s.logger.Error("Failed to queue heartbeat publish", zap.Error(err))
+	if err := s.nats.Publish(subject, data); err != nil {
+		// Fire-and-forget: log and let the next tick retry
+		s.logger.Error("Failed to publish heartbeat", zap.Error(err))
 		return
 	}
 
 	// Record successful execution
 	s.executor.RecordHeartbeat()
-
-	// Success logging happens in the async callback - no need here
 }
 
 // publishMetrics scrapes and publishes system metrics
-func (s *Scheduler) publishMetrics(deviceID string) {
+func (s *Scheduler) publishMetrics(code string) {
 	select {
 	case <-s.ctx.Done():
 		return
 	default:
 	}
 
-	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, code)
 
 	metrics, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
 	if err != nil {
@@ -281,7 +280,9 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 		s.executor.RecordMetricsFailure()
 
 		// Publish error message so control plane knows scraping failed
-		errorMsg := tasks.CreateMetricsError(err)
+		errorMsg := tasks.CreateTelemetryError(err)
+		errorMsg.Code = code
+		errorMsg.Location = s.config.Location
 		data, marshalErr := json.Marshal(errorMsg)
 		if marshalErr != nil {
 			s.logger.Error("Failed to marshal metrics error message", zap.Error(marshalErr))
@@ -294,6 +295,10 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 		}
 		return
 	}
+
+	// Stamp identity so the message is self-describing
+	metrics.Code = code
+	metrics.Location = s.config.Location
 
 	data, err := json.Marshal(metrics)
 	if err != nil {
@@ -326,25 +331,23 @@ func (s *Scheduler) publishMetrics(deviceID string) {
 }
 
 // publishServiceStatus checks and publishes service status
-func (s *Scheduler) publishServiceStatus(deviceID string) {
+func (s *Scheduler) publishServiceStatus(code string) {
 	select {
 	case <-s.ctx.Done():
 		return
 	default:
 	}
 
-	subject := fmt.Sprintf("%s.%s.telemetry.service", s.subjectPrefix, deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.service", s.subjectPrefix, code)
 
 	statuses, err := s.executor.GetServiceStatuses(s.config.Tasks.ServiceCheck.Services)
 	if err != nil {
 		s.logger.Error("Failed to get service statuses", zap.Error(err))
 
 		// Publish error message
-		errorMsg := map[string]interface{}{
-			"status":    "error",
-			"error":     err.Error(),
-			"timestamp": s.executor.CreateHeartbeat(s.version).Timestamp,
-		}
+		errorMsg := tasks.CreateTelemetryError(err)
+		errorMsg.Code = code
+		errorMsg.Location = s.config.Location
 		data, marshalErr := json.Marshal(errorMsg)
 		if marshalErr != nil {
 			s.logger.Error("Failed to marshal service status error message", zap.Error(marshalErr))
@@ -358,9 +361,11 @@ func (s *Scheduler) publishServiceStatus(deviceID string) {
 	}
 
 	// Create message with all services
-	message := map[string]interface{}{
-		"services":  statuses,
-		"timestamp": s.executor.CreateHeartbeat(s.version).Timestamp,
+	message := tasks.ServiceStatusMessage{
+		Code:     code,
+		Location: s.config.Location,
+		Services: statuses,
+		TS:       utils.NowRFC3339(),
 	}
 
 	data, err := json.Marshal(message)
@@ -383,20 +388,24 @@ func (s *Scheduler) publishServiceStatus(deviceID string) {
 }
 
 // publishInventory collects and publishes system inventory
-func (s *Scheduler) publishInventory(deviceID string) {
+func (s *Scheduler) publishInventory(code string) {
 	select {
 	case <-s.ctx.Done():
 		return
 	default:
 	}
 
-	subject := fmt.Sprintf("%s.%s.telemetry.inventory", s.subjectPrefix, deviceID)
+	subject := fmt.Sprintf("%s.%s.telemetry.inventory", s.subjectPrefix, code)
 
 	inventory, err := s.executor.CollectInventory(s.version)
 	if err != nil {
 		s.logger.Error("Failed to collect inventory", zap.Error(err))
 		return
 	}
+
+	// Stamp identity so the message is self-describing
+	inventory.Code = code
+	inventory.Location = s.config.Location
 
 	data, err := json.Marshal(inventory)
 	if err != nil {

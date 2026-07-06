@@ -5,7 +5,8 @@ package tasks
 import (
 	"fmt"
 	"runtime"
-	"time"
+
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // CollectInventory is a stub for unsupported platforms
@@ -27,9 +28,9 @@ func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 			TotalGB:     0,
 			AvailableGB: 0,
 		},
-		Disks:     []DiskInfo{},
-		Network:   NetworkInfo{PrimaryIP: "Unknown"},
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Disks:   []DiskInfo{},
+		Network: NetworkInfo{PrimaryIP: "Unknown"},
+		TS:      utils.NowRFC3339(),
 	}
 
 	return inv, fmt.Errorf("full inventory collection not supported on platform: %s", runtime.GOOS)

@@ -6,11 +6,11 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/stone-age-io/agent/internal/config"
 	"github.com/stone-age-io/agent/internal/tasks"
+	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -18,7 +18,7 @@ import (
 type CommandHandlers struct {
 	logger        *zap.Logger
 	config        *config.Config
-	deviceID      string
+	code          string
 	subjectPrefix string
 	version       string
 	taskExecutor  *tasks.Executor
@@ -30,7 +30,7 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 	return &CommandHandlers{
 		logger:        logger,
 		config:        cfg,
-		deviceID:      cfg.DeviceID,
+		code:          cfg.Code,
 		subjectPrefix: cfg.SubjectPrefix,
 		version:       version,
 		taskExecutor:  executor,
@@ -53,9 +53,9 @@ func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandle
 
 				// Send error response to caller
 				response := errorResponse{
-					Status:    "error",
-					Error:     fmt.Sprintf("Internal error: handler panicked: %v", r),
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Status: "error",
+					Error:  fmt.Sprintf("Internal error: handler panicked: %v", r),
+					TS:     utils.NowRFC3339(),
 				}
 				responseBytes, err := json.Marshal(response)
 				if err != nil {
@@ -76,7 +76,7 @@ func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandle
 func (h *CommandHandlers) SubscribeAll(client *Client) error {
 	// Subscribe to ping command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.ping", h.subjectPrefix, h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.ping", h.subjectPrefix, h.code),
 		h.handleWithRecovery("ping", h.handlePing),
 	); err != nil {
 		return err
@@ -84,7 +84,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to service control command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.service", h.subjectPrefix, h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.service", h.subjectPrefix, h.code),
 		h.handleWithRecovery("service", h.handleServiceControl),
 	); err != nil {
 		return err
@@ -92,7 +92,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to log fetch command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.logs", h.subjectPrefix, h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.logs", h.subjectPrefix, h.code),
 		h.handleWithRecovery("logs", h.handleLogFetch),
 	); err != nil {
 		return err
@@ -100,7 +100,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to custom exec command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.exec", h.subjectPrefix, h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.exec", h.subjectPrefix, h.code),
 		h.handleWithRecovery("exec", h.handleCustomExec),
 	); err != nil {
 		return err
@@ -108,7 +108,7 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 
 	// Subscribe to health check command with recovery
 	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.health", h.subjectPrefix, h.deviceID),
+		fmt.Sprintf("%s.%s.cmd.health", h.subjectPrefix, h.code),
 		h.handleWithRecovery("health", h.handleHealth),
 	); err != nil {
 		return err
@@ -120,8 +120,8 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 // Response structures
 
 type pingResponse struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
+	Status string `json:"status"`
+	TS     string `json:"ts"`
 }
 
 type serviceControlRequest struct {
@@ -135,7 +135,7 @@ type serviceControlResponse struct {
 	Action      string `json:"action,omitempty"`
 	Result      string `json:"result,omitempty"`
 	Error       string `json:"error,omitempty"`
-	Timestamp   string `json:"timestamp"`
+	TS          string `json:"ts"`
 }
 
 type logFetchRequest struct {
@@ -149,7 +149,7 @@ type logFetchResponse struct {
 	Lines      []string `json:"lines,omitempty"`
 	TotalLines int      `json:"total_lines,omitempty"`
 	Error      string   `json:"error,omitempty"`
-	Timestamp  string   `json:"timestamp"`
+	TS         string   `json:"ts"`
 }
 
 type customExecRequest struct {
@@ -157,23 +157,23 @@ type customExecRequest struct {
 }
 
 type customExecResponse struct {
-	Status    string          `json:"status"`
-	Command   string          `json:"command,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	ExitCode  int             `json:"exit_code,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Timestamp string          `json:"timestamp"`
+	Status   string          `json:"status"`
+	Command  string          `json:"command,omitempty"`
+	Output   json.RawMessage `json:"output,omitempty"`
+	ExitCode int             `json:"exit_code,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	TS       string          `json:"ts"`
 }
 
 // Enhanced health response structures
 type healthResponse struct {
-	Status    string                   `json:"status"` // "healthy", "degraded", "unhealthy"
-	Timestamp string                   `json:"timestamp"`
-	Agent     *tasks.AgentMetrics      `json:"agent"`
-	NATS      *NATSHealth              `json:"nats"`
-	Tasks     *tasks.TaskHealthMetrics `json:"tasks"`
-	Config    *ConfigInfo              `json:"config"`
-	OS        *tasks.OSInfo            `json:"os"` // Operating system information
+	Status string                   `json:"status"` // "healthy", "degraded", "unhealthy"
+	TS     string                   `json:"ts"`
+	Agent  *tasks.AgentMetrics      `json:"agent"`
+	NATS   *NATSHealth              `json:"nats"`
+	Tasks  *tasks.TaskHealthMetrics `json:"tasks"`
+	Config *ConfigInfo              `json:"config"`
+	OS     *tasks.OSInfo            `json:"os"` // Operating system information
 }
 
 type NATSHealth struct {
@@ -188,16 +188,17 @@ type NATSHealth struct {
 }
 
 type ConfigInfo struct {
-	DeviceID      string   `json:"device_id"`
+	Code          string   `json:"code"`
+	Location      string   `json:"location"`
 	SubjectPrefix string   `json:"subject_prefix"`
 	Version       string   `json:"version"`
 	EnabledTasks  []string `json:"enabled_tasks"`
 }
 
 type errorResponse struct {
-	Status    string `json:"status"`
-	Error     string `json:"error"`
-	Timestamp string `json:"timestamp"`
+	Status string `json:"status"`
+	Error  string `json:"error"`
+	TS     string `json:"ts"`
 }
 
 // handlePing responds to ping commands
@@ -205,8 +206,8 @@ func (h *CommandHandlers) handlePing(msg *nats.Msg) {
 	h.logger.Debug("Received ping command")
 
 	response := pingResponse{
-		Status:    "pong",
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Status: "pong",
+		TS:     utils.NowRFC3339(),
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -248,9 +249,9 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 		h.taskExecutor.RecordCommandError(err)
 
 		response := serviceControlResponse{
-			Status:    "error",
-			Error:     err.Error(),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Status: "error",
+			Error:  err.Error(),
+			TS:     utils.NowRFC3339(),
 		}
 		responseBytes, err := json.Marshal(response)
 		if err != nil {
@@ -270,7 +271,7 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 		ServiceName: req.ServiceName,
 		Action:      req.Action,
 		Result:      result,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		TS:          utils.NowRFC3339(),
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -313,9 +314,9 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 		h.taskExecutor.RecordCommandError(err)
 
 		response := logFetchResponse{
-			Status:    "error",
-			Error:     err.Error(),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Status: "error",
+			Error:  err.Error(),
+			TS:     utils.NowRFC3339(),
 		}
 		responseBytes, err := json.Marshal(response)
 		if err != nil {
@@ -335,7 +336,7 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 		LogPath:    req.LogPath,
 		Lines:      lines,
 		TotalLines: len(lines),
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		TS:         utils.NowRFC3339(),
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -381,9 +382,9 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		h.taskExecutor.RecordCommandError(err)
 
 		response := customExecResponse{
-			Status:    "error",
-			Error:     err.Error(),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Status: "error",
+			Error:  err.Error(),
+			TS:     utils.NowRFC3339(),
 		}
 		responseBytes, err := json.Marshal(response)
 		if err != nil {
@@ -422,11 +423,11 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 
 	// Success response
 	response := customExecResponse{
-		Status:    "success",
-		Command:   req.Command,
-		Output:    outputData,
-		ExitCode:  exitCode,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Status:   "success",
+		Command:  req.Command,
+		Output:   outputData,
+		ExitCode: exitCode,
+		TS:       utils.NowRFC3339(),
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -465,13 +466,13 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 	status := h.determineHealthStatus(natsHealth, taskMetrics)
 
 	response := healthResponse{
-		Status:    status,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Agent:     agentMetrics,
-		NATS:      natsHealth,
-		Tasks:     taskMetrics,
-		Config:    configInfo,
-		OS:        osInfo,
+		Status: status,
+		TS:     utils.NowRFC3339(),
+		Agent:  agentMetrics,
+		NATS:   natsHealth,
+		Tasks:  taskMetrics,
+		Config: configInfo,
+		OS:     osInfo,
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -529,7 +530,8 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 	}
 
 	return &ConfigInfo{
-		DeviceID:      h.deviceID,
+		Code:          h.code,
+		Location:      h.config.Location,
 		SubjectPrefix: h.subjectPrefix,
 		Version:       h.version,
 		EnabledTasks:  enabledTasks,
@@ -581,9 +583,9 @@ func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetr
 // respondError sends a generic error response
 func (h *CommandHandlers) respondError(msg *nats.Msg, errorMsg string) {
 	response := errorResponse{
-		Status:    "error",
-		Error:     errorMsg,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Status: "error",
+		Error:  errorMsg,
+		TS:     utils.NowRFC3339(),
 	}
 	responseBytes, err := json.Marshal(response)
 	if err != nil {

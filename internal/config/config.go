@@ -12,7 +12,8 @@ import (
 
 // Config represents the complete agent configuration
 type Config struct {
-	DeviceID      string         `mapstructure:"device_id"`
+	Code          string         `mapstructure:"code"`     // Agent identity token used in NATS subjects (was: device_id)
+	Location      string         `mapstructure:"location"` // Optional deployment location, carried in telemetry payloads
 	SubjectPrefix string         `mapstructure:"subject_prefix"`
 	NATS          NATSConfig     `mapstructure:"nats"`
 	Tasks         TasksConfig    `mapstructure:"tasks"`
@@ -47,7 +48,7 @@ type PocketBaseAuth struct {
 	Identity       string `mapstructure:"identity"`        // Login identity (email/username)
 	PasswordEnv    string `mapstructure:"password_env"`    // Env var containing password
 	Collection     string `mapstructure:"collection"`      // Collection holding creds records
-	DeviceIDField  string `mapstructure:"device_id_field"` // Field name for device ID lookup (default: device_id)
+	DeviceIDField  string `mapstructure:"device_id_field"` // PocketBase field name for the code lookup (default: device_id)
 	CredsField     string `mapstructure:"creds_field"`     // Field name containing creds content (default: nats_creds)
 }
 
@@ -127,6 +128,11 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
+	// Accept the legacy device_id key as a fallback for code
+	if !v.IsSet("code") && v.IsSet("device_id") {
+		v.Set("code", v.GetString("device_id"))
+	}
+
 	// Unmarshal into struct
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -188,16 +194,23 @@ func setDefaults(v *viper.Viper) {
 
 // validate checks that required fields are present and valid
 func validate(cfg *Config) error {
-	// Validate device_id is present
-	if cfg.DeviceID == "" {
-		return fmt.Errorf("device_id is required")
+	// Validate code is present
+	if cfg.Code == "" {
+		return fmt.Errorf("code is required")
 	}
 
-	// Validate device_id format (alphanumeric, dash, underscore only)
+	// Validate code format (alphanumeric, dash, underscore only)
 	// This ensures compatibility with NATS subject names
-	validDeviceID := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	if !validDeviceID.MatchString(cfg.DeviceID) {
-		return fmt.Errorf("device_id must contain only alphanumeric characters, dashes, and underscores (got: %s)", cfg.DeviceID)
+	validToken := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	if !validToken.MatchString(cfg.Code) {
+		return fmt.Errorf("code must contain only alphanumeric characters, dashes, and underscores (got: %s)", cfg.Code)
+	}
+
+	// Validate location format if set. Location is optional and only carried in
+	// telemetry payloads today, but it is validated as a single NATS subject
+	// token so it could be promoted into subjects without a breaking change.
+	if cfg.Location != "" && !validToken.MatchString(cfg.Location) {
+		return fmt.Errorf("location must contain only alphanumeric characters, dashes, and underscores (got: %s)", cfg.Location)
 	}
 
 	// Validate subject_prefix format

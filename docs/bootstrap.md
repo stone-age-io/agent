@@ -36,7 +36,7 @@ Create a collection in PocketBase to store device credentials. The collection ne
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `device_id` | Text | Unique device identifier (must match agent `device_id`) |
+| `device_id` | Text | Unique device identifier (must match the agent's `code`) |
 | `nats_creds` | Text | Full contents of the NATS `.creds` file |
 
 You can use different field names by configuring `device_id_field` and `creds_field` in the agent config.
@@ -58,7 +58,7 @@ Ensure the PocketBase auth identity used by the agent has read access to the cre
 ### Minimal Configuration
 
 ```yaml
-device_id: "server-prod-01"
+code: "server-prod-01"
 
 nats:
   urls: ["nats://nats.example.com:4222"]
@@ -155,7 +155,7 @@ sudo service agent restart
 2. Checks if `creds_file` path already exists - if it does, skips bootstrap
 3. Reads password from the environment variable specified by `password_env`
 4. Authenticates with PocketBase (POST to auth-with-password endpoint)
-5. Queries the credentials collection for a record matching the agent's `device_id`
+5. Queries the credentials collection for a record matching the agent's `code` (looked up via the `device_id_field` collection field)
 6. Extracts the `.creds` content and writes it to `creds_file` with `0600` permissions
 7. Switches auth type to `"creds"` internally and proceeds to connect to NATS
 
@@ -181,8 +181,8 @@ The environment variable specified in `password_env` is not set or is empty. Ens
 Check that the `identity` and password are correct, and that the `auth_collection` is correct (default: `_superusers`).
 
 ### "no record found for device_id='...' in collection '...'"
-The device's `device_id` does not have a matching record in the PocketBase credentials collection. Verify:
-- The `device_id` in config matches a record in PocketBase
+The agent's `code` does not have a matching record in the PocketBase credentials collection. Verify:
+- The `code` in the agent config matches a record in PocketBase
 - The `collection` name is correct
 - The `device_id_field` matches the actual field name in PocketBase
 
