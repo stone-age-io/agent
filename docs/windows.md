@@ -155,7 +155,7 @@ notepad "$configPath\config.yaml"
 Copy-Item "\\path\to\device.creds" -Destination "$configPath\device.creds"
 ```
 
-**Or use PocketBase bootstrap (auto-fetch credentials on first start):**
+**Or use platform bootstrap (auto-fetch credentials on first start) — the agent logs in as its Thing record and pulls creds from its nats_user relation:**
 
 ```yaml
 nats:
@@ -163,10 +163,9 @@ nats:
     type: "pocketbase"
     creds_file: "C:\\ProgramData\\Agent\\device.creds"
     pocketbase:
-      url: "https://pb.example.com"
-      identity: "agent-svc@example.com"
+      url: "https://platform.example.com"
+      identity: "thing@example.com"          # the thing's login email
       password_env: "AGENT_PB_PASSWORD"
-      collection: "device_credentials"
 ```
 
 Set the environment variable before starting the agent:

@@ -200,33 +200,40 @@ Understanding the design and components of the agent platform.
 
 ### 0. Credential Bootstrap (First Start)
 
+The agent is a Thing on the stone-age.io platform. It authenticates as itself;
+the auth response (with `expand`) carries everything bootstrap needs in one call.
+
 ```
 ┌─────────┐
 │  Agent  │ First startup (auth type: "pocketbase")
 └────┬────┘
      │ 1. Check if .creds file exists → skip if yes
      │
-     │ 2. Read password from env var (AGENT_PB_PASSWORD)
+     │ 2. Read the thing's password from env var (AGENT_PB_PASSWORD)
      ▼
 ┌────────────┐
-│ PocketBase │ 3. POST /api/collections/_superusers/auth-with-password
-└────┬───────┘    → Returns JWT token
+│  Platform  │ 3. POST /api/collections/things/auth-with-password
+│(PocketBase)│         ?expand=nats_user,location
+└────┬───────┘    → Returns the thing record with expanded relations
      │
-     │ 4. GET /api/collections/device_credentials/records
-     │    ?filter=device_id='server-prod-01'
-     │    → Returns NATS .creds content
      ▼
 ┌─────────┐
-│  Agent  │ 5. Write .creds file (permissions: 0600)
-└────┬────┘ 6. Switch auth type to "creds"
-     │ 7. Connect to NATS using .creds
+│  Agent  │ 4. Verify record.code == config code (fail on mismatch)
+└────┬────┘ 5. Read creds from record.expand.nats_user.creds_file
+     │      6. Write .creds file (permissions: 0600)
+     │      7. Switch auth type to "creds"
+     │      8. Connect to NATS using .creds
      ▼
 ┌─────────┐
 │  NATS   │ Normal operation begins
 └─────────┘
 ```
 
-After initial bootstrap, the agent uses the stored `.creds` file on subsequent starts (no PocketBase dependency at runtime).
+Access rules on the platform scope everything to the authenticated thing: it can
+see only its own record and only its assigned NATS user, so no device can read
+another device's credentials.
+
+After initial bootstrap, the agent uses the stored `.creds` file on subsequent starts (no platform dependency at runtime).
 
 ---
 

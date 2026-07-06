@@ -41,15 +41,14 @@ type AuthConfig struct {
 	PocketBase PocketBaseAuth `mapstructure:"pocketbase"` // for pocketbase bootstrap
 }
 
-// PocketBaseAuth holds PocketBase bootstrap configuration for fetching NATS credentials
+// PocketBaseAuth configures first-start credential bootstrap against the
+// stone-age.io platform. The agent is a Thing on the platform: it
+// authenticates as itself against the `things` auth collection and reads its
+// NATS creds from the expanded nats_user relation's creds_file field.
 type PocketBaseAuth struct {
-	URL            string `mapstructure:"url"`             // PocketBase server URL
-	AuthCollection string `mapstructure:"auth_collection"` // Auth collection (default: _superusers)
-	Identity       string `mapstructure:"identity"`        // Login identity (email/username)
-	PasswordEnv    string `mapstructure:"password_env"`    // Env var containing password
-	Collection     string `mapstructure:"collection"`      // Collection holding creds records
-	DeviceIDField  string `mapstructure:"device_id_field"` // PocketBase field name for the code lookup (default: device_id)
-	CredsField     string `mapstructure:"creds_field"`     // Field name containing creds content (default: nats_creds)
+	URL         string `mapstructure:"url"`          // Platform (PocketBase) base URL
+	Identity    string `mapstructure:"identity"`     // The thing's login email
+	PasswordEnv string `mapstructure:"password_env"` // Env var containing the thing's password
 }
 
 // TLSConfig holds TLS connection settings
@@ -160,11 +159,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.reconnect_wait", "2s")
 	v.SetDefault("nats.drain_timeout", "30s")
 
-	// PocketBase bootstrap defaults
-	v.SetDefault("nats.auth.pocketbase.auth_collection", "_superusers")
-	v.SetDefault("nats.auth.pocketbase.device_id_field", "device_id")
-	v.SetDefault("nats.auth.pocketbase.creds_field", "nats_creds")
-
 	// TLS defaults
 	v.SetDefault("nats.tls.enabled", false)
 	v.SetDefault("nats.tls.insecure_skip_verify", false)
@@ -253,9 +247,6 @@ func validate(cfg *Config) error {
 		}
 		if pb.PasswordEnv == "" {
 			return fmt.Errorf("pocketbase.password_env is required for pocketbase auth type")
-		}
-		if pb.Collection == "" {
-			return fmt.Errorf("pocketbase.collection is required for pocketbase auth type")
 		}
 		// .creds file may not exist yet — bootstrap will create it
 	case "token":

@@ -186,14 +186,15 @@ nats:
     type: "creds"
     creds_file: "/path/to/device.creds"
 
-    # Option 2: PocketBase bootstrap (auto-fetch .creds on first start)
+    # Option 2: Platform bootstrap (auto-fetch .creds on first start).
+    # The agent is a Thing on the stone-age.io platform: it logs in as itself
+    # and reads creds from its nats_user relation.
     # type: "pocketbase"
     # creds_file: "/etc/agent/device.creds"
     # pocketbase:
-    #   url: "https://pb.example.com"
-    #   identity: "agent-svc@example.com"
+    #   url: "https://platform.example.com"
+    #   identity: "thing@example.com"     # the thing's login email
     #   password_env: "AGENT_PB_PASSWORD"
-    #   collection: "device_credentials"
 
 # Scheduled Tasks
 tasks:

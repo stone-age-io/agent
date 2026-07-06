@@ -1,3 +1,12 @@
+// Package bootstrap fetches the agent's NATS credentials from the
+// stone-age.io platform (PocketBase) on first start.
+//
+// On the platform an agent is a Thing: it authenticates as itself against the
+// `things` auth collection and reads its NATS credentials from the expanded
+// `nats_user` relation's `creds_file` field. The platform's access rules are
+// built for exactly this flow — an authenticated thing can see only its own
+// record and only its assigned NATS user — so the whole bootstrap is a single
+// auth-with-password call with an expand parameter.
 package bootstrap
 
 import (
@@ -5,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,14 +25,33 @@ import (
 
 const httpTimeout = 15 * time.Second
 
-// authResponse is the PocketBase auth-with-password response
+// thingsCollection is the platform auth collection agents authenticate
+// against. Fixed on purpose: the agent is opinionated about the stone-age.io
+// schema (things → nats_user relation → creds_file).
+const thingsCollection = "things"
+
+// authResponse is the PocketBase auth-with-password response, narrowed to the
+// fields the bootstrap needs from the authenticated thing record.
 type authResponse struct {
-	Token string `json:"token"`
+	Record thingRecord `json:"record"`
+}
+
+type thingRecord struct {
+	ID     string `json:"id"`
+	Code   string `json:"code"`
+	Expand struct {
+		NATSUser struct {
+			CredsFile string `json:"creds_file"`
+		} `json:"nats_user"`
+		Location struct {
+			Code string `json:"code"`
+		} `json:"location"`
+	} `json:"expand"`
 }
 
 // FetchCredentials checks if the .creds file exists, and if not, fetches it
-// from PocketBase and writes it to disk. Returns nil if the file already exists
-// or was successfully created.
+// from the platform and writes it to disk. Returns nil if the file already
+// exists or was successfully created.
 func FetchCredentials(cfg *config.Config, logger *zap.Logger) error {
 	credsPath := cfg.NATS.Auth.CredsFile
 	pb := cfg.NATS.Auth.PocketBase
@@ -35,9 +62,9 @@ func FetchCredentials(cfg *config.Config, logger *zap.Logger) error {
 		return nil
 	}
 
-	logger.Info("Credentials file not found, bootstrapping from PocketBase",
+	logger.Info("Credentials file not found, bootstrapping from platform",
 		zap.String("path", credsPath),
-		zap.String("pocketbase_url", pb.URL))
+		zap.String("platform_url", pb.URL))
 
 	// Read password from environment variable
 	password := os.Getenv(pb.PasswordEnv)
@@ -47,22 +74,35 @@ func FetchCredentials(cfg *config.Config, logger *zap.Logger) error {
 
 	client := &http.Client{Timeout: httpTimeout}
 
-	// Step 1: Authenticate with PocketBase
-	token, err := authenticate(client, pb.URL, pb.AuthCollection, pb.Identity, password)
+	// Authenticate as the thing; the expanded record carries everything we need
+	record, err := authenticateThing(client, pb.URL, pb.Identity, password)
 	if err != nil {
 		return fmt.Errorf("bootstrap: authentication failed: %w", err)
 	}
-	logger.Info("Authenticated with PocketBase")
+	logger.Info("Authenticated with platform as thing", zap.String("thing_id", record.ID))
 
-	// Step 2: Fetch the credentials record
-	credsContent, err := fetchCredsRecord(client, pb.URL, token, pb.Collection, pb.DeviceIDField, cfg.Code, pb.CredsField)
-	if err != nil {
-		return fmt.Errorf("bootstrap: failed to fetch credentials: %w", err)
+	// The platform is the source of truth for identity: a code mismatch means
+	// this device is running with the wrong config or the wrong thing login,
+	// and its telemetry would be attributed to the wrong device. Fail fast.
+	if record.Code != cfg.Code {
+		return fmt.Errorf("bootstrap: code mismatch: config has %q but the platform thing record has %q — fix the agent config or the thing record before starting", cfg.Code, record.Code)
 	}
-	logger.Info("Fetched credentials from PocketBase")
 
-	// Step 3: Write .creds file to disk
-	if err := writeCredsFile(credsPath, credsContent); err != nil {
+	// Location is advisory (payload-only), so a mismatch warns instead of failing
+	if platformLoc := record.Expand.Location.Code; platformLoc != "" && cfg.Location != platformLoc {
+		logger.Warn("Location mismatch between config and platform thing record",
+			zap.String("config_location", cfg.Location),
+			zap.String("platform_location", platformLoc))
+	}
+
+	creds := record.Expand.NATSUser.CredsFile
+	if creds == "" {
+		return fmt.Errorf("bootstrap: thing record has no NATS credentials (is a nats_user assigned to this thing, and does it have creds generated?)")
+	}
+	logger.Info("Fetched credentials from platform")
+
+	// Write .creds file to disk
+	if err := writeCredsFile(credsPath, creds); err != nil {
 		return fmt.Errorf("bootstrap: failed to write credentials file: %w", err)
 	}
 	logger.Info("Credentials file written", zap.String("path", credsPath))
@@ -70,92 +110,40 @@ func FetchCredentials(cfg *config.Config, logger *zap.Logger) error {
 	return nil
 }
 
-// authenticate calls PocketBase auth-with-password and returns the JWT token
-func authenticate(client *http.Client, baseURL, collection, identity, password string) (string, error) {
-	url := fmt.Sprintf("%s/api/collections/%s/auth-with-password", strings.TrimRight(baseURL, "/"), collection)
+// authenticateThing calls auth-with-password on the things collection with
+// nats_user and location expanded, returning the authenticated thing record.
+func authenticateThing(client *http.Client, baseURL, identity, password string) (*thingRecord, error) {
+	url := fmt.Sprintf("%s/api/collections/%s/auth-with-password?expand=nats_user,location",
+		strings.TrimRight(baseURL, "/"), thingsCollection)
 
 	payload := fmt.Sprintf(`{"identity":%q,"password":%q}`, identity, password)
 	req, err := http.NewRequest("POST", url, strings.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-		return "", fmt.Errorf("auth returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("auth returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var authResp authResponse
 	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return "", fmt.Errorf("failed to parse auth response: %w", err)
+		return nil, fmt.Errorf("failed to parse auth response: %w", err)
 	}
 
-	if authResp.Token == "" {
-		return "", fmt.Errorf("auth response contained no token")
+	if authResp.Record.ID == "" {
+		return nil, fmt.Errorf("auth response contained no thing record")
 	}
 
-	return authResp.Token, nil
-}
-
-// fetchCredsRecord queries PocketBase for the device's credentials record and
-// extracts the creds file content from the specified field
-func fetchCredsRecord(client *http.Client, baseURL, token, collection, deviceIDField, deviceID, credsField string) (string, error) {
-	filter := fmt.Sprintf("%s='%s'", deviceIDField, deviceID)
-	reqURL := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1",
-		strings.TrimRight(baseURL, "/"),
-		collection,
-		url.QueryEscape(filter),
-	)
-
-	req, err := http.NewRequest("GET", reqURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Authorization", token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-		return "", fmt.Errorf("request returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse the list response
-	var result struct {
-		Items      []map[string]interface{} `json:"items"`
-		TotalItems int                      `json:"totalItems"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if result.TotalItems == 0 || len(result.Items) == 0 {
-		return "", fmt.Errorf("no record found for %s='%s' in collection '%s'", deviceIDField, deviceID, collection)
-	}
-
-	// Extract the creds field
-	credsValue, ok := result.Items[0][credsField]
-	if !ok {
-		return "", fmt.Errorf("record does not contain field '%s'", credsField)
-	}
-
-	credsStr, ok := credsValue.(string)
-	if !ok || credsStr == "" {
-		return "", fmt.Errorf("field '%s' is empty or not a string", credsField)
-	}
-
-	return credsStr, nil
+	return &authResp.Record, nil
 }
 
 // writeCredsFile writes the credentials content to disk, creating parent

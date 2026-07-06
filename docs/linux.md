@@ -147,7 +147,7 @@ sudo cp /path/to/device.creds /etc/agent/device.creds
 sudo chmod 600 /etc/agent/device.creds
 ```
 
-**Or use PocketBase bootstrap (auto-fetch credentials on first start):**
+**Or use platform bootstrap (auto-fetch credentials on first start) — the agent logs in as its Thing record and pulls creds from its nats_user relation:**
 
 ```yaml
 nats:
@@ -155,10 +155,9 @@ nats:
     type: "pocketbase"
     creds_file: "/etc/agent/device.creds"
     pocketbase:
-      url: "https://pb.example.com"
-      identity: "agent-svc@example.com"
+      url: "https://platform.example.com"
+      identity: "thing@example.com"          # the thing's login email
       password_env: "AGENT_PB_PASSWORD"
-      collection: "device_credentials"
 ```
 
 Set the environment variable before starting the agent:

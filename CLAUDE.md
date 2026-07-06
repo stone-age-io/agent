@@ -99,7 +99,12 @@ agent/
    - Platform-specific defaults for paths and exporter URLs
 
 3. **Bootstrap** (`internal/bootstrap/bootstrap.go`):
-   - Fetches NATS .creds from PocketBase on first start (auth type: pocketbase)
+   - Fetches NATS .creds from the stone-age.io platform on first start (auth type: pocketbase)
+   - The agent is a Thing: authenticates as itself against the `things` auth collection
+     (single auth-with-password call with `expand=nats_user,location`), creds come from
+     the nats_user relation's `creds_file` field
+   - Fails fast if the thing record's `code` doesn't match the config's `code`;
+     warns if the expanded location's `code` differs from the config's `location`
    - Idempotent: skips if .creds file already exists
    - Writes credentials with restrictive permissions (0600)
    - Switches auth type to "creds" after successful bootstrap
@@ -171,11 +176,10 @@ nats:
   auth:
     type: "creds"                # creds, token, userpass, pocketbase, none
     creds_file: "/path/to/creds"
-    pocketbase:                  # Only for pocketbase auth type
-      url: "https://pb.example.com"
-      identity: "agent-svc@example.com"
+    pocketbase:                  # Only for pocketbase auth type (platform bootstrap)
+      url: "https://platform.example.com"
+      identity: "thing@example.com"     # the thing's login email
       password_env: "AGENT_PB_PASSWORD"
-      collection: "device_credentials"
   tls:
     enabled: true
     ca_file: "/path/to/ca.pem"
