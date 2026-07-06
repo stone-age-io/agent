@@ -243,7 +243,7 @@ After initial bootstrap, the agent uses the stored `.creds` file on subsequent s
 ┌─────────┐
 │  Agent  │ 2. Publish to JetStream
 └────┬────┘      agents.device-123.telemetry.system
-     │            {"cpu_percent":15.2,...}
+     │            {"code":"device-123","location":"hq","cpu_usage_percent":15.2,...,"ts":"..."}
      ▼
 ┌─────────┐
 │  NATS   │ 3. Store in JetStream stream

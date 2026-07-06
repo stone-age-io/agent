@@ -1,10 +1,11 @@
 # Windows Agent Configuration Example
 
 # Agent Identity
-device_id: "device-12345"  # Unique identifier for this agent
+code: "device-12345"  # Identity token used in NATS subjects (legacy key: device_id)
+location: "hq"        # Optional deployment location, carried in heartbeat/telemetry payloads
 
 # NATS Subject Prefix (optional)
-# All NATS subjects will use this prefix: {prefix}.{device_id}.{subject}
+# All NATS subjects will use this prefix: {prefix}.{code}.{subject}
 # Default: "agents" (results in: agents.device-12345.heartbeat, agents.device-12345.cmd.ping, etc.)
 # Supports hierarchical prefixes with dots: "region.env.agents" or "production.us-east.agents"
 # Each token (separated by dots) can contain: alphanumeric, dashes, underscores

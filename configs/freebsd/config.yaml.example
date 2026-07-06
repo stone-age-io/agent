@@ -1,7 +1,8 @@
 # FreeBSD Agent Configuration Example
 
 # Agent Identity
-device_id: "device-12345"  # Unique identifier for this agent
+code: "device-12345"  # Identity token used in NATS subjects (legacy key: device_id)
+location: "hq"        # Optional deployment location, carried in heartbeat/telemetry payloads
 
 # NATS Subject Prefix (optional)
 subject_prefix: "agents"
