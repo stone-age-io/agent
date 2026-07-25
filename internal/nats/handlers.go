@@ -14,6 +14,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// CredsRotator re-mints this agent's NATS credential on the platform and writes
+// the result, reporting whether the credential on disk changed.
+//
+// Declared here rather than imported so this package stays clear of the
+// platform's HTTP concerns. Implemented by *platform.Client.
+type CredsRotator interface {
+	Rotate() (bool, error)
+}
+
 // CommandHandlers manages all command subscriptions and handlers
 type CommandHandlers struct {
 	logger        *zap.Logger
@@ -23,10 +32,13 @@ type CommandHandlers struct {
 	version       string
 	taskExecutor  *tasks.Executor
 	natsClient    *Client
+	credsRotator  CredsRotator // nil unless this agent gets its credentials from the platform
 }
 
-// NewCommandHandlers creates a new command handler manager
-func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string) *CommandHandlers {
+// NewCommandHandlers creates a new command handler manager.
+// credsRotator may be nil, in which case the rotate_creds command reports that
+// it is not available on this agent.
+func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator) *CommandHandlers {
 	return &CommandHandlers{
 		logger:        logger,
 		config:        cfg,
@@ -35,6 +47,7 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 		version:       version,
 		taskExecutor:  executor,
 		natsClient:    natsClient,
+		credsRotator:  credsRotator,
 	}
 }
 
@@ -110,6 +123,16 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 	if _, err := client.Subscribe(
 		fmt.Sprintf("%s.%s.cmd.health", h.subjectPrefix, h.code),
 		h.handleWithRecovery("health", h.handleHealth),
+	); err != nil {
+		return err
+	}
+
+	// Subscribe to credential rotation command with recovery.
+	// Subscribed unconditionally so an agent that is not platform-managed answers
+	// with a reason instead of timing out.
+	if _, err := client.Subscribe(
+		fmt.Sprintf("%s.%s.cmd.rotate_creds", h.subjectPrefix, h.code),
+		h.handleWithRecovery("rotate_creds", h.handleRotateCreds),
 	); err != nil {
 		return err
 	}
@@ -195,6 +218,13 @@ type ConfigInfo struct {
 	EnabledTasks  []string `json:"enabled_tasks"`
 }
 
+type rotateCredsResponse struct {
+	Status  string `json:"status"`
+	Changed bool   `json:"changed"` // false means the platform handed back the credential we already had
+	Error   string `json:"error,omitempty"`
+	TS      string `json:"ts"`
+}
+
 type errorResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error"`
@@ -219,6 +249,69 @@ func (h *CommandHandlers) handlePing(msg *nats.Msg) {
 	msg.Respond(responseBytes)
 
 	h.logger.Debug("Sent pong response")
+}
+
+// handleRotateCreds asks the platform to re-mint this agent's NATS credential,
+// writes it, and reconnects so it takes effect.
+//
+// The reply is sent and flushed BEFORE the reconnect: ForceReconnect drops the
+// connection this reply is travelling on, so reversing the order would cost the
+// caller their answer.
+func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
+	h.logger.Info("Received credential rotation command")
+
+	if h.credsRotator == nil {
+		h.logger.Warn("Credential rotation requested but this agent is not platform-managed",
+			zap.String("auth_type", h.config.NATS.Auth.Type))
+		h.respondError(msg, "credential rotation requires stone-age auth (this agent uses "+h.config.NATS.Auth.Type+")")
+		return
+	}
+
+	changed, err := h.credsRotator.Rotate()
+	if err != nil {
+		h.logger.Error("Credential rotation failed", zap.Error(err))
+		h.taskExecutor.RecordCommandError(err)
+		h.respondRotateCreds(msg, rotateCredsResponse{
+			Status: "error",
+			Error:  err.Error(),
+			TS:     utils.NowRFC3339(),
+		})
+		return
+	}
+
+	h.taskExecutor.RecordCommandSuccess()
+
+	h.respondRotateCreds(msg, rotateCredsResponse{
+		Status:  "success",
+		Changed: changed,
+		TS:      utils.NowRFC3339(),
+	})
+
+	if !changed {
+		// The platform re-minted nothing, so the live connection is already using
+		// the current credential and there is nothing to reconnect for
+		h.logger.Warn("Credential rotation returned the credential already on disk")
+		return
+	}
+
+	h.logger.Info("Credentials rotated, reconnecting to NATS")
+	if err := h.natsClient.Flush(); err != nil {
+		h.logger.Warn("Failed to flush rotation response before reconnect", zap.Error(err))
+	}
+	if err := h.natsClient.ForceReconnect(); err != nil {
+		h.logger.Error("Failed to reconnect with rotated credentials", zap.Error(err))
+	}
+}
+
+// respondRotateCreds marshals and sends a rotation response
+func (h *CommandHandlers) respondRotateCreds(msg *nats.Msg, response rotateCredsResponse) {
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal rotate_creds response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
+	msg.Respond(responseBytes)
 }
 
 // handleServiceControl processes service start/stop/restart commands
@@ -527,6 +620,10 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 	}
 	if h.config.Tasks.Inventory.Enabled {
 		enabledTasks = append(enabledTasks, "inventory")
+	}
+	// Reported only when it is actually scheduled, which needs platform auth
+	if h.credsRotator != nil && h.config.Tasks.CredsSync.Enabled {
+		enabledTasks = append(enabledTasks, "creds_sync")
 	}
 
 	return &ConfigInfo{

@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/stone-age-io/agent/internal/bootstrap"
 	"github.com/stone-age-io/agent/internal/config"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
+	"github.com/stone-age-io/agent/internal/platform"
 	"github.com/stone-age-io/agent/internal/scheduler"
 	"github.com/stone-age-io/agent/internal/tasks"
 	"go.uber.org/zap"
@@ -48,13 +48,37 @@ func New(configPath string, version string) (*Agent, error) {
 		zap.String("code", cfg.Code),
 		zap.String("location", cfg.Location))
 
-	// Bootstrap NATS credentials from PocketBase if configured
-	if cfg.NATS.Auth.Type == "pocketbase" {
-		if err := bootstrap.FetchCredentials(cfg, logger); err != nil {
+	// Manage NATS credentials through the stone-age.io platform if configured.
+	// The nil-able interface values below are assigned only inside this block:
+	// handing a typed nil *platform.Client to an interface parameter would make
+	// it non-nil, and the rotate command and sync task both test for nil.
+	var (
+		credsRotator natsclient.CredsRotator
+		credsSyncer  scheduler.CredsSyncer
+	)
+	if cfg.NATS.Auth.Type == "stone-age" {
+		platformClient := platform.NewClient(cfg, logger)
+
+		// First boot: fetch the credential before anything tries to connect
+		if err := platformClient.EnsureCredentials(); err != nil {
 			return nil, fmt.Errorf("failed to bootstrap credentials: %w", err)
 		}
-		// Switch auth type to creds for the NATS client — .creds file now exists
-		cfg.NATS.Auth.Type = "creds"
+
+		// Every boot: pick up a credential the platform re-minted while this
+		// agent was down, and renew the session token. Best-effort on purpose —
+		// the credential on disk is usually still good, an unreachable platform
+		// must not stop a working agent from starting, and the scheduled sync
+		// will retry. This is also the recovery path for a device whose
+		// credential was revoked: it exits when NATS rejects it, the service
+		// manager restarts it, and this call heals it on the way back up.
+		if changed, err := platformClient.Sync(); err != nil {
+			logger.Warn("Platform credential sync failed at startup", zap.Error(err))
+		} else if changed {
+			logger.Info("Adopted re-minted NATS credentials from platform")
+		}
+
+		credsRotator = platformClient
+		credsSyncer = platformClient
 	}
 
 	// Create root context with cancellation
@@ -82,7 +106,7 @@ func New(configPath string, version string) (*Agent, error) {
 	}
 
 	// Create command handlers (now with NATS client for health checks and version)
-	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version)
+	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator)
 
 	// Subscribe to commands
 	logger.Info("Subscribing to commands...")
@@ -94,7 +118,7 @@ func New(configPath string, version string) (*Agent, error) {
 
 	// Create and start scheduler
 	logger.Info("Starting scheduler...")
-	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, ctx)
+	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, ctx)
 	if err != nil {
 		cancel() // ADDED: Cancel context on error
 		natsClient.Close()

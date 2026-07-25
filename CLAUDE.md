@@ -48,13 +48,14 @@ agent/
 ├── cmd/agent/main.go          # Entry point, service management
 ├── internal/
 │   ├── agent/agent.go         # Core agent orchestration
-│   ├── bootstrap/             # PocketBase credential bootstrapping
-│   │   └── bootstrap.go       # Fetch .creds from PocketBase on first start
 │   ├── config/                # Configuration loading & validation
 │   │   ├── config.go          # Config structs and Load()
 │   │   └── defaults.go        # Platform-specific defaults
+│   ├── platform/              # stone-age.io platform credential lifecycle
+│   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
+│   │   └── session.go         # Session file (auth token + credential revision)
 │   ├── nats/                  # NATS client and command handlers
-│   │   ├── client.go          # Connection, publish, subscribe
+│   │   ├── client.go          # Connection, publish, subscribe, ForceReconnect
 │   │   └── handlers.go        # Command handlers (ping, exec, health, etc.)
 │   ├── scheduler/             # Scheduled task execution
 │   │   └── scheduler.go       # gocron-based task scheduling
@@ -95,29 +96,41 @@ agent/
 2. **Config** (`internal/config/`):
    - Validates code (alphanumeric, dash, underscore only; legacy key `device_id` accepted as fallback)
    - Optional location (single NATS token), carried in heartbeat/telemetry payloads
-   - Supports auth types: creds, token, userpass, pocketbase, none
+   - Supports auth types: creds, token, userpass, stone-age, none
+   - Requires https for the platform URL unless `allow_insecure_url` is set
    - Platform-specific defaults for paths and exporter URLs
 
-3. **Bootstrap** (`internal/bootstrap/bootstrap.go`):
-   - Fetches NATS .creds from the stone-age.io platform on first start (auth type: pocketbase)
-   - The agent is a Thing: authenticates as itself against the `things` auth collection
-     (single auth-with-password call with `expand=nats_user,location`), creds come from
-     the nats_user relation's `creds_file` field
-   - Fails fast if the thing record's `code` doesn't match the config's `code`;
-     warns if the expanded location's `code` differs from the config's `location`
-   - Idempotent: skips if .creds file already exists
-   - Writes credentials with restrictive permissions (0600)
-   - Switches auth type to "creds" after successful bootstrap
+3. **Platform** (`internal/platform/`): credential lifecycle for auth type `stone-age`
+   - The agent is a Thing: authenticates as itself against the `things` auth collection;
+     its credential lives on the related nats_user record's `creds_file` field
+   - `EnsureCredentials()` — first boot only: password auth with
+     `expand=nats_user,location`, writes .creds (0600, atomic). Skips if the file exists;
+     restores it via the stored session (no password) if the file is gone but a token remains
+   - `Sync()` — startup + `tasks.creds_sync.interval`: refreshes the session token
+     (**no expand**), probes `?fields=updated`, and reads the credential only when that
+     revision moved. A .creds file embeds the nkey seed, and PocketBase does not apply
+     `fields` to auth responses, so this split is what keeps key material off the wire
+   - `Rotate()` — `POST /api/me/nats-creds/rotate`, then read. pb-nats re-mints inside
+     the record-update model hook before the save commits, so no polling is needed.
+     Rotation is not revocation
+   - Fails fast if the thing record's `code` doesn't match the config's `code`, on every
+     authentication; warns if the expanded location's `code` differs
+   - Session file (token + credential revision, 0600) makes `password_env` optional after
+     first boot. The platform's thing token TTL is 7 days, renewed by each sync
+   - Never logs response bodies — one of them is a private key
 
 4. **NATS Client** (`internal/nats/client.go`):
    - JetStream validation on connect (fail-fast)
    - TLS 1.2+ support with optional mTLS
    - Async publishing with automatic retries
+   - `creds` and `stone-age` auth both connect with the .creds file; `UserCredentials`
+     re-reads it on every reconnect, so `ForceReconnect()` adopts a replaced credential
 
 5. **Scheduler** (`internal/scheduler/scheduler.go`):
    - Uses gocron/v2 for interval-based scheduling
    - Context-aware cancellation for clean shutdown
    - Panic recovery for all tasks
+   - `creds_sync` task is scheduled only when a CredsSyncer is supplied (stone-age auth)
 
 6. **Executor** (`internal/tasks/executor.go`):
    - Central task execution with stats tracking
@@ -156,6 +169,7 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.logs` - Log file retrieval
 - `{prefix}.{code}.cmd.exec` - Custom command execution
 - `{prefix}.{code}.cmd.health` - Agent health check (includes agent version)
+- `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (stone-age auth only; answers with an error otherwise)
 
 Command responses use `ts` (RFC3339 UTC) for their timestamp field.
 
@@ -174,12 +188,14 @@ subject_prefix: "agents"         # NATS subject prefix
 nats:
   urls: ["nats://host:4222"]     # NATS server URLs
   auth:
-    type: "creds"                # creds, token, userpass, pocketbase, none
+    type: "creds"                # creds, token, userpass, stone-age, none
     creds_file: "/path/to/creds"
-    pocketbase:                  # Only for pocketbase auth type (platform bootstrap)
+    stone-age:                   # Only for stone-age auth type (platform credentials)
       url: "https://platform.example.com"
       identity: "thing@example.com"     # the thing's login email
-      password_env: "AGENT_PB_PASSWORD"
+      password_env: "AGENT_PLATFORM_PASSWORD"  # optional after first boot
+      session_file: "/path/to/platform-session.json"  # default: beside creds_file
+      allow_insecure_url: false  # http:// platform URL, development only
   tls:
     enabled: true
     ca_file: "/path/to/ca.pem"
@@ -192,6 +208,9 @@ tasks:
     interval: "5m"               # Minimum 30s
     source: "builtin"            # "builtin" (default) or "exporter"
     exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
+  creds_sync:                    # Only runs with stone-age auth
+    enabled: true
+    interval: "24h"              # 1h-72h range (under the platform's 7d token TTL)
 commands:
   scripts_directory: "/path/to/scripts"
   allowed_services: ["nginx"]
@@ -206,6 +225,9 @@ commands:
 - Scripts must be in configured scripts_directory with .ps1/.sh extension
 - No WMI or external command execution for inventory (uses native APIs)
 - Command execution uses context with timeout
+- Secrets on disk (.creds, platform session) are written 0600 through a temp file + rename
+- Never log HTTP response bodies from the platform: the credential read returns an nkey seed.
+  Non-2xx bodies are safe (error documents) and are folded into errors on purpose
 
 ## Testing
 

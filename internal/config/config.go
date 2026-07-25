@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -33,22 +34,42 @@ type NATSConfig struct {
 
 // AuthConfig holds NATS authentication credentials
 type AuthConfig struct {
-	Type       string         `mapstructure:"type"`       // creds, token, userpass, pocketbase, none
-	CredsFile  string         `mapstructure:"creds_file"` // for creds and pocketbase auth
-	Token      string         `mapstructure:"token"`      // for token auth
-	Username   string         `mapstructure:"username"`   // for userpass auth
-	Password   string         `mapstructure:"password"`   // for userpass auth
-	PocketBase PocketBaseAuth `mapstructure:"pocketbase"` // for pocketbase bootstrap
+	Type      string       `mapstructure:"type"`       // creds, token, userpass, stone-age, none
+	CredsFile string       `mapstructure:"creds_file"` // for creds and stone-age auth
+	Token     string       `mapstructure:"token"`      // for token auth
+	Username  string       `mapstructure:"username"`   // for userpass auth
+	Password  string       `mapstructure:"password"`   // for userpass auth
+	StoneAge  StoneAgeAuth `mapstructure:"stone-age"`  // for stone-age.io platform credentials
 }
 
-// PocketBaseAuth configures first-start credential bootstrap against the
-// stone-age.io platform. The agent is a Thing on the platform: it
-// authenticates as itself against the `things` auth collection and reads its
-// NATS creds from the expanded nats_user relation's creds_file field.
-type PocketBaseAuth struct {
-	URL         string `mapstructure:"url"`          // Platform (PocketBase) base URL
-	Identity    string `mapstructure:"identity"`     // The thing's login email
-	PasswordEnv string `mapstructure:"password_env"` // Env var containing the thing's password
+// StoneAgeAuth configures credential management against the stone-age.io
+// platform. The agent is a Thing on the platform: it authenticates as itself
+// against the `things` auth collection and its NATS credential lives on the
+// related nats_user record.
+//
+// The name is the platform, not the database behind it: the agent depends on the
+// stone-age.io schema (things → nats_user → creds_file) and on a route the
+// platform defines itself (POST /api/me/nats-creds/rotate), neither of which
+// comes from PocketBase.
+type StoneAgeAuth struct {
+	URL      string `mapstructure:"url"`      // Platform base URL (https:// unless allow_insecure_url)
+	Identity string `mapstructure:"identity"` // The thing's login email
+
+	// PasswordEnv names the env var holding the thing's password. Required until
+	// the agent has bootstrapped; after that it holds a session token instead and
+	// the password can be removed from the service environment. Without it, a
+	// device whose token has lapsed needs manual re-provisioning.
+	PasswordEnv string `mapstructure:"password_env"`
+
+	// SessionFile stores the platform session token and the revision of the
+	// credential already on disk. Defaults to platform-session.json beside
+	// creds_file.
+	SessionFile string `mapstructure:"session_file"`
+
+	// AllowInsecureURL permits a plain http:// platform URL. Development only:
+	// bootstrap sends the thing's password and receives an nkey seed, so on the
+	// wire in cleartext both are readable.
+	AllowInsecureURL bool `mapstructure:"allow_insecure_url"`
 }
 
 // TLSConfig holds TLS connection settings
@@ -66,6 +87,14 @@ type TasksConfig struct {
 	SystemMetrics SystemMetricsConfig `mapstructure:"system_metrics"`
 	ServiceCheck  ServiceCheckConfig  `mapstructure:"service_check"`
 	Inventory     InventoryConfig     `mapstructure:"inventory"`
+	CredsSync     CredsSyncConfig     `mapstructure:"creds_sync"`
+}
+
+// CredsSyncConfig configures periodic credential upkeep against the platform.
+// Only used with stone-age auth; the scheduler skips the task otherwise.
+type CredsSyncConfig struct {
+	Enabled  bool          `mapstructure:"enabled"`
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 // HeartbeatConfig configures the heartbeat task
@@ -138,6 +167,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Fill in defaults that can only be derived from other config values
+	applyDerivedDefaults(&cfg)
+
 	// Validate configuration
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -174,6 +206,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.service_check.interval", "1m")
 	v.SetDefault("tasks.inventory.enabled", true)
 	v.SetDefault("tasks.inventory.interval", "24h")
+	v.SetDefault("tasks.creds_sync.enabled", true)
+	v.SetDefault("tasks.creds_sync.interval", "24h")
 
 	// Command defaults with platform-specific scripts directory
 	v.SetDefault("commands.timeout", "30s")
@@ -184,6 +218,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logging.file", defaults.LogFile)
 	v.SetDefault("logging.max_size_mb", 100)
 	v.SetDefault("logging.max_backups", 3)
+}
+
+// applyDerivedDefaults fills in values that can only be computed from other
+// config values, so validate() and the rest of the agent see one settled shape.
+func applyDerivedDefaults(cfg *Config) {
+	// The platform session lives next to the credential it belongs to
+	if cfg.NATS.Auth.Type == "stone-age" && cfg.NATS.Auth.StoneAge.SessionFile == "" && cfg.NATS.Auth.CredsFile != "" {
+		cfg.NATS.Auth.StoneAge.SessionFile = filepath.Join(
+			filepath.Dir(cfg.NATS.Auth.CredsFile), "platform-session.json")
+	}
 }
 
 // validate checks that required fields are present and valid
@@ -234,19 +278,33 @@ func validate(cfg *Config) error {
 		if _, err := os.Stat(cfg.NATS.Auth.CredsFile); err != nil {
 			return fmt.Errorf("credentials file not found: %s (%w)", cfg.NATS.Auth.CredsFile, err)
 		}
-	case "pocketbase":
+	case "stone-age":
 		if cfg.NATS.Auth.CredsFile == "" {
-			return fmt.Errorf("creds_file is required for pocketbase auth type (path where .creds will be written)")
+			return fmt.Errorf("creds_file is required for stone-age auth type (path where .creds will be written)")
 		}
-		pb := cfg.NATS.Auth.PocketBase
-		if pb.URL == "" {
-			return fmt.Errorf("pocketbase.url is required for pocketbase auth type")
+		sa := cfg.NATS.Auth.StoneAge
+		if sa.URL == "" {
+			return fmt.Errorf("stone-age.url is required for stone-age auth type")
 		}
-		if pb.Identity == "" {
-			return fmt.Errorf("pocketbase.identity is required for pocketbase auth type")
+		if sa.Identity == "" {
+			return fmt.Errorf("stone-age.identity is required for stone-age auth type")
 		}
-		if pb.PasswordEnv == "" {
-			return fmt.Errorf("pocketbase.password_env is required for pocketbase auth type")
+		// The bootstrap POSTs the thing's password and receives an nkey seed, so
+		// plain http is a development-only choice and has to be asked for
+		if !sa.AllowInsecureURL && !strings.HasPrefix(strings.ToLower(sa.URL), "https://") {
+			return fmt.Errorf("stone-age.url must be https:// (got: %s) - set stone-age.allow_insecure_url: true to override for development", sa.URL)
+		}
+		// The password is only needed while the agent has nothing to work from.
+		// Once it holds a credential or a session token it can authenticate
+		// without one, so requiring it forever would force every deployment to
+		// keep the stronger secret on the device.
+		if sa.PasswordEnv == "" {
+			_, credsErr := os.Stat(cfg.NATS.Auth.CredsFile)
+			_, sessionErr := os.Stat(sa.SessionFile)
+			if credsErr != nil && sessionErr != nil {
+				return fmt.Errorf("stone-age.password_env is required until the agent has bootstrapped (no credentials at %s and no platform session at %s)",
+					cfg.NATS.Auth.CredsFile, sa.SessionFile)
+			}
 		}
 		// .creds file may not exist yet — bootstrap will create it
 	case "token":
@@ -260,7 +318,7 @@ func validate(cfg *Config) error {
 	case "none":
 		// No validation needed
 	default:
-		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, pocketbase, or none)", cfg.NATS.Auth.Type)
+		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, stone-age, or none)", cfg.NATS.Auth.Type)
 	}
 
 	// Validate TLS configuration
@@ -318,6 +376,21 @@ func validate(cfg *Config) error {
 
 	if cfg.Tasks.SystemMetrics.Enabled && cfg.Tasks.SystemMetrics.Interval < 30*time.Second {
 		return fmt.Errorf("system_metrics interval must be at least 30 seconds (got: %v)", cfg.Tasks.SystemMetrics.Interval)
+	}
+
+	// Validate credential sync interval. Only meaningful for stone-age auth —
+	// the scheduler skips the task entirely for every other auth type.
+	if cfg.NATS.Auth.Type == "stone-age" && cfg.Tasks.CredsSync.Enabled {
+		if cfg.Tasks.CredsSync.Interval < time.Hour {
+			return fmt.Errorf("creds_sync interval must be at least 1 hour (got: %v)", cfg.Tasks.CredsSync.Interval)
+		}
+		// Each sync renews the platform session token, whose TTL is set by the
+		// platform (7 days on the things collection today). Syncing has to stay
+		// well inside that window or a couple of missed runs cost the agent its
+		// password-free path.
+		if cfg.Tasks.CredsSync.Interval > 72*time.Hour {
+			return fmt.Errorf("creds_sync interval must not exceed 72 hours (got: %v) - it renews the platform session token before it expires", cfg.Tasks.CredsSync.Interval)
+		}
 	}
 
 	// Validate metrics source

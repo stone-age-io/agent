@@ -137,7 +137,7 @@ sudo ee /usr/local/etc/agent/config.yaml
 **Required changes:**
 1. Set unique `code` (and optionally `location`)
 2. Update `nats.urls` with your NATS server
-3. Configure authentication (credentials file, PocketBase bootstrap, token, or userpass)
+3. Configure authentication (credentials file, stone-age.io platform, token, or userpass)
 4. Adjust monitored services in `tasks.service_check.services`
 
 **Copy NATS credentials (if using creds auth):**
@@ -147,26 +147,26 @@ sudo cp /path/to/device.creds /usr/local/etc/agent/device.creds
 sudo chmod 600 /usr/local/etc/agent/device.creds
 ```
 
-**Or use platform bootstrap (auto-fetch credentials on first start) — the agent logs in as its Thing record and pulls creds from its nats_user relation:**
+**Or let the stone-age.io platform manage credentials — the agent logs in as its Thing record, pulls creds from its nats_user relation, and keeps them current:**
 
 ```yaml
 nats:
   auth:
-    type: "pocketbase"
+    type: "stone-age"
     creds_file: "/usr/local/etc/agent/device.creds"
-    pocketbase:
+    stone-age:
       url: "https://platform.example.com"
       identity: "thing@example.com"          # the thing's login email
-      password_env: "AGENT_PB_PASSWORD"
+      password_env: "AGENT_PLATFORM_PASSWORD"
 ```
 
 Set the environment variable before starting the agent:
 ```bash
 # Add to /etc/rc.conf or service environment
-sudo sysrc agent_env="AGENT_PB_PASSWORD=your-password"
+sudo sysrc agent_env="AGENT_PLATFORM_PASSWORD=your-password"
 ```
 
-See **[PocketBase Bootstrap Guide](bootstrap.md)** for full setup details.
+See **[Platform Credentials Guide](credentials.md)** for full setup details, including removing the password after the first boot.
 
 ---
 

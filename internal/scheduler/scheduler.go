@@ -16,6 +16,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// CredsSyncer renews the platform session and adopts the credential the platform
+// currently holds for this agent, reporting whether the file on disk changed.
+//
+// Declared here rather than imported so this package stays clear of the
+// platform's HTTP concerns. Implemented by *platform.Client.
+type CredsSyncer interface {
+	Sync() (bool, error)
+}
+
 // Scheduler manages periodic task execution
 type Scheduler struct {
 	scheduler     gocron.Scheduler
@@ -25,17 +34,20 @@ type Scheduler struct {
 	config        *config.Config
 	version       string
 	subjectPrefix string
+	credsSyncer   CredsSyncer     // nil unless this agent gets its credentials from the platform
 	ctx           context.Context // ADDED: Context for cancellation
 }
 
 // New creates a new scheduler with configured tasks
 // MODIFIED: Now accepts context for cancellation
+// credsSyncer may be nil, in which case no credential sync task is scheduled.
 func New(
 	logger *zap.Logger,
 	natsClient *natsclient.Client,
 	executor *tasks.Executor,
 	cfg *config.Config,
 	version string,
+	credsSyncer CredsSyncer,
 	ctx context.Context,
 ) (*Scheduler, error) {
 	// Create gocron scheduler
@@ -52,6 +64,7 @@ func New(
 		config:        cfg,
 		version:       version,
 		subjectPrefix: cfg.SubjectPrefix,
+		credsSyncer:   credsSyncer,
 		ctx:           ctx, // ADDED: Store context
 	}
 
@@ -217,6 +230,21 @@ func (s *Scheduler) scheduleTasks() error {
 			zap.Duration("interval", s.config.Tasks.Inventory.Interval))
 	}
 
+	// Schedule credential sync WITH PANIC RECOVERY AND CONTEXT CHECK.
+	// Only for platform-managed agents — credsSyncer is nil for every other auth
+	// type, and the startup sync in agent.New has already run one pass.
+	if s.credsSyncer != nil && s.config.Tasks.CredsSync.Enabled {
+		_, err := s.scheduler.NewJob(
+			gocron.DurationJob(s.config.Tasks.CredsSync.Interval),
+			gocron.NewTask(s.wrapTaskWithRecovery("creds_sync", s.syncCredentials)),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to schedule credential sync: %w", err)
+		}
+		s.logger.Info("Scheduled credential sync task",
+			zap.Duration("interval", s.config.Tasks.CredsSync.Interval))
+	}
+
 	return nil
 }
 
@@ -260,6 +288,40 @@ func (s *Scheduler) publishHeartbeat(code string) {
 
 	// Record successful execution
 	s.executor.RecordHeartbeat()
+}
+
+// syncCredentials renews the platform session token and adopts a credential the
+// platform has re-minted — an operator pressing Regenerate, or a rotation
+// triggered from elsewhere in the fleet.
+//
+// It is also how a device with rejected credentials heals itself: this path never
+// touches NATS, so it keeps working while the NATS connection does not.
+//
+// Failures are warnings. The credential on disk is usually still good, the next
+// run will retry, and the platform being unreachable is not the agent's problem
+// to escalate.
+func (s *Scheduler) syncCredentials() {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	changed, err := s.credsSyncer.Sync()
+	if err != nil {
+		s.logger.Warn("Platform credential sync failed", zap.Error(err))
+		return
+	}
+
+	if !changed {
+		s.logger.Debug("Platform credential sync: credentials unchanged")
+		return
+	}
+
+	s.logger.Info("NATS credentials updated from platform, reconnecting")
+	if err := s.nats.ForceReconnect(); err != nil {
+		s.logger.Error("Failed to reconnect with updated credentials", zap.Error(err))
+	}
 }
 
 // publishMetrics scrapes and publishes system metrics

@@ -198,22 +198,22 @@ Understanding the design and components of the agent platform.
 
 ## Message Flow Examples
 
-### 0. Credential Bootstrap (First Start)
+### 0. Credential Lifecycle (auth type: "stone-age")
 
 The agent is a Thing on the stone-age.io platform. It authenticates as itself;
 the auth response (with `expand`) carries everything bootstrap needs in one call.
 
 ```
 ┌─────────┐
-│  Agent  │ First startup (auth type: "pocketbase")
+│  Agent  │ First startup
 └────┬────┘
-     │ 1. Check if .creds file exists → skip if yes
+     │ 1. Check if .creds file exists → skip to sync if yes
      │
-     │ 2. Read the thing's password from env var (AGENT_PB_PASSWORD)
+     │ 2. Read the thing's password from env var (AGENT_PLATFORM_PASSWORD)
      ▼
 ┌────────────┐
 │  Platform  │ 3. POST /api/collections/things/auth-with-password
-│(PocketBase)│         ?expand=nats_user,location
+│            │         ?expand=nats_user,location
 └────┬───────┘    → Returns the thing record with expanded relations
      │
      ▼
@@ -221,7 +221,7 @@ the auth response (with `expand`) carries everything bootstrap needs in one call
 │  Agent  │ 4. Verify record.code == config code (fail on mismatch)
 └────┬────┘ 5. Read creds from record.expand.nats_user.creds_file
      │      6. Write .creds file (permissions: 0600)
-     │      7. Switch auth type to "creds"
+     │      7. Store session token + credential revision (0600)
      │      8. Connect to NATS using .creds
      ▼
 ┌─────────┐
@@ -233,7 +233,47 @@ Access rules on the platform scope everything to the authenticated thing: it can
 see only its own record and only its assigned NATS user, so no device can read
 another device's credentials.
 
-After initial bootstrap, the agent uses the stored `.creds` file on subsequent starts (no platform dependency at runtime).
+**Upkeep** runs once at startup and then on `tasks.creds_sync.interval` (24h by
+default). It deliberately keeps key material off the wire unless it changed:
+
+```
+┌─────────┐
+│  Agent  │ Every 24 hours
+└────┬────┘
+     │ 1. POST /api/collections/things/auth-refresh    (NO expand)
+     │    → fresh session token, no credential in the response
+     │
+     │ 2. GET /api/collections/nats_users/records/{id}?fields=updated
+     │    → just a timestamp
+     ▼
+  revision unchanged? ──yes──► done. Nothing else is requested.
+     │
+     no
+     ▼
+     │ 3. GET the full record → new creds_file
+     │ 4. Write .creds (atomic replace), force NATS reconnect
+     ▼
+┌─────────┐
+│  NATS   │ Reconnects with the new credential, subscriptions intact
+└─────────┘
+```
+
+A `.creds` file embeds the nkey seed, so the split matters: `?fields=` is not
+applied to PocketBase auth responses, which means any auth call with
+`expand=nats_user` returns the whole credential whether or not it is needed.
+
+Because this path never touches NATS, it is also the recovery path for a device
+whose credential was revoked — the agent exits, the service manager restarts it,
+and the startup sync heals it.
+
+**Rotation** (`cmd.rotate_creds`, or the platform's Regenerate button) posts to
+`/api/me/nats-creds/rotate`, then reads and installs the re-minted credential.
+pb-nats re-mints inside the record-update model hook, before the save commits, so
+the new credential is readable immediately — no polling. Rotation is not
+revocation: the old credential stays valid until it expires or is revoked.
+
+After the first boot the password is optional: the stored session token is
+renewed by every sync. See **[Platform Credentials](credentials.md)**.
 
 ---
 
@@ -341,11 +381,12 @@ After initial bootstrap, the agent uses the stored `.creds` file on subsequent s
 - Account isolation (tenant cannot access another tenant's subjects)
 - Subject-based permissions
 
-**Bootstrap (PocketBase):**
-- Credentials fetched over HTTPS from PocketBase
-- Password stored in environment variable (never in config files)
-- `.creds` file written with owner-only permissions (0600)
-- Bootstrap runs once; subsequent starts use stored credentials
+**Platform Credentials (stone-age auth):**
+- Credentials fetched over HTTPS; a plain http:// platform URL is refused unless explicitly allowed for development
+- Password read from an environment variable (never in config files), and optional once the agent holds a session token
+- `.creds` and the session file written with owner-only permissions (0600), replaced atomically
+- Routine syncs transfer no key material: the token refresh omits `expand` and the drift check asks only for `updated`
+- Response bodies are never logged — on the credential read, one of them is a private key
 
 **Agent Level:**
 - Whitelists for services, commands, log paths

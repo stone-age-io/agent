@@ -39,6 +39,17 @@ func main() {
 		DisplayName: "Stone Age Agent",
 		Description: "Lightweight NATS-native management and observability agent",
 		Arguments:   []string{"-config", configPath},
+
+		// Restart on failure. The agent exits rather than limps when it cannot
+		// connect to NATS — a rejected credential, for one — and getting restarted
+		// is what gives it another chance to re-sync its credentials from the
+		// platform and heal. systemd gets Restart=always from this library by
+		// default, but Windows configures no recovery action unless asked.
+		Option: service.KeyValue{
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": "15s",
+			"OnFailureResetPeriod":   10,
+		},
 	}
 
 	prg := &program{

@@ -48,7 +48,7 @@ Agent is a purpose-built system management tool that provides remote management 
 - **TLS Support**: Encrypted communication
 
 ### Provisioning
-- **PocketBase Bootstrap**: Auto-fetch NATS credentials on first start
+- **Platform Credentials**: Auto-fetch NATS credentials on first start, then renew and rotate them without redistribution
 - **Manual Credentials**: Pre-distribute `.creds` files
 - **Token / UserPass**: Simple auth for development
 
@@ -186,15 +186,15 @@ nats:
     type: "creds"
     creds_file: "/path/to/device.creds"
 
-    # Option 2: Platform bootstrap (auto-fetch .creds on first start).
-    # The agent is a Thing on the stone-age.io platform: it logs in as itself
-    # and reads creds from its nats_user relation.
-    # type: "pocketbase"
+    # Option 2: stone-age.io platform (fetches and maintains .creds).
+    # The agent is a Thing on the platform: it logs in as itself and its
+    # credential lives on its nats_user relation.
+    # type: "stone-age"
     # creds_file: "/etc/agent/device.creds"
-    # pocketbase:
+    # stone-age:
     #   url: "https://platform.example.com"
     #   identity: "thing@example.com"     # the thing's login email
-    #   password_env: "AGENT_PB_PASSWORD"
+    #   password_env: "AGENT_PLATFORM_PASSWORD"
 
 # Scheduled Tasks
 tasks:
@@ -252,7 +252,7 @@ commands:
 
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
-- **[PocketBase Bootstrap](docs/bootstrap.md)** - Auto-provisioning credentials from PocketBase
+- **[Platform Credentials](docs/credentials.md)** - Provisioning, renewing, and rotating credentials from the stone-age.io platform
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 
 ---

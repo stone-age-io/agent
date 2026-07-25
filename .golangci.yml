@@ -47,9 +47,9 @@ linters:
       - linters: [gosec]
         path: internal/tasks/inventory_linux.go
         text: "G115"
-      # G704 SSRF: bootstrap URL comes from user config, not untrusted input
+      # G704 SSRF: the platform URL comes from user config, not untrusted input
       - linters: [gosec]
-        path: internal/bootstrap/
+        path: internal/platform/
         text: "G704"
 
 issues:

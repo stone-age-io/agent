@@ -69,8 +69,15 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 
 	// Add authentication based on config type
 	switch cfg.Auth.Type {
-	case "creds":
+	// stone-age auth is creds auth once the platform has put the file in place:
+	// the agent connects with the .creds file either way. Keeping it a distinct
+	// case rather than rewriting the config's auth type preserves the fact that
+	// this agent manages its credentials through the platform, which is what the
+	// rotate command and the creds_sync task key off.
+	case "creds", "stone-age":
 		logger.Info("Using credentials file authentication", zap.String("file", cfg.Auth.CredsFile))
+		// UserCredentials re-reads the file on every connect and reconnect, so a
+		// credential replaced at runtime takes effect on the next reconnect
 		opts = append(opts, nats.UserCredentials(cfg.Auth.CredsFile))
 	case "token":
 		logger.Info("Using token authentication")
@@ -318,6 +325,24 @@ func (c *Client) Close() {
 // IsConnected returns true if the NATS connection is currently active
 func (c *Client) IsConnected() bool {
 	return c.conn.IsConnected()
+}
+
+// Flush waits for the server to acknowledge everything already published.
+// Callers that are about to drop the connection use this to make sure a reply
+// they just sent actually left.
+func (c *Client) Flush() error {
+	return c.conn.Flush()
+}
+
+// ForceReconnect drops the current connection and reconnects, keeping existing
+// subscriptions (the client re-sends them on reconnect).
+//
+// This is how a freshly written .creds file takes effect without restarting the
+// agent: UserCredentials reads the file on every connect, so the reconnect picks
+// up whatever is on disk now.
+func (c *Client) ForceReconnect() error {
+	c.logger.Info("Forcing NATS reconnect to pick up new credentials")
+	return c.conn.ForceReconnect()
 }
 
 // Stats returns connection statistics

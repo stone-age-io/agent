@@ -884,6 +884,210 @@ commands:
 	}
 }
 
+// TestLoadStoneAgeAuth covers the hyphenated `stone-age` config key end to end —
+// through viper and mapstructure, not just validate() — plus the derived session
+// file path and the https requirement.
+func TestLoadStoneAgeAuth(t *testing.T) {
+	dir := t.TempDir()
+	credsFile := filepath.Join(dir, "device.creds")
+
+	// The password satisfies validate() without anything existing on disk yet
+	yaml := `
+code: "server-01"
+nats:
+  urls: ["nats://localhost:4222"]
+  auth:
+    type: "stone-age"
+    creds_file: "` + filepath.ToSlash(credsFile) + `"
+    stone-age:
+      url: "https://platform.example.com"
+      identity: "thing@example.com"
+      password_env: "AGENT_PLATFORM_PASSWORD"
+tasks:
+  service_check:
+    enabled: false
+commands:
+  scripts_directory: ""
+`
+
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	sa := cfg.NATS.Auth.StoneAge
+	if sa.URL != "https://platform.example.com" {
+		t.Errorf("stone-age.url = %q, want the configured URL (is the hyphenated key parsing?)", sa.URL)
+	}
+	if sa.Identity != "thing@example.com" {
+		t.Errorf("stone-age.identity = %q, want thing@example.com", sa.Identity)
+	}
+	if sa.PasswordEnv != "AGENT_PLATFORM_PASSWORD" {
+		t.Errorf("stone-age.password_env = %q, want AGENT_PLATFORM_PASSWORD", sa.PasswordEnv)
+	}
+
+	wantSession := filepath.Join(dir, "platform-session.json")
+	if sa.SessionFile != wantSession {
+		t.Errorf("session_file = %q, want it derived beside creds_file as %q", sa.SessionFile, wantSession)
+	}
+
+	// creds_sync defaults on, inside the platform's token TTL
+	if !cfg.Tasks.CredsSync.Enabled {
+		t.Error("creds_sync should default to enabled")
+	}
+	if cfg.Tasks.CredsSync.Interval != 24*time.Hour {
+		t.Errorf("creds_sync interval = %v, want 24h", cfg.Tasks.CredsSync.Interval)
+	}
+}
+
+func TestValidateStoneAgeAuth(t *testing.T) {
+	dir := t.TempDir()
+	credsFile := filepath.Join(dir, "device.creds")
+	sessionFile := filepath.Join(dir, "platform-session.json")
+
+	valid := func() *Config {
+		return &Config{
+			Code:          "server-01",
+			SubjectPrefix: "agents",
+			NATS: NATSConfig{
+				URLs: []string{"nats://localhost:4222"},
+				Auth: AuthConfig{
+					Type:      "stone-age",
+					CredsFile: credsFile,
+					StoneAge: StoneAgeAuth{
+						URL:         "https://platform.example.com",
+						Identity:    "thing@example.com",
+						PasswordEnv: "AGENT_PLATFORM_PASSWORD",
+						SessionFile: sessionFile,
+					},
+				},
+			},
+			Tasks: TasksConfig{
+				Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
+				SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
+				CredsSync:     CredsSyncConfig{Enabled: true, Interval: 24 * time.Hour},
+			},
+			Commands: CommandsConfig{Timeout: 30 * time.Second},
+			Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:   "valid",
+			mutate: func(*Config) {},
+		},
+		{
+			name:    "http url rejected",
+			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.URL = "http://platform.example.com" },
+			wantErr: "must be https",
+		},
+		{
+			name: "http url allowed when opted in",
+			mutate: func(c *Config) {
+				c.NATS.Auth.StoneAge.URL = "http://platform.example.com"
+				c.NATS.Auth.StoneAge.AllowInsecureURL = true
+			},
+		},
+		{
+			name:    "missing url",
+			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.URL = "" },
+			wantErr: "stone-age.url is required",
+		},
+		{
+			name:    "missing identity",
+			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.Identity = "" },
+			wantErr: "stone-age.identity is required",
+		},
+		{
+			name:    "missing creds_file",
+			mutate:  func(c *Config) { c.NATS.Auth.CredsFile = "" },
+			wantErr: "creds_file is required",
+		},
+		{
+			// Nothing on disk to authenticate with, so the password is mandatory
+			name:    "no password and nothing bootstrapped",
+			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.PasswordEnv = "" },
+			wantErr: "password_env is required",
+		},
+		{
+			name:    "creds_sync interval too short",
+			mutate:  func(c *Config) { c.Tasks.CredsSync.Interval = 30 * time.Minute },
+			wantErr: "at least 1 hour",
+		},
+		{
+			name:    "creds_sync interval beyond token ttl",
+			mutate:  func(c *Config) { c.Tasks.CredsSync.Interval = 96 * time.Hour },
+			wantErr: "must not exceed 72 hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid()
+			tt.mutate(cfg)
+
+			err := validate(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || indexOf(err.Error(), tt.wantErr) < 0 {
+				t.Fatalf("validate() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateStoneAgeAuthPasswordOptionalOnceBootstrapped pins the rule that
+// lets a deployment drop the thing's password after the first boot.
+func TestValidateStoneAgeAuthPasswordOptionalOnceBootstrapped(t *testing.T) {
+	dir := t.TempDir()
+	credsFile := filepath.Join(dir, "device.creds")
+	if err := os.WriteFile(credsFile, []byte("creds"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{
+		Code:          "server-01",
+		SubjectPrefix: "agents",
+		NATS: NATSConfig{
+			URLs: []string{"nats://localhost:4222"},
+			Auth: AuthConfig{
+				Type:      "stone-age",
+				CredsFile: credsFile,
+				StoneAge: StoneAgeAuth{
+					URL:         "https://platform.example.com",
+					Identity:    "thing@example.com",
+					SessionFile: filepath.Join(dir, "platform-session.json"),
+				},
+			},
+		},
+		Tasks: TasksConfig{
+			Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
+			SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
+			CredsSync:     CredsSyncConfig{Enabled: true, Interval: 24 * time.Hour},
+		},
+		Commands: CommandsConfig{Timeout: 30 * time.Second},
+		Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},
+	}
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() error = %v, want nil (credentials exist, so no password is needed)", err)
+	}
+}
+
 // Helper function
 func indexOf(s, substr string) int {
 	for i := 0; i <= len(s)-len(substr); i++ {
