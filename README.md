@@ -62,13 +62,16 @@ Choose your platform:
 <summary><b>Windows</b></summary>
 
 ```powershell
-# 1. Download agent
-# Get latest release from: https://github.com/stone-age-io/agent/releases
+# 1. Download and extract the release archive
+$version = "0.1.0"
+Invoke-WebRequest -Uri "https://github.com/stone-age-io/agent/releases/download/v$version/agent_${version}_windows_amd64.zip" -OutFile "$env:TEMP\agent.zip"
+Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force
 
-# 2. Install
+# 2. Install (the archive carries the per-OS example configs under configs\)
 New-Item -ItemType Directory -Force -Path "C:\Program Files\Agent"
-Copy-Item agent.exe "C:\Program Files\Agent\"
-Copy-Item config.yaml "C:\ProgramData\Agent\"
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\Agent"
+Copy-Item "$env:TEMP\agent\agent.exe" "C:\Program Files\Agent\"
+Copy-Item "$env:TEMP\agent\configs\windows\config.yaml.example" "C:\ProgramData\Agent\config.yaml"
 
 # 3. Configure
 notepad "C:\ProgramData\Agent\config.yaml"
