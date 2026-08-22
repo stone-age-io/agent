@@ -11,7 +11,12 @@ import (
 )
 
 var (
-	version = "1.0.0" // Set via -ldflags during build
+	// Stamped at build time via -ldflags "-X main.version=<version>", which is
+	// what goreleaser does on a tag. "dev" is deliberate for a plain go build:
+	// this string is reported in every heartbeat and command reply, so a default
+	// of "1.0.0" meant an unreleased build claiming a release number in
+	// telemetry.
+	version = "dev"
 )
 
 // program implements the service.Interface
@@ -31,7 +36,14 @@ func main() {
 
 	flag.StringVar(&configPath, "config", defaultConfigPath, "Path to configuration file")
 	flag.StringVar(&svcFlag, "service", "", "Control the system service: install, uninstall, start, stop, restart")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Print the version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println("agent", version)
+		return
+	}
 
 	// Service configuration
 	svcConfig := &service.Config{

@@ -1,0 +1,39 @@
+# Cuts a release when a v* tag is pushed: cross-compiled binaries via goreleaser,
+# checksums, and a GitHub release whose notes come from the commits in the tag.
+#
+# No container image here, unlike the platform's release workflow -- this binary
+# is installed onto a host, not run as a service in a cluster, and an image would
+# be a second definition of the same artifact with nobody to consume it.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser derives the version and the changelog from tags, and a
+          # shallow clone has neither.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
