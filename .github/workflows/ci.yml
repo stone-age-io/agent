@@ -1,0 +1,52 @@
+# Ordinary build hygiene on every push and pull request, with one addition that
+# matters more here than anywhere else in the project.
+#
+# This repo has per-OS implementation files -- inventory_windows.go,
+# service_linux.go, inventory_freebsd.go and friends. `go vet ./...` on a Linux
+# runner never compiles the Windows or FreeBSD ones, so a break in either can sit
+# unnoticed until a tag is pushed and goreleaser fails, or worse, until a release
+# ships. Vetting per GOOS is the only way this repo's code gets type-checked at
+# all on two of its three supported platforms.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      # Per-GOOS, for the reason at the top of this file.
+      - name: Vet and build every supported OS
+        run: |
+          for goos in linux windows freebsd; do
+            echo "==> $goos"
+            GOOS=$goos go vet ./...
+            CGO_ENABLED=0 GOOS=$goos GOARCH=amd64 go build -o /dev/null ./cmd/agent
+          done
+          echo "==> linux/arm64"
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/agent

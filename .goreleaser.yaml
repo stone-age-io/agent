@@ -1,0 +1,101 @@
+# Release configuration for the edge agent.
+#
+# The target matrix is the one the makefile already built and the docs already
+# claim -- Linux (amd64/arm64), Windows (amd64), FreeBSD (amd64) -- and no more.
+# Every one of those four is verified to cross-compile; darwin and the arm64
+# variants of Windows and FreeBSD are omitted because nothing documents or tests
+# them, and an archive nobody has run is worse than a missing one on hardware
+# somebody has to drive to.
+#
+# There are no service unit files to ship: the agent installs itself as a
+# systemd unit, a Windows service, or an rc.d script through
+# kardianos/service (`agent -service install`). What an operator does need is
+# the example config for their OS and the install guide, so both directories
+# travel in every archive.
+version: 2
+
+project_name: agent
+
+builds:
+  - id: agent
+    main: ./cmd/agent
+    binary: agent
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      # This string is reported in every heartbeat and command reply, not just
+      # `-version`, so an unstamped release would be a fleet reporting "dev".
+      - -s -w -X main.version={{.Version}}
+    goos: [linux, windows, freebsd]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+      - goos: freebsd
+        goarch: arm64
+
+archives:
+  - id: agent
+    ids: [agent]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      # Per-OS example configs and install guides. All of them, in every
+      # archive: goreleaser cannot vary files by GOOS within one archive, and
+      # three small text files are a better answer than three archive
+      # definitions that can drift apart.
+      - configs/**/*
+      - docs/*.md
+    name_template: >-
+      agent_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+
+release:
+  github:
+    owner: stone-age-io
+    name: agent
+  header: |
+    ## agent {{ .Tag }}
+
+    The Stone-Age.io edge agent: a NATS-native management and observability
+    daemon for Linux, Windows and FreeBSD. Outbound-only -- it opens no
+    listening port.
+
+    Install it as a service on the target host:
+
+    ```
+    ./agent -config /etc/agent/config.yaml -service install
+    ./agent -service start
+    ```
+
+    Example configs for each OS are in `configs/`, and the install guides are in
+    `docs/`.
+  footer: |
+    Pre-1.0: treat a minor version as potentially breaking, and pin what you
+    deploy.
+
+    **Not to be confused with `leaf-sync`.** This agent manages one host; the
+    `leaf-sync` binary, released from the
+    [platform](https://github.com/stone-age-io/platform) repo, mirrors a site's
+    configuration into a NATS leaf node. A site often runs both.
+
+    **Full changelog**: https://github.com/stone-age-io/agent/commits/{{ .Tag }}

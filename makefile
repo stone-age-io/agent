@@ -1,7 +1,7 @@
 # Agent Makefile
 
 # Version can be overridden: make build VERSION=1.2.3
-VERSION ?= 1.0.0
+VERSION ?= dev
 
 # Binary names
 BINARY_BASE := agent
