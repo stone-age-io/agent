@@ -17,7 +17,7 @@ A lightweight, NATS-native system management and observability agent for Windows
 make build
 
 # Build for all platforms (Linux amd64/arm64, Windows, FreeBSD)
-make build-all VERSION=1.0.0
+make build-all VERSION=0.1.0
 
 # Run tests with race detection and coverage
 make test

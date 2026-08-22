@@ -469,7 +469,7 @@ nats request "agents.device-123.cmd.health" '{}'
 {
   "status": "healthy",
   "agent": {
-    "version": "1.0.0",
+    "version": "0.1.0",
     "uptime_seconds": 86400,
     "goroutines": 15,
     "memory_mb": 45.2

@@ -19,9 +19,9 @@ Complete guide for installing and configuring the agent on Windows systems.
 ```powershell
 # Run as Administrator
 
-# Download agent (replace VERSION with latest release)
-$agentVersion = "1.0.0"
-$downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent-windows-amd64.exe"
+# Download agent (set the version to the latest release)
+$agentVersion = "0.1.0"
+$downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent_${agentVersion}_windows_amd64.zip"
 $agentPath = "C:\Program Files\Agent"
 $configPath = "C:\ProgramData\Agent"
 
@@ -30,8 +30,12 @@ New-Item -ItemType Directory -Force -Path $agentPath
 New-Item -ItemType Directory -Force -Path $configPath
 New-Item -ItemType Directory -Force -Path "$configPath\Scripts"
 
-# Download agent binary
-Invoke-WebRequest -Uri $downloadUrl -OutFile "$agentPath\agent.exe"
+# Download and extract the release archive. It also carries LICENSE,
+# README.md, the per-OS example configs under configs\, and these guides
+# under docs\.
+Invoke-WebRequest -Uri $downloadUrl -OutFile "$env:TEMP\agent.zip"
+Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force
+Move-Item -Path "$env:TEMP\agent\agent.exe" -Destination "$agentPath\agent.exe" -Force
 
 # Set permissions (Agent directory - read/execute)
 $acl = Get-Acl $agentPath

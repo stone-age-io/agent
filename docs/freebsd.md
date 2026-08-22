@@ -16,12 +16,15 @@ Complete guide for installing and configuring the agent on FreeBSD systems.
 ### 1. Install Agent
 
 ```bash
-# Download agent binary (replace VERSION with latest release)
+# Download and extract the release archive (set VERSION to the latest release)
 cd /tmp
-fetch https://github.com/stone-age-io/agent/releases/download/v1.0.0/agent-freebsd-amd64
+VERSION=0.1.0
+fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
+tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 
-# Install binary
-sudo mv agent-freebsd-amd64 /usr/local/bin/agent
+# Install binary. The archive also carries LICENSE, README.md, the per-OS
+# example configs under configs/, and these guides under docs/.
+sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # Create directories

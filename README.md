@@ -92,13 +92,15 @@ Start-Service agent
 
 ```bash
 # 1. Install agent
-wget https://github.com/stone-age-io/agent/releases/download/v1.0.0/agent-linux-amd64
-sudo mv agent-linux-amd64 /usr/local/bin/agent
+VERSION=0.1.0
+wget https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_linux_amd64.tar.gz
+tar xzf agent_${VERSION}_linux_amd64.tar.gz
+sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
-# 2. Configure
+# 2. Configure (the example config ships in the archive)
 sudo mkdir -p /etc/agent
-sudo cp config.yaml /etc/agent/
+sudo cp configs/linux/config.yaml.example /etc/agent/config.yaml
 sudo nano /etc/agent/config.yaml
 
 # 3. Install as service
@@ -119,13 +121,15 @@ sudo systemctl start agent
 
 ```bash
 # 1. Install agent
-fetch https://github.com/stone-age-io/agent/releases/download/v1.0.0/agent-freebsd-amd64
-sudo mv agent-freebsd-amd64 /usr/local/bin/agent
+VERSION=0.1.0
+fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
+tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
+sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
-# 2. Configure
+# 2. Configure (the example config ships in the archive)
 sudo mkdir -p /usr/local/etc/agent
-sudo cp config.yaml /usr/local/etc/agent/
+sudo cp configs/freebsd/config.yaml.example /usr/local/etc/agent/config.yaml
 sudo ee /usr/local/etc/agent/config.yaml
 
 # 3. Install as service
@@ -272,8 +276,13 @@ make build
 
 ### Build for All Platforms
 ```bash
-make build-all VERSION=1.0.0
+make build-all VERSION=0.1.0
 ```
+
+The makefile is for local and development builds. Releases are cut by
+goreleaser from a pushed `v*` tag (`.goreleaser.yaml`,
+`.github/workflows/release.yml`), which stamps the version and publishes the
+archives the install steps above download.
 
 Generates binaries:
 - `build/agent-linux-amd64`
