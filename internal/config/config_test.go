@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1096,4 +1097,148 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+func TestValidateNebula(t *testing.T) {
+	tests := []struct {
+		name     string
+		nebula   NebulaConfig
+		authType string
+		wantErr  bool
+		errText  string
+	}{
+		// The feature is off by default, and nothing about it is checked when it
+		// is off. An agent that never touches the nebula block cannot be refused
+		// on account of one.
+		{
+			name:     "disabled ignores everything else",
+			nebula:   NebulaConfig{Enabled: false, Source: "nonsense"},
+			authType: "creds",
+			wantErr:  false,
+		},
+		{
+			name: "platform source with stone-age auth",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "platform",
+				CacheFile:     "/var/lib/agent/nebula-cache.yaml",
+				SyncInterval:  10 * time.Minute,
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "stone-age",
+			wantErr:  false,
+		},
+		{
+			name: "file source needs no platform",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "file",
+				ConfigFile:    "/etc/agent/nebula.yaml",
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "creds",
+			wantErr:  false,
+		},
+
+		{
+			name: "platform source without stone-age auth",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "platform",
+				CacheFile:     "/var/lib/agent/nebula-cache.yaml",
+				SyncInterval:  10 * time.Minute,
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "creds",
+			wantErr:  true,
+			errText:  "requires stone-age auth",
+		},
+		{
+			name: "file source without a path",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "file",
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "creds",
+			wantErr:  true,
+			errText:  "nebula.config_file is required",
+		},
+		{
+			name: "unknown source",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "http",
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "stone-age",
+			wantErr:  true,
+			errText:  "must be \"platform\" or \"file\"",
+		},
+
+		// The sync interval is the revocation latency for this device, which is
+		// why it has an upper bound at all — most intervals in this config only
+		// have a lower one.
+		{
+			name: "sync interval too short",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "platform",
+				CacheFile:     "/var/lib/agent/nebula-cache.yaml",
+				SyncInterval:  30 * time.Second,
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "stone-age",
+			wantErr:  true,
+			errText:  "at least 1 minute",
+		},
+		{
+			name: "sync interval too long",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "platform",
+				CacheFile:     "/var/lib/agent/nebula-cache.yaml",
+				SyncInterval:  6 * time.Hour,
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "stone-age",
+			wantErr:  true,
+			errText:  "must not exceed 1 hour",
+		},
+		{
+			name: "verify timeout too short",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "file",
+				ConfigFile:    "/etc/agent/nebula.yaml",
+				VerifyTimeout: time.Second,
+			},
+			authType: "creds",
+			wantErr:  true,
+			errText:  "at least 5 seconds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Nebula: tt.nebula}
+			cfg.NATS.Auth.Type = tt.authType
+
+			err := validateNebula(cfg)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validateNebula() returned no error, want one containing %q", tt.errText)
+				}
+				if !strings.Contains(err.Error(), tt.errText) {
+					t.Errorf("validateNebula() error = %q, want it to contain %q", err.Error(), tt.errText)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("validateNebula() error = %v, want nil", err)
+			}
+		})
+	}
 }

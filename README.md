@@ -267,7 +267,7 @@ commands:
 ## Building from Source
 
 ### Prerequisites
-- Go 1.24+
+- Go 1.26+
 - Make (optional, for convenience)
 
 ### Build for Current Platform

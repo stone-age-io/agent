@@ -17,9 +17,49 @@ type Config struct {
 	Location      string         `mapstructure:"location"` // Optional deployment location, carried in telemetry payloads
 	SubjectPrefix string         `mapstructure:"subject_prefix"`
 	NATS          NATSConfig     `mapstructure:"nats"`
+	Nebula        NebulaConfig   `mapstructure:"nebula"`
 	Tasks         TasksConfig    `mapstructure:"tasks"`
 	Commands      CommandsConfig `mapstructure:"commands"`
 	Logging       LoggingConfig  `mapstructure:"logging"`
+}
+
+// NebulaConfig configures the embedded Nebula overlay host. Disabled by default:
+// an agent that leaves this alone behaves exactly as it did before the feature
+// existed.
+//
+// See docs/nebula-design.md for why the agent runs Nebula in-process rather than
+// supervising a separate service, and why there is only one mode.
+type NebulaConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+
+	// Source is where the config comes from: "platform" (the stone-age.io
+	// nebula_hosts record for this agent's thing) or "file".
+	//
+	// These are not peers. "platform" polls for changes, rolls back a config that
+	// cannot reach the mesh, and reports the revision it adopted. "file" reads a
+	// path and does none of that — it exists so the feature works without the
+	// platform, and so a device can join the mesh before it has a thing record.
+	Source string `mapstructure:"source"`
+
+	// ConfigFile is the Nebula config to load when Source is "file".
+	ConfigFile string `mapstructure:"config_file"`
+
+	// CacheFile holds the last config known to have reached the mesh, so a device
+	// that reboots while the platform is unreachable still comes up on the
+	// overlay. Contains the host private key: written 0600. Unused by "file".
+	CacheFile string `mapstructure:"cache_file"`
+
+	// SyncInterval is how often to ask the platform whether the config changed.
+	//
+	// THIS IS A SECURITY NUMBER, NOT A TUNING KNOB. Nebula has no CRL: revoking a
+	// certificate means adding its fingerprint to pki.blocklist in every other
+	// host's config, and a peer only learns about it when it re-reads that config.
+	// The sync interval is therefore the revocation latency for this device.
+	SyncInterval time.Duration `mapstructure:"sync_interval"`
+
+	// VerifyTimeout is how long a newly applied config has to reach a lighthouse
+	// before it is treated as broken and rolled back.
+	VerifyTimeout time.Duration `mapstructure:"verify_timeout"`
 }
 
 // NATSConfig holds NATS connection settings
@@ -209,6 +249,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.creds_sync.enabled", true)
 	v.SetDefault("tasks.creds_sync.interval", "24h")
 
+	// Nebula defaults. Off unless asked for; the paths sit beside the other
+	// platform-managed secrets.
+	v.SetDefault("nebula.enabled", false)
+	v.SetDefault("nebula.source", "platform")
+	v.SetDefault("nebula.cache_file", defaults.NebulaCacheFile)
+	v.SetDefault("nebula.sync_interval", "10m")
+	v.SetDefault("nebula.verify_timeout", "30s")
+
 	// Command defaults with platform-specific scripts directory
 	v.SetDefault("commands.timeout", "30s")
 	v.SetDefault("commands.scripts_directory", defaults.ScriptsDirectory)
@@ -393,6 +441,10 @@ func validate(cfg *Config) error {
 		}
 	}
 
+	if err := validateNebula(cfg); err != nil {
+		return err
+	}
+
 	// Validate metrics source
 	if cfg.Tasks.SystemMetrics.Enabled {
 		source := strings.ToLower(cfg.Tasks.SystemMetrics.Source)
@@ -468,6 +520,58 @@ func validateSubjectPrefix(prefix string) error {
 		if !validToken.MatchString(token) {
 			return fmt.Errorf("token '%s' contains invalid characters (only alphanumeric, dash, and underscore allowed)", token)
 		}
+	}
+
+	return nil
+}
+
+// validateNebula checks the embedded overlay's settings. All of it is skipped
+// when the feature is off, so an agent that never touches the nebula block can
+// never be refused on account of it.
+func validateNebula(cfg *Config) error {
+	if !cfg.Nebula.Enabled {
+		return nil
+	}
+
+	switch cfg.Nebula.Source {
+	case "platform":
+		// The platform connection details — URL, identity, session file — live
+		// under nats.auth.stone-age, because that is where they were first needed.
+		// Reading a Nebula config from the platform means authenticating as the
+		// same thing, so it needs the same block. Saying so here beats failing at
+		// the first sync with an empty URL.
+		if cfg.NATS.Auth.Type != "stone-age" {
+			return fmt.Errorf("nebula.source is \"platform\" but nats.auth.type is %q: reading a Nebula config from the platform authenticates as the same thing as the NATS credential, so it requires stone-age auth (use nebula.source: \"file\" otherwise)", cfg.NATS.Auth.Type)
+		}
+		if cfg.Nebula.CacheFile == "" {
+			return fmt.Errorf("nebula.cache_file must not be empty")
+		}
+	case "file":
+		if cfg.Nebula.ConfigFile == "" {
+			return fmt.Errorf("nebula.config_file is required when nebula.source is \"file\"")
+		}
+	default:
+		return fmt.Errorf("nebula.source must be \"platform\" or \"file\" (got: %q)", cfg.Nebula.Source)
+	}
+
+	// The sync interval is the revocation latency for this device: a blocklisted
+	// certificate is only refused once the peer re-reads its config. An hour is
+	// already a long time to keep honouring a revoked certificate, and anything
+	// below a minute is hammering the platform for a file that rarely changes.
+	if cfg.Nebula.Source == "platform" {
+		if cfg.Nebula.SyncInterval < time.Minute {
+			return fmt.Errorf("nebula.sync_interval must be at least 1 minute (got: %v)", cfg.Nebula.SyncInterval)
+		}
+		if cfg.Nebula.SyncInterval > time.Hour {
+			return fmt.Errorf("nebula.sync_interval must not exceed 1 hour (got: %v) - it is how long this device keeps honouring a revoked certificate, because Nebula revokes through each peer's pki.blocklist and has no CRL", cfg.Nebula.SyncInterval)
+		}
+	}
+
+	if cfg.Nebula.VerifyTimeout < 5*time.Second {
+		return fmt.Errorf("nebula.verify_timeout must be at least 5 seconds (got: %v)", cfg.Nebula.VerifyTimeout)
+	}
+	if cfg.Nebula.VerifyTimeout > 5*time.Minute {
+		return fmt.Errorf("nebula.verify_timeout must not exceed 5 minutes (got: %v)", cfg.Nebula.VerifyTimeout)
 	}
 
 	return nil

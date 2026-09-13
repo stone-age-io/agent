@@ -77,7 +77,7 @@ agent/
 │       └── timeutil.go        # NowRFC3339 timestamp helper for wire payloads
 ├── docs/                      # Platform installation guides
 ├── Makefile                   # Build automation
-└── go.mod                     # Go 1.24+ required
+└── go.mod                     # Go 1.26+ required (Nebula sets the floor)
 ```
 
 ## Architecture

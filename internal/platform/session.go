@@ -20,6 +20,12 @@ import (
 type session struct {
 	Token         string `json:"token"`
 	CredsRevision string `json:"creds_revision"`
+
+	// NebulaRevision is the same signal for the Nebula config. Both live here so
+	// there is one session per thing, matching the one platform identity it has.
+	// Every writer must read-modify-write under Client.mu, or one sync drops the
+	// other's revision.
+	NebulaRevision string `json:"nebula_revision"`
 }
 
 // loadSession returns the stored session, or a zero session if there isn't a

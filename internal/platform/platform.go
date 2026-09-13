@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stone-age-io/agent/internal/config"
@@ -61,6 +62,13 @@ const rotatePath = "/api/me/nats-creds/rotate"
 
 // Client talks to one platform instance on behalf of one agent.
 type Client struct {
+	// mu serialises everything that touches the session file. The credential sync
+	// and the Nebula config sync are separate scheduled jobs sharing one session,
+	// and each does a read-modify-write on it; without this, one can drop the
+	// other's revision or, worse, its token — the agent's only password-free way
+	// back in.
+	mu sync.Mutex
+
 	code      string
 	location  string
 	credsPath string
@@ -90,6 +98,9 @@ type thingRecord struct {
 	ID         string `json:"id"`
 	Code       string `json:"code"`
 	NATSUserID string `json:"nats_user"`
+	// NebulaHostID is the parallel relation for the overlay identity, read by
+	// NebulaSource in nebula.go.
+	NebulaHostID string `json:"nebula_host"`
 	Expand     struct {
 		NATSUser natsUserRecord `json:"nats_user"`
 		Location struct {
@@ -114,6 +125,9 @@ type authResponse struct {
 // the file exists, which keeps startup fast and offline-tolerant on every boot
 // after the first.
 func (c *Client) EnsureCredentials() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.credsFileExists() {
 		c.logger.Info("Credentials file exists, skipping bootstrap", zap.String("path", c.credsPath))
 		return nil
@@ -127,7 +141,7 @@ func (c *Client) EnsureCredentials() error {
 	// need the thing's password handed back to it, so try the token first. On a
 	// true first boot there is no session and this is skipped.
 	if c.loadSession().Token != "" {
-		if _, err := c.Sync(); err == nil {
+		if _, err := c.syncLocked(); err == nil {
 			c.logger.Info("Credentials restored using the stored platform session")
 			return nil
 		} else {
@@ -176,6 +190,16 @@ func (c *Client) EnsureCredentials() error {
 // moved: refresh (no expand) then probe (?fields=updated), and only then read
 // the key.
 func (c *Client) Sync() (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.syncLocked()
+}
+
+// syncLocked is Sync with the session lock already held, so EnsureCredentials can
+// reuse it. Go mutexes are not reentrant: calling the exported Sync from another
+// exported method that holds the lock deadlocks the agent at startup.
+func (c *Client) syncLocked() (bool, error) {
 	prev := c.loadSession()
 
 	token, record, err := c.authenticate(prev.Token)
@@ -220,6 +244,9 @@ func (c *Client) Sync() (bool, error) {
 // Rotation is not revocation: the previous credential stays valid until it
 // expires or an operator revokes it on the platform.
 func (c *Client) Rotate() (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	prev := c.loadSession()
 
 	token, record, err := c.authenticate(prev.Token)

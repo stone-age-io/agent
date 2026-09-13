@@ -1,8 +1,9 @@
 # Nebula Support — Design
 
-**Status: in progress.** Step 1 of [Staging](#staging) — the startup change — is
-implemented; the Nebula subsystem itself is not. This is not an installation
-guide, and it is deliberately not linked from the README's documentation index,
+**Status: in progress.** Steps 1 to 3 of [Staging](#staging) are implemented — the
+startup change, `internal/nebula`, and the surfaces. Step 4 (`leaf-sync`) is not.
+
+This is not an installation guide, and it is deliberately not linked from the README's documentation index,
 which lists shipped behaviour only. Read it as the record of a decision and of the
 alternatives that were rejected on the way to it.
 
@@ -436,8 +437,13 @@ the network.
 
 ## Costs, honestly
 
-- **Binary size.** Currently ~19 MB. Nebula pulls in gvisor, `miekg/dns`,
-  `gopacket`, `prometheus/client_golang` and `go-metrics`; expect 35–40 MB.
+- **Binary size.** 19 MB before, **30.5 MB** after — better than the 35–40 MB this
+  document first estimated. Nebula pulls in gvisor, `miekg/dns`, `gopacket`,
+  `prometheus/client_golang` and `go-metrics`.
+- **Go version.** Nebula v1.11 requires Go 1.26, so the agent module does too.
+  Every Nebula release new enough to issue v2 certificates needs at least 1.25, so
+  this was not avoidable by pinning an older one. CI and goreleaser read
+  `go-version-file: go.mod` and follow automatically.
 - **Memory.** The `<50 MB` design target comes under real pressure. State it as
   tiered — agent alone versus agent plus mesh — rather than quietly missing it.
 - **cgo.** `miekg/pkcs11` is in Nebula's module graph but sits behind a `pkcs11`
@@ -480,10 +486,12 @@ sync, no rollback. It is a path handed to `config.C.Load`, and the `sync` and
    failed connect had silently removed the revoked-credential recovery path, which
    depended on the old constructor failure to exit the process and let the service
    manager restart it into a fresh credential sync.
-2. **`internal/nebula`.** Fetch, cache last-known-good, `nebula.Main` plus
-   `Control`, verify-and-roll-back, reload on revision change.
-3. **Surfaces.** Mesh state in `cmd.health`, `cmd.nebula`, IP-forwarding
-   reporting.
+2. ~~**`internal/nebula`.**~~ **Done.** Fetch, cache last-known-good, `nebula.Main`
+   plus `Control`, verify-and-roll-back, reload on revision change. The apply
+   ladder needs a real TUN device, so it is covered by tests on a host rather
+   than in `go test`; the unit tests cover the state machine around it.
+3. ~~**Surfaces.**~~ **Done**, less the IP-forwarding read, which was cut — see
+   the settled questions below.
 4. **`leaf-sync`.** The same feature against `leaf_nodes.nebula_host`, when site
    nodes are wanted on the mesh.
 
