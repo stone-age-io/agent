@@ -10,7 +10,23 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- **The agent no longer refuses to start when NATS is unreachable.** `nats.Connect`
+  now retries in the background instead of failing construction, and the JetStream
+  check moved from a one-shot fatal probe at startup to a check that runs on every
+  connect and reports through `cmd.health`. A misconfigured agent still fails fast
+  — an unknown auth type or unreadable TLS material is a configuration error, and
+  unreachability is not.
+- **`cmd.health` gained `nats.jetstream`**, and reports `degraded` when the agent
+  is connected but JetStream is unusable. This replaces the guarantee the old
+  startup probe gave: telemetry failing silently is still refused, it is just
+  reported rather than fatal.
+- A NATS connection that `nats.go` abandons for good — two consecutive
+  authorization failures, which is what a revoked credential looks like — now
+  exits the agent instead of leaving it running against a dead connection. This
+  restores the restart-and-re-sync recovery path that the retry change would
+  otherwise have removed.
 
 ## [0.1.0] - 2026-08-22
 

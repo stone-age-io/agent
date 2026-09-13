@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/kardianos/service"
 	"github.com/stone-age-io/agent/internal/agent"
@@ -119,10 +120,18 @@ func (p *program) Start(s service.Service) error {
 
 	p.agent = ag
 
-	// Start agent in goroutine
+	// Start agent in goroutine.
+	//
+	// Run returns an error only when the agent has stopped because it cannot
+	// continue — today, a NATS connection nats.go has abandoned. Exiting non-zero
+	// is the point: it is what the OnFailure options above are configured to
+	// restart, and a restart is what re-runs the platform credential sync. Run has
+	// already shut the agent down cleanly by the time it returns, so there is
+	// nothing left to unwind here.
 	go func() {
 		if err := p.agent.Run(); err != nil {
 			p.logger.Errorf("Agent error: %v", err)
+			os.Exit(1)
 		}
 	}()
 

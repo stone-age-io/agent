@@ -200,7 +200,14 @@ type healthResponse struct {
 }
 
 type NATSHealth struct {
-	Connected  bool   `json:"connected"`
+	Connected bool `json:"connected"`
+
+	// JetStream reports whether the last check against the connected server found
+	// JetStream usable. It used to be enforced once at startup, where a failure
+	// aborted the process; now that an unreachable bus no longer stops the agent
+	// from starting, this is where the answer surfaces. False while disconnected.
+	JetStream bool `json:"jetstream"`
+
 	ServerURL  string `json:"server_url,omitempty"`
 	ServerID   string `json:"server_id,omitempty"`
 	Reconnects uint64 `json:"reconnects"`
@@ -589,6 +596,7 @@ func (h *CommandHandlers) getNATSHealth() *NATSHealth {
 
 	health := &NATSHealth{
 		Connected:  h.natsClient.IsConnected(),
+		JetStream:  h.natsClient.IsJetStreamAvailable(),
 		Reconnects: uint64(stats.Reconnects),
 		InMsgs:     stats.InMsgs,
 		OutMsgs:    stats.OutMsgs,
@@ -657,6 +665,17 @@ func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetr
 	// UNHEALTHY: NATS disconnected
 	if !natsHealth.Connected {
 		return "unhealthy"
+	}
+
+	// DEGRADED: connected, but JetStream is not usable — telemetry is going
+	// nowhere. This used to abort startup; now that an unreachable bus no longer
+	// stops the agent, this is what keeps the failure from being silent.
+	//
+	// The check runs asynchronously on connect, so there is a window of a few
+	// milliseconds after connecting where this reports degraded because the answer
+	// has not come back yet. It corrects itself on the next health request.
+	if !natsHealth.JetStream {
+		return "degraded"
 	}
 
 	// DEGRADED: High reconnect count (connection unstable)

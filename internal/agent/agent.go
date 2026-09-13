@@ -150,14 +150,33 @@ func (a *Agent) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// runErr is non-nil only when the agent is stopping because something went
+	// wrong, which is what tells main to exit non-zero and the service manager to
+	// restart us. A signal or a cancelled context is an orderly stop.
+	var runErr error
+
 	select {
 	case <-sigChan:
 		a.logger.Info("Received shutdown signal")
+
 	case <-a.ctx.Done():
 		a.logger.Info("Context cancelled")
+
+	// nats.go has given up on the connection for good — a revoked credential is
+	// the usual way that happens. There is no path back to the bus from here, and
+	// a restart is what re-runs the startup credential sync that can heal it. See
+	// the ClosedHandler in internal/nats/client.go, and the OnFailure options in
+	// cmd/agent/main.go that make the restart actually happen.
+	case <-a.nats.Lost():
+		a.logger.Error("NATS connection lost permanently, exiting for restart")
+		runErr = fmt.Errorf("NATS connection closed permanently")
 	}
 
-	return a.Shutdown()
+	if err := a.Shutdown(); err != nil {
+		return err
+	}
+
+	return runErr
 }
 
 // Shutdown gracefully shuts down the agent
