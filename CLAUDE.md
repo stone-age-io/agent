@@ -53,7 +53,13 @@ agent/
 │   │   └── defaults.go        # Platform-specific defaults
 │   ├── platform/              # stone-age.io platform credential lifecycle
 │   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
-│   │   └── session.go         # Session file (auth token + credential revision)
+│   │   ├── nebula.go          # NebulaSource: this thing's nebula_host config
+│   │   └── session.go         # Session file (auth token + both revisions)
+│   ├── nebula/                # Embedded Nebula overlay host (opt-in)
+│   │   ├── nebula.go          # Manager: lifecycle, apply/verify/rollback, Health
+│   │   ├── source.go          # Source interface and FileSource
+│   │   ├── logger.go          # Nebula's log/slog output into zap
+│   │   └── wintun_*.go        # Windows wintun.dll hint on a start failure
 │   ├── nats/                  # NATS client and command handlers
 │   │   ├── client.go          # Connection, publish, subscribe, ForceReconnect
 │   │   └── handlers.go        # Command handlers (ping, exec, health, etc.)
@@ -75,7 +81,7 @@ agent/
 │   └── utils/
 │       ├── math.go            # Utility functions (Round)
 │       └── timeutil.go        # NowRFC3339 timestamp helper for wire payloads
-├── docs/                      # Platform installation guides
+├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md, a design record not a guide)
 ├── Makefile                   # Build automation
 └── go.mod                     # Go 1.26+ required (Nebula sets the floor)
 ```
@@ -115,24 +121,49 @@ agent/
      Rotation is not revocation
    - Fails fast if the thing record's `code` doesn't match the config's `code`, on every
      authentication; warns if the expanded location's `code` differs
-   - Session file (token + credential revision, 0600) makes `password_env` optional after
-     first boot. The platform's thing token TTL is 7 days, renewed by each sync
+   - Session file (token + credential revision + nebula revision, 0600) makes `password_env`
+     optional after first boot. The platform's thing token TTL is 7 days, renewed by each sync
+   - `Client.mu` guards the session file: the credential sync and the Nebula sync are
+     separate scheduled jobs that both read-modify-write it. Exported methods take the
+     lock and delegate to a `...Locked` variant — Go mutexes are not reentrant, and
+     `EnsureCredentials` calls `syncLocked`
    - Never logs response bodies — one of them is a private key
 
-4. **NATS Client** (`internal/nats/client.go`):
-   - JetStream validation on connect (fail-fast)
+4. **Nebula** (`internal/nebula/`): embedded overlay host, opt-in via `nebula.enabled`
+   - Free of HTTP on purpose. Fetching is a `Source`; the platform one lives in
+     `internal/platform/nebula.go` beside the auth it shares
+   - Applying is a ladder of OUTCOMES, never a table of config keys: reload → (if the
+     overlay does not come back) restart → (still not) roll back to the cached config.
+     Nebula already classifies its own reloads internally, and a duplicate table here
+     would drift from it on every upgrade
+   - Verification waits for a lighthouse handshake only when the config names a
+     lighthouse to reach. A lighthouse has no peer to hand shake with, and a false
+     positive would cause the outage the rollback prevents
+   - `nebula.sync_interval` is the device's revocation latency (Nebula has no CRL),
+     which is why it is bounded above as well as below
+
+5. **NATS Client** (`internal/nats/client.go`):
+   - `RetryOnFailedConnect`: an unreachable bus does not stop the agent from starting,
+     so NATS and the Nebula overlay can come up in either order. Configuration errors
+     (unknown auth type, unreadable TLS material) still fail fast
+   - JetStream is validated on every connect and reported through `cmd.health`, not
+     enforced once at startup
+   - A connection nats.go abandons closes `Lost()`, which exits the agent for restart.
+     That is the revoked-credential recovery path: nats.go gives up after two
+     consecutive auth failures, and the restart re-runs the startup credential sync
    - TLS 1.2+ support with optional mTLS
    - Async publishing with automatic retries
    - `creds` and `stone-age` auth both connect with the .creds file; `UserCredentials`
      re-reads it on every reconnect, so `ForceReconnect()` adopts a replaced credential
 
-5. **Scheduler** (`internal/scheduler/scheduler.go`):
+6. **Scheduler** (`internal/scheduler/scheduler.go`):
    - Uses gocron/v2 for interval-based scheduling
    - Context-aware cancellation for clean shutdown
    - Panic recovery for all tasks
    - `creds_sync` task is scheduled only when a CredsSyncer is supplied (stone-age auth)
+   - `nebula_sync` task is scheduled only when a NebulaSyncer is supplied (overlay enabled)
 
-6. **Executor** (`internal/tasks/executor.go`):
+7. **Executor** (`internal/tasks/executor.go`):
    - Central task execution with stats tracking
    - Configurable metrics collection via MetricsCollector interface
    - Supports builtin (gopsutil) or exporter (Prometheus) sources
@@ -168,10 +199,19 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.service` - Service control (start/stop/restart)
 - `{prefix}.{code}.cmd.logs` - Log file retrieval
 - `{prefix}.{code}.cmd.exec` - Custom command execution
-- `{prefix}.{code}.cmd.health` - Agent health check (includes agent version)
+- `{prefix}.{code}.cmd.health` - Agent health check (includes agent version, and the `nebula` block when the overlay is enabled)
 - `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (stone-age auth only; answers with an error otherwise)
+- `{prefix}.{code}.cmd.nebula` - Overlay actions: `sync` (pull and apply now) or `restart` (bounce Nebula on the running config). Enabled agents only; answers with an error otherwise
 
 Command responses use `ts` (RFC3339 UTC) for their timestamp field.
+
+**`cmd.nebula` is the one command that answers before it acts.** It replies
+`accepted` and does the work asynchronously, because both actions can interrupt
+the tunnel the request arrived through when NATS rides the overlay — a reply sent
+afterwards would never land, and the caller would see a timeout on an operation
+that succeeded. The outcome is read from `cmd.health`. Anything spawned this way
+needs its own `recover()`: `handleWithRecovery` wraps the handler, not its
+goroutines.
 
 ## Configuration
 
@@ -199,6 +239,13 @@ nats:
   tls:
     enabled: true
     ca_file: "/path/to/ca.pem"
+nebula:                          # Embedded overlay host, off by default
+  enabled: false
+  source: "platform"             # "platform" (needs stone-age auth) or "file"
+  config_file: "/path/to/nebula.yaml"        # Only for source: "file"
+  cache_file: "/var/lib/agent/nebula-cache.yaml"  # Last config that reached the mesh
+  sync_interval: "10m"           # 1m-1h. THIS IS THE REVOCATION LATENCY
+  verify_timeout: "30s"          # 5s-5m, before restart then rollback
 tasks:
   heartbeat:
     enabled: true
@@ -225,7 +272,11 @@ commands:
 - Scripts must be in configured scripts_directory with .ps1/.sh extension
 - No WMI or external command execution for inventory (uses native APIs)
 - Command execution uses context with timeout
-- Secrets on disk (.creds, platform session) are written 0600 through a temp file + rename
+- Secrets on disk (.creds, platform session, Nebula config cache) are written 0600
+  through a temp file + rename. A Nebula config embeds the host private key inline,
+  because Nebula's PKI requires it there — treat `config_yaml` as key material
+- `nebula.sync_interval` is a security setting: Nebula has no CRL, so a revoked
+  certificate is refused only once each peer re-reads its own config
 - Never log HTTP response bodies from the platform: the credential read returns an nkey seed.
   Non-2xx bodies are safe (error documents) and are folded into errors on purpose
 
@@ -250,6 +301,10 @@ Key dependencies (from go.mod):
 - `github.com/spf13/viper` - Configuration
 - `go.uber.org/zap` - Structured logging
 - `github.com/shirou/gopsutil/v3` - Cross-platform system metrics (CPU, memory, disk)
+- `github.com/slackhq/nebula` - Embedded overlay host. Sets the module's Go floor
+  (v1.11 needs Go 1.26) and roughly half the binary size; pinned to the same
+  version `pb-nebula` uses, so the library generating the configs and the one
+  reading them cannot disagree
 - `github.com/prometheus/common/expfmt` - Prometheus metrics parsing (exporter mode)
 - `golang.org/x/sys` - Windows syscalls (registry, service control)
 - `gopkg.in/natefinch/lumberjack.v2` - Log rotation

@@ -269,7 +269,7 @@ func (m *Manager) startLocked(yaml, revision string) error {
 	// is the real thing.
 	control, err := nebulalib.Main(c, false, m.version, newSlogLogger(m.logger), nil)
 	if err != nil {
-		return fmt.Errorf("start nebula: %w", err)
+		return fmt.Errorf("start nebula: %w%s", err, windowsTunHint())
 	}
 
 	if err := control.Start(); err != nil {
