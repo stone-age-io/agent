@@ -101,7 +101,7 @@ type thingRecord struct {
 	// NebulaHostID is the parallel relation for the overlay identity, read by
 	// NebulaSource in nebula.go.
 	NebulaHostID string `json:"nebula_host"`
-	Expand     struct {
+	Expand       struct {
 		NATSUser natsUserRecord `json:"nats_user"`
 		Location struct {
 			Code string `json:"code"`
