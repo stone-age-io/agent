@@ -260,6 +260,7 @@ commands:
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
 - **[Platform Credentials](docs/credentials.md)** - Provisioning, renewing, and rotating credentials from the stone-age.io platform
+- **[Nebula Overlay](docs/nebula.md)** - Run the agent as a host on your organization's Nebula mesh
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 
 ---
@@ -267,7 +268,7 @@ commands:
 ## Building from Source
 
 ### Prerequisites
-- Go 1.24+
+- Go 1.26+
 - Make (optional, for convenience)
 
 ### Build for Current Platform

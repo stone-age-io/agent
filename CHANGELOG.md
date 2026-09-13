@@ -10,7 +10,50 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
-_Nothing yet._
+> Building from source now needs **Go 1.26+**: the Nebula library sets the floor.
+> CI and the release pipeline read the version from `go.mod`, so they follow on
+> their own.
+
+### Added
+
+- **An embedded Nebula overlay host**, off by default (`nebula.enabled`). The agent
+  fetches its Nebula config from the stone-age.io platform — the `nebula_host`
+  related to its own thing — runs Nebula in-process, and re-reads the config on an
+  interval so revocation, certificate renewal and CA rotation actually reach the
+  device. Nebula has no CRL, so a mesh only converges if its members re-read their
+  configs; `nebula.sync_interval` is therefore the revocation latency for the
+  device, not a tuning knob. `nebula.source: "file"` reads a config from disk
+  instead, for deployments without the platform.
+- A newly applied Nebula config that cannot reach a lighthouse is restarted and
+  then rolled back to the last config known to have worked, so a bad config
+  cannot take a fleet off the network. The last good config is cached locally, so
+  a device that reboots while the platform is unreachable still comes up on the
+  overlay.
+- **`cmd.nebula`** with `sync` and `restart`. It answers `accepted` and then acts,
+  because both actions can interrupt the tunnel the request arrived through; the
+  outcome is reported through `cmd.health`. There is deliberately no `stop`.
+- **`cmd.health` gained a `nebula` block** — tunnel count, lighthouse reachability,
+  certificate expiry, the unsafe networks in the live certificate, and the config
+  revision currently running. Comparing that revision with the platform answers
+  whether a revocation has landed on a device. Absent when the overlay is off.
+
+### Changed
+
+- **The agent no longer refuses to start when NATS is unreachable.** `nats.Connect`
+  now retries in the background instead of failing construction, and the JetStream
+  check moved from a one-shot fatal probe at startup to a check that runs on every
+  connect and reports through `cmd.health`. A misconfigured agent still fails fast
+  — an unknown auth type or unreadable TLS material is a configuration error, and
+  unreachability is not.
+- **`cmd.health` gained `nats.jetstream`**, and reports `degraded` when the agent
+  is connected but JetStream is unusable. This replaces the guarantee the old
+  startup probe gave: telemetry failing silently is still refused, it is just
+  reported rather than fatal.
+- A NATS connection that `nats.go` abandons for good — two consecutive
+  authorization failures, which is what a revoked credential looks like — now
+  exits the agent instead of leaving it running against a dead connection. This
+  restores the restart-and-re-sync recovery path that the retry change would
+  otherwise have removed.
 
 ## [0.1.0] - 2026-08-22
 

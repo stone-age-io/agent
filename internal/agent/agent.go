@@ -9,6 +9,7 @@ import (
 
 	"github.com/stone-age-io/agent/internal/config"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
+	"github.com/stone-age-io/agent/internal/nebula"
 	"github.com/stone-age-io/agent/internal/platform"
 	"github.com/stone-age-io/agent/internal/scheduler"
 	"github.com/stone-age-io/agent/internal/tasks"
@@ -24,6 +25,7 @@ type Agent struct {
 	nats      *natsclient.Client
 	scheduler *scheduler.Scheduler
 	handlers  *natsclient.CommandHandlers
+	nebula    *nebula.Manager // nil unless the overlay is enabled
 	version   string
 	ctx       context.Context    // ADDED: Root context for clean shutdown
 	cancel    context.CancelFunc // ADDED: Cancel function for shutdown
@@ -53,8 +55,9 @@ func New(configPath string, version string) (*Agent, error) {
 	// handing a typed nil *platform.Client to an interface parameter would make
 	// it non-nil, and the rotate command and sync task both test for nil.
 	var (
-		credsRotator natsclient.CredsRotator
-		credsSyncer  scheduler.CredsSyncer
+		credsRotator   natsclient.CredsRotator
+		credsSyncer    scheduler.CredsSyncer
+		nebulaPlatform *platform.Client
 	)
 	if cfg.NATS.Auth.Type == "stone-age" {
 		platformClient := platform.NewClient(cfg, logger)
@@ -79,6 +82,35 @@ func New(configPath string, version string) (*Agent, error) {
 
 		credsRotator = platformClient
 		credsSyncer = platformClient
+		nebulaPlatform = platformClient
+	}
+
+	// The embedded overlay, if it is enabled. Built before NATS on purpose: with
+	// nats.urls pointing at an overlay address, the bus is not reachable until
+	// this is up. Neither waits for the other — NATS retries in the background —
+	// but there is no reason to make it retry for longer than necessary.
+	var nebulaManager *nebula.Manager
+	if cfg.Nebula.Enabled {
+		source, err := nebulaSource(cfg, nebulaPlatform)
+		if err != nil {
+			return nil, err
+		}
+
+		nebulaManager = nebula.New(nebula.Options{
+			Source:        source,
+			CacheFile:     cfg.Nebula.CacheFile,
+			VerifyTimeout: cfg.Nebula.VerifyTimeout,
+			Version:       version,
+			Logger:        logger,
+		})
+
+		// Best-effort, like the credential sync above. An overlay that cannot come
+		// up is a serious problem, but it is not a reason to refuse to start: an
+		// agent that still has NATS on the underlay is the one that can be asked
+		// what went wrong, and the scheduled sync retries.
+		if err := nebulaManager.Start(); err != nil {
+			logger.Error("Nebula failed to start", zap.Error(err))
+		}
 	}
 
 	// Create root context with cancellation
@@ -106,7 +138,7 @@ func New(configPath string, version string) (*Agent, error) {
 	}
 
 	// Create command handlers (now with NATS client for health checks and version)
-	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator)
+	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager))
 
 	// Subscribe to commands
 	logger.Info("Subscribing to commands...")
@@ -118,7 +150,7 @@ func New(configPath string, version string) (*Agent, error) {
 
 	// Create and start scheduler
 	logger.Info("Starting scheduler...")
-	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, ctx)
+	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, nebulaSyncer(nebulaManager), ctx)
 	if err != nil {
 		cancel() // ADDED: Cancel context on error
 		natsClient.Close()
@@ -131,6 +163,7 @@ func New(configPath string, version string) (*Agent, error) {
 		nats:      natsClient,
 		scheduler: sched,
 		handlers:  handlers,
+		nebula:    nebulaManager,
 		version:   version,
 		ctx:       ctx,    // ADDED: Store context
 		cancel:    cancel, // ADDED: Store cancel function
@@ -150,14 +183,33 @@ func (a *Agent) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// runErr is non-nil only when the agent is stopping because something went
+	// wrong, which is what tells main to exit non-zero and the service manager to
+	// restart us. A signal or a cancelled context is an orderly stop.
+	var runErr error
+
 	select {
 	case <-sigChan:
 		a.logger.Info("Received shutdown signal")
+
 	case <-a.ctx.Done():
 		a.logger.Info("Context cancelled")
+
+	// nats.go has given up on the connection for good — a revoked credential is
+	// the usual way that happens. There is no path back to the bus from here, and
+	// a restart is what re-runs the startup credential sync that can heal it. See
+	// the ClosedHandler in internal/nats/client.go, and the OnFailure options in
+	// cmd/agent/main.go that make the restart actually happen.
+	case <-a.nats.Lost():
+		a.logger.Error("NATS connection lost permanently, exiting for restart")
+		runErr = fmt.Errorf("NATS connection closed permanently")
 	}
 
-	return a.Shutdown()
+	if err := a.Shutdown(); err != nil {
+		return err
+	}
+
+	return runErr
 }
 
 // Shutdown gracefully shuts down the agent
@@ -179,6 +231,12 @@ func (a *Agent) Shutdown() error {
 	// Drain NATS connection (wait for in-flight messages)
 	if err := a.nats.Drain(drainCtx); err != nil {
 		a.logger.Error("Error draining NATS", zap.Error(err))
+	}
+
+	// Stop the overlay last: NATS may have been riding on it, so draining above
+	// had to happen while the tunnel was still up.
+	if a.nebula != nil {
+		a.nebula.Stop()
 	}
 
 	// Sync logger
@@ -225,4 +283,43 @@ func initLogger(cfg config.LoggingConfig) (*zap.Logger, error) {
 	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return logger, nil
+}
+
+// nebulaSource picks where the Nebula config comes from.
+//
+// config.validate has already established that a platform source implies
+// stone-age auth, so a nil client here would be a programming error rather than
+// a misconfiguration — but it is cheap to say so plainly instead of panicking.
+func nebulaSource(cfg *config.Config, client *platform.Client) (nebula.Source, error) {
+	switch cfg.Nebula.Source {
+	case "platform":
+		if client == nil {
+			return nil, fmt.Errorf("nebula.source is \"platform\" but no platform client was built (nats.auth.type must be stone-age)")
+		}
+		return client.NebulaSource(), nil
+	case "file":
+		return nebula.FileSource{Path: cfg.Nebula.ConfigFile}, nil
+	default:
+		return nil, fmt.Errorf("unknown nebula.source %q", cfg.Nebula.Source)
+	}
+}
+
+// nebulaController and nebulaSyncer convert a possibly-nil *nebula.Manager into
+// a genuinely nil interface.
+//
+// A typed nil pointer assigned to an interface is not nil, and both consumers
+// test for nil to decide whether the feature exists at all — the same trap the
+// credential interfaces above are arranged to avoid.
+func nebulaController(m *nebula.Manager) natsclient.NebulaController {
+	if m == nil {
+		return nil
+	}
+	return m
+}
+
+func nebulaSyncer(m *nebula.Manager) scheduler.NebulaSyncer {
+	if m == nil {
+		return nil
+	}
+	return m
 }

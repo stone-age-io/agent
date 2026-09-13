@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -20,26 +22,90 @@ type Client struct {
 	js     nats.JetStreamContext
 	logger *zap.Logger
 	config *config.NATSConfig
+
+	// jsAvailable records whether the last JetStream check against the connected
+	// server succeeded. It is written from the connect/reconnect callbacks and
+	// read by the health command, hence atomic.
+	jsAvailable atomic.Bool
+
+	// closing distinguishes a connection we closed on purpose from one nats.go
+	// gave up on. lost is closed exactly once, in the latter case only.
+	closing  atomic.Bool
+	lostOnce sync.Once
+	lost     chan struct{}
 }
 
 // NewClient creates a new NATS client with the specified configuration
 func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
+	// The client exists before the connection does, because the connect and
+	// reconnect callbacks below close over it.
+	c := &Client{
+		logger: logger,
+		config: cfg,
+		lost:   make(chan struct{}),
+	}
+
 	opts := []nats.Option{
 		nats.Name("win-agent"),
+
+		// RETRY RATHER THAN REFUSE TO START. Without this, nats.Connect fails
+		// immediately when nothing is listening and the agent exits before it has
+		// done anything else. That was tolerable while NATS was the agent's only
+		// external dependency and the service manager could restart the process.
+		//
+		// It stops being tolerable as soon as the agent owns something besides
+		// itself. An agent whose NATS endpoint lives on a Nebula overlay cannot
+		// reach the bus until the overlay is up, and the overlay cannot come up if
+		// the process exits first — a deadlock by structure rather than by timing.
+		// With retry on, the two are independent: whichever becomes reachable
+		// first waits for the other, and neither restarts the process to do it.
+		//
+		// Configuration errors below (unreadable TLS material, an unknown auth
+		// type) still fail fast. Unreachability is not a configuration error.
+		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(cfg.MaxReconnects),
 		nats.ReconnectWait(cfg.ReconnectWait),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			c.jsAvailable.Store(false)
 			if err != nil {
 				logger.Warn("NATS disconnected", zap.Error(err))
 			} else {
 				logger.Info("NATS disconnected")
 			}
 		}),
+		nats.ConnectHandler(func(nc *nats.Conn) {
+			logger.Info("Connected to NATS",
+				zap.String("url", nc.ConnectedUrl()),
+				zap.String("server_id", nc.ConnectedServerId()),
+				zap.Bool("tls", nc.TLSRequired()))
+			go c.checkJetStream(nc)
+		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
 			logger.Info("NATS reconnected", zap.String("url", nc.ConnectedUrl()))
+			go c.checkJetStream(nc)
 		}),
 		nats.ClosedHandler(func(nc *nats.Conn) {
-			logger.Info("NATS connection closed")
+			if c.closing.Load() {
+				logger.Info("NATS connection closed")
+				return
+			}
+
+			// nats.go has stopped trying. The usual cause is an authorization
+			// error repeated on reconnect — which is what a revoked credential
+			// looks like from here — since nats.go aborts reconnection after two
+			// consecutive auth failures against the same server.
+			//
+			// Before RetryOnFailedConnect, a revoked credential failed the initial
+			// nats.Connect, which failed agent.New, which exited the process; the
+			// service manager restarted it and the startup credential sync healed
+			// it on the way back up. Retrying on failed connect removed that exit
+			// without removing the need for it, and an agent sitting on a
+			// permanently closed connection is a zombie: the scheduler keeps
+			// firing, every publish fails, and nothing ever reconnects.
+			//
+			// So say so, and let Run exit for the same reason it always did.
+			logger.Error("NATS connection closed permanently, agent will exit for restart")
+			c.lostOnce.Do(func() { close(c.lost) })
 		}),
 		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
 			logger.Error("NATS error",
@@ -94,42 +160,73 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 	// Pass all URLs for automatic failover
 	serverURLs := strings.Join(cfg.URLs, ",")
 	logger.Info("Connecting to NATS", zap.Strings("urls", cfg.URLs))
+	// With RetryOnFailedConnect set, this returns a connection that may still be
+	// reconnecting in the background; an error here means the options themselves
+	// are unusable, not that the server is down. Subscriptions and publishes are
+	// both legal on a connection in that state — nats.go buffers them and replays
+	// subscriptions once it connects — so nothing below needs to wait.
 	conn, err := nats.Connect(serverURLs, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
+	c.conn = conn
 
-	logger.Info("Connected to NATS",
-		zap.String("url", conn.ConnectedUrl()),
-		zap.String("server_id", conn.ConnectedServerId()),
-		zap.Bool("tls", conn.TLSRequired()))
-
-	// Create JetStream context for telemetry publishing
-	logger.Info("Creating JetStream context...")
+	// Creating the context performs no I/O, so it is safe before the connection
+	// is established.
 	js, err := conn.JetStream()
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
+	c.js = js
 
-	// CRITICAL: Validate JetStream is actually enabled on the server
-	// This prevents cryptic failures when trying to publish telemetry later
-	// Fail fast here rather than silently failing on first heartbeat
-	logger.Info("Validating JetStream availability...")
-	_, err = js.AccountInfo()
+	return c, nil
+}
+
+// checkJetStream verifies that JetStream is reachable on the server the client
+// has just connected to, and records the answer for the health command.
+//
+// This used to run once, inline in NewClient, and a failure aborted startup. That
+// was the only way to turn "JetStream is not enabled for this account" into a
+// loud error rather than a telemetry stream that silently goes nowhere — but it
+// also meant an unreachable server prevented the agent from starting at all.
+// Running it on every connect keeps the loud error, reports it more than once,
+// and costs nothing when the server is fine.
+//
+// It runs in its own goroutine because nats.go dispatches these callbacks on a
+// single shared goroutine, and AccountInfo is a round trip: doing it inline would
+// stall every other callback for the length of that request.
+func (c *Client) checkJetStream(nc *nats.Conn) {
+	js, err := nc.JetStream()
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("JetStream not available on NATS server (is JetStream enabled?): %w", err)
+		c.jsAvailable.Store(false)
+		c.logger.Error("Failed to create JetStream context", zap.Error(err))
+		return
 	}
 
-	logger.Info("JetStream validated successfully")
+	if _, err := js.AccountInfo(); err != nil {
+		c.jsAvailable.Store(false)
+		c.logger.Error("JetStream not available on NATS server (is JetStream enabled for this account?)",
+			zap.Error(err),
+			zap.String("url", nc.ConnectedUrl()))
+		return
+	}
 
-	return &Client{
-		conn:   conn,
-		js:     js,
-		logger: logger,
-		config: cfg,
-	}, nil
+	c.jsAvailable.Store(true)
+	c.logger.Info("JetStream validated", zap.String("url", nc.ConnectedUrl()))
+}
+
+// IsJetStreamAvailable reports whether the last JetStream check succeeded. It is
+// false whenever the client is disconnected.
+func (c *Client) IsJetStreamAvailable() bool {
+	return c.jsAvailable.Load()
+}
+
+// Lost is closed when nats.go gives up on the connection for good. It never
+// fires for a connection the agent closed itself, so a receive on it means the
+// process has no way back to the bus and should exit to be restarted.
+func (c *Client) Lost() <-chan struct{} {
+	return c.lost
 }
 
 // createTLSConfig creates a TLS configuration based on the provided settings
@@ -284,6 +381,7 @@ func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subsc
 // MODIFIED: Now accepts context for cancellation
 func (c *Client) Drain(ctx context.Context) error {
 	c.logger.Info("Draining NATS connection")
+	c.closing.Store(true)
 
 	// Check if connection is already closed
 	if c.conn.IsClosed() {
@@ -319,6 +417,7 @@ func (c *Client) Drain(ctx context.Context) error {
 // Close immediately closes the NATS connection
 func (c *Client) Close() {
 	c.logger.Info("Closing NATS connection")
+	c.closing.Store(true)
 	c.conn.Close()
 }
 

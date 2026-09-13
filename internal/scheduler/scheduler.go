@@ -25,6 +25,15 @@ type CredsSyncer interface {
 	Sync() (bool, error)
 }
 
+// NebulaSyncer adopts the Nebula config the platform currently holds for this
+// agent, reporting whether anything was applied.
+//
+// Declared here for the same reason as CredsSyncer. Implemented by
+// *nebula.Manager.
+type NebulaSyncer interface {
+	Sync() (bool, error)
+}
+
 // Scheduler manages periodic task execution
 type Scheduler struct {
 	scheduler     gocron.Scheduler
@@ -35,6 +44,7 @@ type Scheduler struct {
 	version       string
 	subjectPrefix string
 	credsSyncer   CredsSyncer     // nil unless this agent gets its credentials from the platform
+	nebulaSyncer  NebulaSyncer    // nil unless the embedded overlay is enabled
 	ctx           context.Context // ADDED: Context for cancellation
 }
 
@@ -48,6 +58,7 @@ func New(
 	cfg *config.Config,
 	version string,
 	credsSyncer CredsSyncer,
+	nebulaSyncer NebulaSyncer,
 	ctx context.Context,
 ) (*Scheduler, error) {
 	// Create gocron scheduler
@@ -60,6 +71,7 @@ func New(
 		scheduler:     s,
 		logger:        logger,
 		nats:          natsClient,
+		nebulaSyncer:  nebulaSyncer,
 		executor:      executor,
 		config:        cfg,
 		version:       version,
@@ -243,6 +255,24 @@ func (s *Scheduler) scheduleTasks() error {
 		}
 		s.logger.Info("Scheduled credential sync task",
 			zap.Duration("interval", s.config.Tasks.CredsSync.Interval))
+	}
+
+	// Schedule the Nebula config sync WITH PANIC RECOVERY AND CONTEXT CHECK.
+	// Only when the overlay is enabled; nebulaSyncer is nil otherwise.
+	//
+	// This interval is the revocation latency for this device: Nebula refuses a
+	// blocklisted certificate only once the peer has re-read its config, and this
+	// is what re-reads it. See config.validateNebula for the bounds.
+	if s.nebulaSyncer != nil {
+		_, err := s.scheduler.NewJob(
+			gocron.DurationJob(s.config.Nebula.SyncInterval),
+			gocron.NewTask(s.wrapTaskWithRecovery("nebula_sync", s.syncNebula)),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to schedule nebula sync: %w", err)
+		}
+		s.logger.Info("Scheduled nebula config sync task",
+			zap.Duration("interval", s.config.Nebula.SyncInterval))
 	}
 
 	return nil
@@ -486,4 +516,32 @@ func (s *Scheduler) publishInventory(code string) {
 	s.logger.Info("Queued inventory publish",
 		zap.String("subject", subject),
 		zap.String("os", inventory.OS.Name))
+}
+
+// syncNebula pulls the Nebula config the platform currently holds and adopts it
+// if it moved.
+//
+// Failures are warnings, not errors that stop anything: the overlay keeps running
+// on the config it has, and the next tick tries again. That is the right shape
+// for the common case, which is a platform that is briefly unreachable — quite
+// possibly because the overlay this is trying to maintain is down.
+func (s *Scheduler) syncNebula() {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	changed, err := s.nebulaSyncer.Sync()
+	if err != nil {
+		s.logger.Warn("Nebula config sync failed", zap.Error(err))
+		return
+	}
+
+	if !changed {
+		s.logger.Debug("Nebula config sync: unchanged")
+		return
+	}
+
+	s.logger.Info("Nebula config updated from platform")
 }

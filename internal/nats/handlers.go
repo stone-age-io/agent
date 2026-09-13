@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/nebula"
 	"github.com/stone-age-io/agent/internal/tasks"
 	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
@@ -32,13 +33,29 @@ type CommandHandlers struct {
 	version       string
 	taskExecutor  *tasks.Executor
 	natsClient    *Client
-	credsRotator  CredsRotator // nil unless this agent gets its credentials from the platform
+	credsRotator  CredsRotator     // nil unless this agent gets its credentials from the platform
+	nebulaCtl     NebulaController // nil unless the embedded overlay is enabled
+}
+
+// NebulaController is the embedded Nebula overlay, as the command handlers need
+// it. Implemented by *nebula.Manager.
+//
+// There is deliberately no Stop or Start. Stopping the overlay from a command
+// would sever the channel the command arrived on whenever NATS rides the mesh,
+// and nothing could turn it back on; "turn Nebula off" is nebula.enabled: false,
+// which survives a restart and leaves a trace. See docs/nebula-design.md.
+type NebulaController interface {
+	Sync() (bool, error)
+	Restart() error
+	Health() *nebula.Health
 }
 
 // NewCommandHandlers creates a new command handler manager.
 // credsRotator may be nil, in which case the rotate_creds command reports that
 // it is not available on this agent.
-func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator) *CommandHandlers {
+// nebulaCtl may be nil, in which case the nebula command reports that the
+// overlay is not enabled on this agent.
+func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator, nebulaCtl NebulaController) *CommandHandlers {
 	return &CommandHandlers{
 		logger:        logger,
 		config:        cfg,
@@ -48,6 +65,7 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 		taskExecutor:  executor,
 		natsClient:    natsClient,
 		credsRotator:  credsRotator,
+		nebulaCtl:     nebulaCtl,
 	}
 }
 
@@ -137,6 +155,16 @@ func (h *CommandHandlers) SubscribeAll(client *Client) error {
 		return err
 	}
 
+	// Subscribe to the Nebula overlay command with recovery. Subscribed
+	// unconditionally, for the same reason as rotate_creds: an agent without the
+	// overlay enabled answers with a reason instead of timing out.
+	if _, err := client.Subscribe(
+		fmt.Sprintf("%s.%s.cmd.nebula", h.subjectPrefix, h.code),
+		h.handleWithRecovery("nebula", h.handleNebula),
+	); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -197,10 +225,21 @@ type healthResponse struct {
 	Tasks  *tasks.TaskHealthMetrics `json:"tasks"`
 	Config *ConfigInfo              `json:"config"`
 	OS     *tasks.OSInfo            `json:"os"` // Operating system information
+
+	// Nebula is absent unless the embedded overlay is enabled, so an agent
+	// without it emits exactly the response it did before the feature existed.
+	Nebula *nebula.Health `json:"nebula,omitempty"`
 }
 
 type NATSHealth struct {
-	Connected  bool   `json:"connected"`
+	Connected bool `json:"connected"`
+
+	// JetStream reports whether the last check against the connected server found
+	// JetStream usable. It used to be enforced once at startup, where a failure
+	// aborted the process; now that an unreachable bus no longer stops the agent
+	// from starting, this is where the answer surfaces. False while disconnected.
+	JetStream bool `json:"jetstream"`
+
 	ServerURL  string `json:"server_url,omitempty"`
 	ServerID   string `json:"server_id,omitempty"`
 	Reconnects uint64 `json:"reconnects"`
@@ -223,6 +262,19 @@ type rotateCredsResponse struct {
 	Changed bool   `json:"changed"` // false means the platform handed back the credential we already had
 	Error   string `json:"error,omitempty"`
 	TS      string `json:"ts"`
+}
+
+type nebulaRequest struct {
+	Action string `json:"action"` // "sync" or "restart"
+}
+
+// nebulaResponse reports only that the request was accepted. See handleNebula for
+// why the result is not in here.
+type nebulaResponse struct {
+	Status string `json:"status"`
+	Action string `json:"action,omitempty"`
+	Error  string `json:"error,omitempty"`
+	TS     string `json:"ts"`
 }
 
 type errorResponse struct {
@@ -300,6 +352,104 @@ func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
 	}
 	if err := h.natsClient.ForceReconnect(); err != nil {
 		h.logger.Error("Failed to reconnect with rotated credentials", zap.Error(err))
+	}
+}
+
+// handleNebula runs an action against the embedded overlay.
+//
+// THIS IS THE ONE HANDLER THAT ANSWERS BEFORE IT ACTS, and it has to be. When an
+// agent's NATS endpoint lives on the overlay, both actions below interrupt the
+// tunnel the request arrived through — so a reply sent afterwards would never
+// land, and the caller would see a timeout on an operation that actually
+// succeeded. The obvious reaction to that timeout is to send it again.
+//
+// So "accepted" means the request was valid and the work has started. The outcome
+// is reported through cmd.health, which is the other half of why mesh state lives
+// there: it is the completion channel, not just a dashboard.
+//
+// There is no status action — cmd.health already carries the same block, and a
+// second way to ask one question is a second thing to keep in step.
+func (h *CommandHandlers) handleNebula(msg *nats.Msg) {
+	var req nebulaRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		h.logger.Error("Failed to parse nebula request", zap.Error(err))
+		h.respondError(msg, "Invalid request format")
+		h.taskExecutor.RecordCommandError(err)
+		return
+	}
+
+	if h.nebulaCtl == nil {
+		h.respondError(msg, "nebula is not enabled on this agent (set nebula.enabled: true)")
+		return
+	}
+
+	switch req.Action {
+	case "sync", "restart":
+	default:
+		h.respondError(msg, `action must be "sync" or "restart"`)
+		return
+	}
+
+	h.logger.Info("Accepted nebula command", zap.String("action", req.Action))
+
+	response := nebulaResponse{
+		Status: "accepted",
+		Action: req.Action,
+		TS:     utils.NowRFC3339(),
+	}
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		h.logger.Error("Failed to marshal nebula response", zap.Error(err))
+		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		return
+	}
+	msg.Respond(responseBytes)
+
+	// Get the acceptance onto the wire before touching the overlay it may be
+	// riding on.
+	if err := h.natsClient.Flush(); err != nil {
+		h.logger.Warn("Failed to flush nebula acceptance before acting", zap.Error(err))
+	}
+
+	// handleWithRecovery wraps the handler, not anything the handler spawns, so
+	// this goroutine needs its own: a panic in a detached goroutine takes the
+	// process down.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.logger.Error("Panic in nebula command",
+					zap.String("action", req.Action),
+					zap.Any("panic", r))
+			}
+		}()
+
+		h.runNebulaAction(req.Action)
+	}()
+}
+
+// runNebulaAction performs the work behind an accepted nebula command. Its
+// outcome reaches the caller through cmd.health, so everything here is logged
+// rather than returned.
+func (h *CommandHandlers) runNebulaAction(action string) {
+	switch action {
+	case "sync":
+		changed, err := h.nebulaCtl.Sync()
+		if err != nil {
+			h.logger.Error("Nebula sync failed", zap.Error(err))
+			h.taskExecutor.RecordCommandError(err)
+			return
+		}
+		h.taskExecutor.RecordCommandSuccess()
+		h.logger.Info("Nebula sync complete", zap.Bool("changed", changed))
+
+	case "restart":
+		if err := h.nebulaCtl.Restart(); err != nil {
+			h.logger.Error("Nebula restart failed", zap.Error(err))
+			h.taskExecutor.RecordCommandError(err)
+			return
+		}
+		h.taskExecutor.RecordCommandSuccess()
+		h.logger.Info("Nebula restart complete")
 	}
 }
 
@@ -555,8 +705,14 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 	// Get OS information
 	osInfo := h.getOSInfo()
 
+	// Overlay state, when there is an overlay
+	var nebulaHealth *nebula.Health
+	if h.nebulaCtl != nil {
+		nebulaHealth = h.nebulaCtl.Health()
+	}
+
 	// Determine overall health status
-	status := h.determineHealthStatus(natsHealth, taskMetrics)
+	status := h.determineHealthStatus(natsHealth, taskMetrics, nebulaHealth)
 
 	response := healthResponse{
 		Status: status,
@@ -566,6 +722,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		Tasks:  taskMetrics,
 		Config: configInfo,
 		OS:     osInfo,
+		Nebula: nebulaHealth,
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -589,6 +746,7 @@ func (h *CommandHandlers) getNATSHealth() *NATSHealth {
 
 	health := &NATSHealth{
 		Connected:  h.natsClient.IsConnected(),
+		JetStream:  h.natsClient.IsJetStreamAvailable(),
 		Reconnects: uint64(stats.Reconnects),
 		InMsgs:     stats.InMsgs,
 		OutMsgs:    stats.OutMsgs,
@@ -653,10 +811,21 @@ func (h *CommandHandlers) getOSInfo() *tasks.OSInfo {
 }
 
 // determineHealthStatus calculates overall health status
-func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetrics *tasks.TaskHealthMetrics) string {
+func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetrics *tasks.TaskHealthMetrics, nebulaHealth *nebula.Health) string {
 	// UNHEALTHY: NATS disconnected
 	if !natsHealth.Connected {
 		return "unhealthy"
+	}
+
+	// DEGRADED: connected, but JetStream is not usable — telemetry is going
+	// nowhere. This used to abort startup; now that an unreachable bus no longer
+	// stops the agent, this is what keeps the failure from being silent.
+	//
+	// The check runs asynchronously on connect, so there is a window of a few
+	// milliseconds after connecting where this reports degraded because the answer
+	// has not come back yet. It corrects itself on the next health request.
+	if !natsHealth.JetStream {
+		return "degraded"
 	}
 
 	// DEGRADED: High reconnect count (connection unstable)
@@ -669,6 +838,19 @@ func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetr
 	if taskMetrics.MetricsCount > 0 {
 		failureRate := float64(taskMetrics.MetricsFailures) / float64(taskMetrics.MetricsCount)
 		if failureRate > 0.5 {
+			return "degraded"
+		}
+	}
+
+	// DEGRADED: the overlay is enabled but not carrying traffic. Never unhealthy:
+	// telemetry and commands are unaffected, and turning a fleet dashboard red for
+	// someone else's network problem is noise.
+	//
+	// Note the asymmetry this cannot fix. On an agent whose NATS rides the overlay,
+	// a mesh failure means this response never arrives at all, so the signal is
+	// unobservable in exactly the case where it matters most.
+	if nebulaHealth != nil {
+		if !nebulaHealth.Running || nebulaHealth.Tunnels == 0 || nebulaHealth.RolledBack {
 			return "degraded"
 		}
 	}
