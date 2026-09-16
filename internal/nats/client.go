@@ -140,7 +140,7 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 	// case rather than rewriting the config's auth type preserves the fact that
 	// this agent manages its credentials through the platform, which is what the
 	// rotate command and the creds_sync task key off.
-	case "creds", "stone-age":
+	case "creds", "platform":
 		logger.Info("Using credentials file authentication", zap.String("file", cfg.Auth.CredsFile))
 		// UserCredentials re-reads the file on every connect and reconnect, so a
 		// credential replaced at runtime takes effect on the next reconnect

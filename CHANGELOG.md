@@ -16,6 +16,42 @@ that period, and this file starts where the versioned releases do.
 
 ### Added
 
+- **The agent can now be a site's NATS leaf node.** This absorbs `leaf-sync`,
+  which used to be a separate binary in the platform repository. Four capabilities
+  arrived together, each independently switchable:
+
+  - `agent -leaf-config` — a one-shot that authenticates as this agent's Thing,
+    calls `GET /api/me/leaf-config`, and writes `nats-leaf.conf` (0644) beside its
+    creds (0600). It has to be separable from running: the usual edge shape is a
+    separately supervised `nats-server`, and that server needs its config file
+    before it starts, which is before the agent has anything to connect to.
+  - `nats.server_config` — host a `nats-server` in this process from that file.
+    It points at *any* nats-server config, not only a generated one, so it is
+    equally how you run a plain embedded broker on a box with no platform at all.
+    `nats.urls` must name the port it listens on; startup refuses a disagreement.
+  - `twin.enabled` — relay this site's reported state up to the hub and mirror
+    desired state down, so the site keeps deciding locally through a WAN outage.
+  - `observability.addr` — serve `/ready` and `/metrics` on the box. `cmd.health`
+    travels over NATS, which is the link that breaks; the box you most need to ask
+    is the one whose uplink is down, and that is when it goes quiet.
+
+  **There is no `edge.enabled` key and no gateway flag.** "Gateway" is not a mode
+  the config declares — it is the sum of the capabilities it turns on, and any of
+  them means the edge goroutine has a reason to exist. A single flag naming the
+  role would be a second control that can disagree with the first:
+  `edge.enabled: false` beside `twin.enabled: true` has no correct behaviour.
+
+  On the platform side a gateway is just a **Thing**; the `leaf_nodes` collection
+  is gone. `GET /api/me/leaf-config` is bound to `things`, takes no record id, and
+  gates on nothing — everything it serves is either public trust material (the
+  operator, account and `$SYS` account JWTs, which every server validates anyway)
+  or the caller's own credential, which it must already hold to connect.
+
+  `nats-server` links into the binary whether or not you configure one, so a
+  scanner flagging a `nats-server` CVE against this build is reporting code that
+  does not run unless `nats.server_config` is set. New docs:
+  **[docs/leaf-node.md](docs/leaf-node.md)**.
+
 - **An embedded Nebula overlay host**, off by default (`nebula.enabled`). The agent
   fetches its Nebula config from the stone-age.io platform — the `nebula_host`
   related to its own thing — runs Nebula in-process, and re-reads the config on an
@@ -38,6 +74,58 @@ that period, and this file starts where the versioned releases do.
   whether a revocation has landed on a device. Absent when the overlay is off.
 
 ### Changed
+
+- **BREAKING: the platform relationship moved to a top-level `platform:` block,**
+  and `auth.type: "stone-age"` became `auth.type: "platform"`.
+
+  ```yaml
+  # before                          # after
+  nats:                             platform:
+    auth:                             url: "https://platform.example.com"
+      type: "stone-age"               identity: "thing@example.com"
+      stone-age:                      password_env: "AGENT_PLATFORM_PASSWORD"
+        url: ...                      sync_interval: "24h"
+        identity: ...
+        password_env: ...           nats:
+  tasks:                              auth:
+    creds_sync:                         type: "platform"
+      enabled: true                     creds_file: "/etc/agent/device.creds"
+      interval: "24h"
+  ```
+
+  Three subsystems read the platform relationship — the NATS credential
+  lifecycle, the Nebula config source, and the new leaf bootstrap — and with it
+  buried under `nats.auth` the other two had to reach across sections to ask
+  whether the platform was configured at all. "Is the block present" is a better
+  question than "is some other section's type field set to a particular string".
+  The rename follows: `nebula.source` already said `"platform"` for the same
+  idea, so the two spellings were one idea with two names.
+
+  `tasks.creds_sync` is gone, replaced by `platform.sync_interval` (same 1h–72h
+  range, same default). It had an `enabled` flag that is not a state worth being
+  able to express: an agent told to fetch its credentials from the platform but
+  not to keep them current is a device that stops working in seven days.
+
+  Update `config.yaml` before upgrading — the old keys are not read.
+
+- **The agent now opens a listening socket, which 0.1.0 did not.**
+  `observability.addr` defaults to `127.0.0.1:9100`, so upgrading starts serving
+  `/ready` and `/metrics` on loopback without anything being configured. Set
+  `observability.addr: ""` to keep the old behaviour; the checks still run and
+  still log either way.
+
+  Worth calling out on its own because 0.1.0 was described — here and in every
+  install guide — as having **no listening ports**, and firewall rules may have
+  been written against that. Nothing about it is reachable off the box by
+  default, and nothing can *instruct* the agent through it; the endpoints are
+  read-only. Two caveats:
+
+  - **9100 is `node_exporter`'s default port** on Linux and FreeBSD. On a box
+    running both, move one — a bind failure is logged, not fatal, so the symptom
+    is an endpoint that quietly never came up. `windows_exporter` uses 9182.
+  - **Loopback is not an authorization boundary** on a box with other users. Set
+    `observability.metrics_token` (Bearer, or Basic with any username) before
+    moving `addr` anywhere else.
 
 - **The agent no longer refuses to start when NATS is unreachable.** `nats.Connect`
   now retries in the background instead of failing construction, and the JetStream

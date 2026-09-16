@@ -162,15 +162,20 @@ Copy-Item "\\path\to\device.creds" -Destination "$configPath\device.creds"
 **Or let the stone-age.io platform manage credentials — the agent logs in as its Thing record, pulls creds from its nats_user relation, and keeps them current:**
 
 ```yaml
+platform:
+  url: "https://platform.example.com"
+  identity: "thing@example.com"              # the thing's login email
+  password_env: "AGENT_PLATFORM_PASSWORD"
+
 nats:
   auth:
-    type: "stone-age"
+    type: "platform"
     creds_file: "C:\\ProgramData\\Agent\\device.creds"
-    stone-age:
-      url: "https://platform.example.com"
-      identity: "thing@example.com"          # the thing's login email
-      password_env: "AGENT_PLATFORM_PASSWORD"
 ```
+
+The `platform:` block is top level because three subsystems read it: this
+credential lifecycle, the [Nebula config source](nebula.md), and the
+[leaf bootstrap](leaf-node.md).
 
 Set the environment variable before starting the agent:
 ```powershell
@@ -645,11 +650,16 @@ Start-Process msiexec.exe -ArgumentList "/x windows_exporter /quiet" -Wait
    Set-Acl "C:\ProgramData\Agent\Scripts" $acl
    ```
 
-3. **Firewall**: Agent only needs outbound NATS connection
+3. **Firewall**: Outbound NATS, plus outbound HTTPS if the platform block is set
    ```powershell
-   # No inbound ports required
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # is not reachable off the box. A SITE GATEWAY is the exception: local
+   # devices connect in to the nats-server it hosts (4222 by default).
+
    # Verify outbound is allowed:
    Test-NetConnection -ComputerName nats.example.com -Port 4222
+   # And, when the platform block is configured:
+   Test-NetConnection -ComputerName platform.example.com -Port 443
    ```
 
 4. **Windows Updates**: Keep Windows and agent updated

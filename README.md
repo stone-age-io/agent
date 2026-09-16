@@ -10,10 +10,26 @@ Agent is a purpose-built system management tool that provides remote management 
 
 **Key Principles:**
 - **Lightweight**: <50MB RAM, <1% CPU usage
-- **Secure**: TLS support, whitelist-based execution, no exposed endpoints
+- **Secure**: TLS for NATS, allowlisted services/commands/log paths, and no inbound management API — nothing can tell this agent to do anything except over its own authenticated NATS connection
 - **Simple**: Do one thing well
 - **Extensible**: PowerShell/Bash scripts for custom functionality
-- **NATS-Native**: All communication via NATS (no HTTP endpoints)
+- **NATS-Native**: management and telemetry are NATS, always dialed outbound
+
+### What listens, and what dials out
+
+Worth being exact, because it decides your firewall rules:
+
+| | Direction | When |
+|---|---|---|
+| NATS (telemetry, commands, heartbeats) | **outbound** to your hub | always |
+| Platform HTTPS (credentials, Nebula config, leaf bootstrap) | **outbound** to the Control Plane | when the `platform:` block is set |
+| `/ready` + `/metrics` | **listens**, `127.0.0.1:9100` by default | unless `observability.addr` is empty |
+| Nebula overlay (UDP) | **outbound** to a lighthouse | when `nebula.enabled` |
+| Embedded `nats-server` | **listens**, per its own config | only when `nats.server_config` is set |
+
+The first two never need an inbound rule. The readiness listener is on loopback
+unless you move it. A site gateway is the exception by design: local devices have
+to reach the leaf server it hosts.
 
 ---
 
@@ -51,6 +67,21 @@ Agent is a purpose-built system management tool that provides remote management 
 - **Platform Credentials**: Auto-fetch NATS credentials on first start, then renew and rotate them without redistribution
 - **Manual Credentials**: Pre-distribute `.creds` files
 - **Token / UserPass**: Simple auth for development
+
+### Overlay networking (optional)
+- **Nebula mesh host**, run in-process rather than as a separate service. The config is re-read on an interval, which is what makes revocation, renewal and CA rotation actually reach the device -- Nebula has no CRL, so `nebula.sync_interval` **is** this device's revocation latency. A newly applied config that cannot reach a lighthouse is rolled back to the last one known to work.
+
+### Local health (on by default)
+- **`/ready` and `/metrics`** on `127.0.0.1:9100`. This is not a gateway feature: any agent can say whether it is healthy, and `cmd.health` travels over NATS, which is the link that breaks. The box you most need to ask is the one whose uplink is down, and that is exactly when it goes quiet over the bus.
+
+### Site gateway (all optional)
+- **NATS leaf node**: bootstrap a site's `nats-leaf.conf` from the platform (`agent -leaf-config`) and, if you want, host that server in this process
+- **Digital twin sync**: relay this site's reported state up to the hub, mirror desired state down, so the site keeps working through a WAN outage
+
+None of these is a mode you switch on. There is no `edge.enabled` key and no
+gateway flag on the platform either -- a "gateway" is just an agent with more of
+these keys set, and a Thing whose type says so. See
+**[Leaf Nodes](docs/leaf-node.md)**.
 
 ---
 
@@ -185,9 +216,27 @@ sudo service agent start
 code: "server-prod-01"    # Identity token used in NATS subjects (legacy key: device_id)
 location: "hq"            # Optional deployment location, carried in telemetry payloads
 
+# stone-age.io platform (optional). One home for the platform relationship:
+# the NATS credential lifecycle, the Nebula config source and the leaf
+# bootstrap all read it. Leave the block out and none of them are available.
+# platform:
+#   url: "https://platform.example.com"
+#   identity: "thing@example.com"              # the thing's login email
+#   password_env: "AGENT_PLATFORM_PASSWORD"
+#   sync_interval: "24h"                       # credential refresh, 1h-72h
+
 # NATS Connection
 nats:
   urls: ["nats://nats.example.com:4222"]
+
+  # Host a nats-server in this process (optional). On a gateway that is the file
+  # `agent -leaf-config` wrote, but it loads any nats-server config, so this is
+  # equally how you run a plain embedded broker on a box with no platform.
+  # nats.urls must name the port it listens on -- startup refuses a disagreement.
+  # Leave it unset where systemd or Docker already supervises one: the bus then
+  # survives an agent restart, which is what you want on a live site.
+  # server_config: "/etc/agent/nats-leaf.conf"
+
   auth:
     # Option 1: Credentials file (pre-distributed)
     type: "creds"
@@ -195,13 +244,10 @@ nats:
 
     # Option 2: stone-age.io platform (fetches and maintains .creds).
     # The agent is a Thing on the platform: it logs in as itself and its
-    # credential lives on its nats_user relation.
-    # type: "stone-age"
+    # credential lives on its nats_user relation. Configure the platform
+    # itself in the top-level `platform:` block above.
+    # type: "platform"
     # creds_file: "/etc/agent/device.creds"
-    # stone-age:
-    #   url: "https://platform.example.com"
-    #   identity: "thing@example.com"     # the thing's login email
-    #   password_env: "AGENT_PLATFORM_PASSWORD"
 
 # Scheduled Tasks
 tasks:
@@ -220,6 +266,26 @@ tasks:
     services:
       - "nginx"
       - "postgresql"
+
+# Digital-twin sync (optional, off by default: it moves data-plane traffic)
+# twin:
+#   enabled: true
+
+# /ready and /metrics on this box. ON by default, on loopback -- set addr to ""
+# to serve neither. The checks still run and still log either way.
+#
+# NOTE on Linux and FreeBSD: 9100 is also node_exporter's default port. If you
+# run the exporter on this box, move one of them.
+observability:
+  addr: "127.0.0.1:9100"
+
+# Nebula overlay (optional, off by default). sync_interval is a security number,
+# not a tuning knob: Nebula has no CRL, so it is this device's revocation
+# latency. See docs/nebula.md.
+# nebula:
+#   enabled: true
+#   source: "platform"        # or "file", with config_file, for no-platform use
+#   sync_interval: "10m"
 
 # Command Execution
 commands:
@@ -260,6 +326,7 @@ commands:
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
 - **[Platform Credentials](docs/credentials.md)** - Provisioning, renewing, and rotating credentials from the stone-age.io platform
+- **[Leaf Nodes](docs/leaf-node.md)** - Run a site's NATS leaf node, sync the digital twin, serve local health
 - **[Nebula Overlay](docs/nebula.md)** - Run the agent as a host on your organization's Nebula mesh
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 

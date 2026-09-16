@@ -153,15 +153,20 @@ sudo chmod 600 /usr/local/etc/agent/device.creds
 **Or let the stone-age.io platform manage credentials — the agent logs in as its Thing record, pulls creds from its nats_user relation, and keeps them current:**
 
 ```yaml
+platform:
+  url: "https://platform.example.com"
+  identity: "thing@example.com"              # the thing's login email
+  password_env: "AGENT_PLATFORM_PASSWORD"
+
 nats:
   auth:
-    type: "stone-age"
+    type: "platform"
     creds_file: "/usr/local/etc/agent/device.creds"
-    stone-age:
-      url: "https://platform.example.com"
-      identity: "thing@example.com"          # the thing's login email
-      password_env: "AGENT_PLATFORM_PASSWORD"
 ```
+
+The `platform:` block is top level because three subsystems read it: this
+credential lifecycle, the [Nebula config source](nebula.md), and the
+[leaf bootstrap](leaf-node.md).
 
 Set the environment variable before starting the agent:
 ```bash
@@ -653,8 +658,13 @@ commands:
 
 3. **Firewall**: Use ipfw or pf to restrict connections
    ```bash
-   # Agent only needs outbound NATS connection
-   # No inbound ports required
+   # Telemetry and commands: outbound NATS only.
+   # Credentials, Nebula config and leaf bootstrap: outbound HTTPS (443) to the
+   # Control Plane, when the `platform:` block is set.
+   #
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # is not reachable off the box. A SITE GATEWAY is the exception: local
+   # devices connect in to the nats-server it hosts (4222 by default).
    ```
 
 4. **Updates**: Keep FreeBSD, agent, and node_exporter updated

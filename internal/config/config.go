@@ -11,16 +11,100 @@ import (
 	"github.com/spf13/viper"
 )
 
+// authPlatform is the auth type that sources credentials from the stone-age.io
+// platform. Named rather than repeated as a literal: it is compared in four
+// places, and the type and nebula.source used to spell the same idea two
+// different ways ("stone-age" vs "platform").
+const authPlatform = "platform"
+
 // Config represents the complete agent configuration
 type Config struct {
-	Code          string         `mapstructure:"code"`     // Agent identity token used in NATS subjects (was: device_id)
-	Location      string         `mapstructure:"location"` // Optional deployment location, carried in telemetry payloads
-	SubjectPrefix string         `mapstructure:"subject_prefix"`
-	NATS          NATSConfig     `mapstructure:"nats"`
-	Nebula        NebulaConfig   `mapstructure:"nebula"`
-	Tasks         TasksConfig    `mapstructure:"tasks"`
-	Commands      CommandsConfig `mapstructure:"commands"`
-	Logging       LoggingConfig  `mapstructure:"logging"`
+	Code          string              `mapstructure:"code"`     // Agent identity token used in NATS subjects (was: device_id)
+	Location      string              `mapstructure:"location"` // Optional deployment location, carried in telemetry payloads
+	SubjectPrefix string              `mapstructure:"subject_prefix"`
+	Platform      PlatformConfig      `mapstructure:"platform"`
+	NATS          NATSConfig          `mapstructure:"nats"`
+	Nebula        NebulaConfig        `mapstructure:"nebula"`
+	Twin          TwinConfig          `mapstructure:"twin"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
+	Tasks         TasksConfig         `mapstructure:"tasks"`
+	Commands      CommandsConfig      `mapstructure:"commands"`
+	Logging       LoggingConfig       `mapstructure:"logging"`
+}
+
+// PlatformConfig is the agent's relationship with the stone-age.io platform:
+// one home for the URL, the identity and the session.
+//
+// It is top-level rather than nested under nats.auth, where it used to live,
+// because it is not only a NATS concern. Three subsystems read it — the NATS
+// credential lifecycle, the Nebula config source, and the leaf bootstrap — and
+// with it buried under one of them the other two had to reach across sections
+// to ask whether the platform was configured at all. "Is the block present" is
+// a better question than "is some other section's type field set to a
+// particular string".
+//
+// The agent is a Thing on the platform. A gateway is a Thing too: one that also
+// runs a NATS leaf node. There is deliberately no collection setting and no
+// gateway flag here — what a box does is what its config turns on, and the
+// platform serves the same leaf material to any Thing that asks because all of
+// it is public trust material plus the caller's own credential.
+type PlatformConfig struct {
+	URL      string `mapstructure:"url"`      // Platform base URL (https:// unless allow_insecure_url)
+	Identity string `mapstructure:"identity"` // The thing's login email
+
+	// PasswordEnv names the env var holding the thing's password. Required until
+	// the agent has bootstrapped; after that it holds a session token instead and
+	// the password can be removed from the service environment. Without it, a
+	// device whose token has lapsed needs manual re-provisioning.
+	PasswordEnv string `mapstructure:"password_env"`
+
+	// SessionFile stores the platform session token and the revisions of the
+	// credential and Nebula config already on disk. Defaults to
+	// platform-session.json beside nats.auth.creds_file.
+	SessionFile string `mapstructure:"session_file"`
+
+	// SyncInterval is how often the credential is refreshed. Was
+	// tasks.creds_sync.interval, which put the cadence of a platform
+	// conversation in the task list rather than beside the platform.
+	SyncInterval time.Duration `mapstructure:"sync_interval"`
+
+	// AllowInsecureURL permits a plain http:// platform URL. Development only:
+	// bootstrap sends the thing's password and receives an nkey seed, so on the
+	// wire in cleartext both are readable.
+	AllowInsecureURL bool `mapstructure:"allow_insecure_url"`
+}
+
+// TwinConfig turns on digital-twin sync between this site's local JetStream
+// domain and the hub: a server-maintained mirror of `twin_desired` down, and a
+// relay of `twin` up.
+//
+// Off by default because it moves data-plane traffic — an upgrade must not
+// silently start doing it. Requires the platform block, since the hub's
+// JetStream domain is served by the leaf-config route rather than configured
+// here.
+type TwinConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+}
+
+// ObservabilityConfig serves /ready and /metrics on this box.
+//
+// Top-level, not nested under a gateway or edge section, because it is not
+// specific to one: any agent can report whether it is healthy, and the reason
+// to serve it locally applies to all of them. `cmd.health` travels over NATS,
+// which is the link that breaks — a device whose uplink is down is exactly the
+// one you want to ask, and that is the moment it goes quiet.
+type ObservabilityConfig struct {
+	// Addr is the listen address. Empty serves neither endpoint; the checks
+	// still run and still log. Opening a port on an appliance should be a
+	// decision, not a default, so this defaults to loopback.
+	Addr string `mapstructure:"addr"`
+
+	// MetricsToken optionally protects /metrics, accepted as Bearer or as Basic
+	// with any username. Empty means open, reasonable on loopback.
+	MetricsToken string `mapstructure:"metrics_token"`
+
+	// Interval is how often the readiness checks run.
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 // NebulaConfig configures the embedded Nebula overlay host. Disabled by default:
@@ -64,9 +148,24 @@ type NebulaConfig struct {
 
 // NATSConfig holds NATS connection settings
 type NATSConfig struct {
-	URLs          []string      `mapstructure:"urls"`
-	Auth          AuthConfig    `mapstructure:"auth"`
-	TLS           TLSConfig     `mapstructure:"tls"`
+	URLs []string   `mapstructure:"urls"`
+	Auth AuthConfig `mapstructure:"auth"`
+	TLS  TLSConfig  `mapstructure:"tls"`
+
+	// ServerConfig hosts a nats-server inside this process, loading the config
+	// file named here. Empty means the agent runs no server — something else
+	// supervises one, or there is none.
+	//
+	// One key rather than an enabled/path pair: "enabled with no path" is not a
+	// state worth being able to express. It points at ANY nats-server config,
+	// not only one the leaf bootstrap generated, so this is equally how you run
+	// a plain embedded broker on a box with no platform at all.
+	//
+	// On a gateway, nats.urls must name the port this config listens on —
+	// startup refuses the pair if they disagree, since nothing would ever reach
+	// the server.
+	ServerConfig string `mapstructure:"server_config"`
+
 	MaxReconnects int           `mapstructure:"max_reconnects"`
 	ReconnectWait time.Duration `mapstructure:"reconnect_wait"`
 	DrainTimeout  time.Duration `mapstructure:"drain_timeout"`
@@ -74,42 +173,11 @@ type NATSConfig struct {
 
 // AuthConfig holds NATS authentication credentials
 type AuthConfig struct {
-	Type      string       `mapstructure:"type"`       // creds, token, userpass, stone-age, none
-	CredsFile string       `mapstructure:"creds_file"` // for creds and stone-age auth
-	Token     string       `mapstructure:"token"`      // for token auth
-	Username  string       `mapstructure:"username"`   // for userpass auth
-	Password  string       `mapstructure:"password"`   // for userpass auth
-	StoneAge  StoneAgeAuth `mapstructure:"stone-age"`  // for stone-age.io platform credentials
-}
-
-// StoneAgeAuth configures credential management against the stone-age.io
-// platform. The agent is a Thing on the platform: it authenticates as itself
-// against the `things` auth collection and its NATS credential lives on the
-// related nats_user record.
-//
-// The name is the platform, not the database behind it: the agent depends on the
-// stone-age.io schema (things → nats_user → creds_file) and on a route the
-// platform defines itself (POST /api/me/nats-creds/rotate), neither of which
-// comes from PocketBase.
-type StoneAgeAuth struct {
-	URL      string `mapstructure:"url"`      // Platform base URL (https:// unless allow_insecure_url)
-	Identity string `mapstructure:"identity"` // The thing's login email
-
-	// PasswordEnv names the env var holding the thing's password. Required until
-	// the agent has bootstrapped; after that it holds a session token instead and
-	// the password can be removed from the service environment. Without it, a
-	// device whose token has lapsed needs manual re-provisioning.
-	PasswordEnv string `mapstructure:"password_env"`
-
-	// SessionFile stores the platform session token and the revision of the
-	// credential already on disk. Defaults to platform-session.json beside
-	// creds_file.
-	SessionFile string `mapstructure:"session_file"`
-
-	// AllowInsecureURL permits a plain http:// platform URL. Development only:
-	// bootstrap sends the thing's password and receives an nkey seed, so on the
-	// wire in cleartext both are readable.
-	AllowInsecureURL bool `mapstructure:"allow_insecure_url"`
+	Type      string `mapstructure:"type"`       // creds, token, userpass, platform, none
+	CredsFile string `mapstructure:"creds_file"` // for creds and platform auth
+	Token     string `mapstructure:"token"`      // for token auth
+	Username  string `mapstructure:"username"`   // for userpass auth
+	Password  string `mapstructure:"password"`   // for userpass auth
 }
 
 // TLSConfig holds TLS connection settings
@@ -127,14 +195,6 @@ type TasksConfig struct {
 	SystemMetrics SystemMetricsConfig `mapstructure:"system_metrics"`
 	ServiceCheck  ServiceCheckConfig  `mapstructure:"service_check"`
 	Inventory     InventoryConfig     `mapstructure:"inventory"`
-	CredsSync     CredsSyncConfig     `mapstructure:"creds_sync"`
-}
-
-// CredsSyncConfig configures periodic credential upkeep against the platform.
-// Only used with stone-age auth; the scheduler skips the task otherwise.
-type CredsSyncConfig struct {
-	Enabled  bool          `mapstructure:"enabled"`
-	Interval time.Duration `mapstructure:"interval"`
 }
 
 // HeartbeatConfig configures the heartbeat task
@@ -246,11 +306,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.service_check.interval", "1m")
 	v.SetDefault("tasks.inventory.enabled", true)
 	v.SetDefault("tasks.inventory.interval", "24h")
-	v.SetDefault("tasks.creds_sync.enabled", true)
-	v.SetDefault("tasks.creds_sync.interval", "24h")
+	v.SetDefault("platform.sync_interval", "24h")
 
 	// Nebula defaults. Off unless asked for; the paths sit beside the other
 	// platform-managed secrets.
+	// Off unless asked for. Each is one capability, not a role.
+	v.SetDefault("nats.server_config", "")
+	v.SetDefault("twin.enabled", false)
+	v.SetDefault("observability.addr", "127.0.0.1:9100")
+	v.SetDefault("observability.metrics_token", "")
+	v.SetDefault("observability.interval", "15s")
+
 	v.SetDefault("nebula.enabled", false)
 	v.SetDefault("nebula.source", "platform")
 	v.SetDefault("nebula.cache_file", defaults.NebulaCacheFile)
@@ -272,8 +338,8 @@ func setDefaults(v *viper.Viper) {
 // config values, so validate() and the rest of the agent see one settled shape.
 func applyDerivedDefaults(cfg *Config) {
 	// The platform session lives next to the credential it belongs to
-	if cfg.NATS.Auth.Type == "stone-age" && cfg.NATS.Auth.StoneAge.SessionFile == "" && cfg.NATS.Auth.CredsFile != "" {
-		cfg.NATS.Auth.StoneAge.SessionFile = filepath.Join(
+	if cfg.NATS.Auth.Type == authPlatform && cfg.Platform.SessionFile == "" && cfg.NATS.Auth.CredsFile != "" {
+		cfg.Platform.SessionFile = filepath.Join(
 			filepath.Dir(cfg.NATS.Auth.CredsFile), "platform-session.json")
 	}
 }
@@ -326,21 +392,21 @@ func validate(cfg *Config) error {
 		if _, err := os.Stat(cfg.NATS.Auth.CredsFile); err != nil {
 			return fmt.Errorf("credentials file not found: %s (%w)", cfg.NATS.Auth.CredsFile, err)
 		}
-	case "stone-age":
+	case "platform":
 		if cfg.NATS.Auth.CredsFile == "" {
-			return fmt.Errorf("creds_file is required for stone-age auth type (path where .creds will be written)")
+			return fmt.Errorf("creds_file is required for platform auth type (path where .creds will be written)")
 		}
-		sa := cfg.NATS.Auth.StoneAge
+		sa := cfg.Platform
 		if sa.URL == "" {
-			return fmt.Errorf("stone-age.url is required for stone-age auth type")
+			return fmt.Errorf("platform.url is required for platform auth type")
 		}
 		if sa.Identity == "" {
-			return fmt.Errorf("stone-age.identity is required for stone-age auth type")
+			return fmt.Errorf("platform.identity is required for platform auth type")
 		}
 		// The bootstrap POSTs the thing's password and receives an nkey seed, so
 		// plain http is a development-only choice and has to be asked for
 		if !sa.AllowInsecureURL && !strings.HasPrefix(strings.ToLower(sa.URL), "https://") {
-			return fmt.Errorf("stone-age.url must be https:// (got: %s) - set stone-age.allow_insecure_url: true to override for development", sa.URL)
+			return fmt.Errorf("platform.url must be https:// (got: %s) - set platform.allow_insecure_url: true to override for development", sa.URL)
 		}
 		// The password is only needed while the agent has nothing to work from.
 		// Once it holds a credential or a session token it can authenticate
@@ -350,7 +416,7 @@ func validate(cfg *Config) error {
 			_, credsErr := os.Stat(cfg.NATS.Auth.CredsFile)
 			_, sessionErr := os.Stat(sa.SessionFile)
 			if credsErr != nil && sessionErr != nil {
-				return fmt.Errorf("stone-age.password_env is required until the agent has bootstrapped (no credentials at %s and no platform session at %s)",
+				return fmt.Errorf("platform.password_env is required until the agent has bootstrapped (no credentials at %s and no platform session at %s)",
 					cfg.NATS.Auth.CredsFile, sa.SessionFile)
 			}
 		}
@@ -366,7 +432,7 @@ func validate(cfg *Config) error {
 	case "none":
 		// No validation needed
 	default:
-		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, stone-age, or none)", cfg.NATS.Auth.Type)
+		return fmt.Errorf("invalid auth type: %s (must be creds, token, userpass, platform, or none)", cfg.NATS.Auth.Type)
 	}
 
 	// Validate TLS configuration
@@ -426,18 +492,23 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("system_metrics interval must be at least 30 seconds (got: %v)", cfg.Tasks.SystemMetrics.Interval)
 	}
 
-	// Validate credential sync interval. Only meaningful for stone-age auth —
+	// Validate the platform sync interval. Only meaningful with platform auth —
 	// the scheduler skips the task entirely for every other auth type.
-	if cfg.NATS.Auth.Type == "stone-age" && cfg.Tasks.CredsSync.Enabled {
-		if cfg.Tasks.CredsSync.Interval < time.Hour {
-			return fmt.Errorf("creds_sync interval must be at least 1 hour (got: %v)", cfg.Tasks.CredsSync.Interval)
+	//
+	// There is no separate enabled flag: a non-zero interval IS the switch, and
+	// an agent that gets its credential from the platform always wants it
+	// refreshed. This used to be tasks.creds_sync, which put the cadence of a
+	// platform conversation in the task list rather than beside the platform.
+	if cfg.NATS.Auth.Type == authPlatform && cfg.Platform.SyncInterval > 0 {
+		if cfg.Platform.SyncInterval < time.Hour {
+			return fmt.Errorf("platform.sync_interval must be at least 1 hour (got: %v)", cfg.Platform.SyncInterval)
 		}
 		// Each sync renews the platform session token, whose TTL is set by the
 		// platform (7 days on the things collection today). Syncing has to stay
 		// well inside that window or a couple of missed runs cost the agent its
 		// password-free path.
-		if cfg.Tasks.CredsSync.Interval > 72*time.Hour {
-			return fmt.Errorf("creds_sync interval must not exceed 72 hours (got: %v) - it renews the platform session token before it expires", cfg.Tasks.CredsSync.Interval)
+		if cfg.Platform.SyncInterval > 72*time.Hour {
+			return fmt.Errorf("platform.sync_interval must not exceed 72 hours (got: %v) - it renews the platform session token before it expires", cfg.Platform.SyncInterval)
 		}
 	}
 
@@ -540,7 +611,7 @@ func validateNebula(cfg *Config) error {
 		// Reading a Nebula config from the platform means authenticating as the
 		// same thing, so it needs the same block. Saying so here beats failing at
 		// the first sync with an empty URL.
-		if cfg.NATS.Auth.Type != "stone-age" {
+		if cfg.NATS.Auth.Type != authPlatform {
 			return fmt.Errorf("nebula.source is \"platform\" but nats.auth.type is %q: reading a Nebula config from the platform authenticates as the same thing as the NATS credential, so it requires stone-age auth (use nebula.source: \"file\" otherwise)", cfg.NATS.Auth.Type)
 		}
 		if cfg.Nebula.CacheFile == "" {

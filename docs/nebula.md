@@ -26,10 +26,9 @@ and what was rejected — see [nebula-design.md](nebula-design.md).
 - **A `nebula_host` record on the platform, linked to this agent's thing.** An
   owner or admin creates it (UI → *Nebula* → *Hosts*) and assigns it to the thing
   through the thing's `nebula_host` field.
-- **`nats.auth.type: "stone-age"`**, for `source: "platform"`. The agent reads its
+- **A top-level `platform:` block**, for `source: "platform"`. The agent reads its
   Nebula config with the same platform identity it uses for its NATS credential,
-  so it needs the same `nats.auth.stone-age` block. Use `source: "file"` if you do
-  not have that.
+  so the same block serves both. Use `source: "file"` if you do not have one.
 - **Privileges to create a network device.** The agent already runs as root or
   SYSTEM as a service, so this is usually already true.
 - **Nebula 1.10 or newer on every other host in the mesh.** `pb-nebula` issues v2

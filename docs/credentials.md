@@ -6,14 +6,14 @@ Fetch, renew, and rotate NATS credentials from the stone-age.io platform.
 
 ## Overview
 
-On the stone-age.io platform, an agent is a **Thing**. With `auth.type: "stone-age"` the agent manages its own NATS `.creds` file against the platform, so credentials never have to be distributed to devices by hand.
+On the stone-age.io platform, an agent is a **Thing**. With `auth.type: "platform"` the agent manages its own NATS `.creds` file against the platform, so credentials never have to be distributed to devices by hand.
 
 Three operations, in the order a device meets them:
 
 | | When | What it does |
 |---|---|---|
 | **Bootstrap** | First start, `.creds` missing | Logs in with the thing's password, writes `.creds` |
-| **Sync** | Every start, then every `creds_sync.interval` | Renews the platform session token, adopts a credential the platform re-minted |
+| **Sync** | Every start, then every `platform.sync_interval` | Renews the platform session token, adopts a credential the platform re-minted |
 | **Rotate** | On the `cmd.rotate_creds` command | Asks the platform to re-mint the credential, adopts it, reconnects |
 
 **Security model:** each device authenticates as its own thing — there is no shared service account. The platform's access rules guarantee an authenticated thing sees only its own record and only its assigned NATS identity, so a compromised device cannot read another device's credentials.
@@ -39,36 +39,44 @@ Three operations, in the order a device meets them:
 code: "server-prod-01"
 location: "hq"
 
+platform:
+  url: "https://platform.example.com"
+  identity: "server-prod-01@things.example.com"
+  password_env: "AGENT_PLATFORM_PASSWORD"
+  sync_interval: "24h"
+
 nats:
   urls: ["nats://nats.example.com:4222"]
   auth:
-    type: "stone-age"
+    type: "platform"
     creds_file: "/etc/agent/device.creds"
-    stone-age:
-      url: "https://platform.example.com"
-      identity: "server-prod-01@things.example.com"
-      password_env: "AGENT_PLATFORM_PASSWORD"
-
-tasks:
-  creds_sync:
-    enabled: true
-    interval: "24h"
 ```
 
+The `platform:` block is **top level**, not nested under `nats.auth`. Three
+subsystems read it — the NATS credential lifecycle here, the
+[Nebula config source](./nebula.md), and the [leaf bootstrap](./leaf-node.md) —
+so with it buried under one of them the other two had to reach across sections
+to ask whether the platform was configured at all. "Is the block present" is a
+better question than "is some other section's type field set to a particular
+string".
+
 ### Configuration Reference
+
+All of these live under `platform:`.
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `url` | Yes | Platform base URL. Must be `https://` unless `allow_insecure_url` is set |
 | `identity` | Yes | The thing's login email |
 | `password_env` | Until bootstrapped | Name of the env var holding the thing's password — see [After the first boot](#after-the-first-boot) |
+| `sync_interval` | `24h` | Range 1h–72h. Must stay well inside the platform's session token TTL (7 days) |
 | `session_file` | No | Where the platform session is stored. Defaults to `platform-session.json` beside `creds_file` |
 | `allow_insecure_url` | No | Permits a plain `http://` platform URL. Development only |
 
-| Task field | Default | Description |
-|------------|---------|-------------|
-| `creds_sync.enabled` | `true` | Ignored unless `auth.type` is `stone-age` |
-| `creds_sync.interval` | `24h` | Range 1h–72h. Must stay well inside the platform's session token TTL (7 days) |
+There is no enabled flag for the sync. The block being present is what turns the
+platform relationship on, and an agent configured to fetch its credentials from
+the platform but told not to keep them current is not a state worth being able
+to express.
 
 The collection (`things`), the credential source (`nats_user` relation → `creds_file`), and the identity checks are fixed — the agent is opinionated about the platform schema.
 
@@ -124,7 +132,7 @@ sudo service agent restart
 ## Behavior
 
 ### First Start
-1. Agent detects `auth.type: "stone-age"` and finds no `.creds` file
+1. Agent detects `auth.type: "platform"` and finds no `.creds` file
 2. Reads the password from the env var named by `password_env`
 3. Authenticates as the thing (`POST /api/collections/things/auth-with-password?expand=nats_user,location`)
 4. Verifies the thing record's `code` equals the agent config's `code` — **fails** on mismatch
@@ -141,7 +149,7 @@ sudo service agent restart
 If the `.creds` file is missing but the session file is intact, the agent restores the credential using its stored session and does **not** need the password — so deleting `.creds` on its own is a safe way to force a re-fetch.
 
 ### Credential Sync
-Runs once at startup and then on `creds_sync.interval`:
+Runs once at startup and then on `platform.sync_interval`:
 
 1. `POST /api/collections/things/auth-refresh` with the stored token → a fresh token, renewing its TTL
 2. `GET /api/collections/nats_users/records/{id}?fields=updated` → the credential's revision
@@ -166,7 +174,7 @@ Devices that are frequently offline should keep the password configured.
 
 ### On demand (from the platform side)
 
-Press **Regenerate** on the thing's NATS identity in the platform UI. Each device adopts the new credential on its next sync — within `creds_sync.interval`.
+Press **Regenerate** on the thing's NATS identity in the platform UI. Each device adopts the new credential on its next sync — within `platform.sync_interval`.
 
 ### On demand (from the device side)
 
@@ -202,7 +210,7 @@ The env var named by `password_env` is not set in the **service** environment (s
 ### "no password_env configured and no usable platform session token"
 The password was removed from the environment and the stored session token has lapsed or was rejected. Set the env var again, or delete `.creds` and `platform-session.json` to re-bootstrap.
 
-### "stone-age.url must be https://"
+### "platform.url must be https://"
 The platform URL is plain HTTP. Bootstrap sends the thing's password and receives a private key, so this is refused unless `allow_insecure_url: true` is set for development.
 
 ### "authentication failed: platform returned 400"

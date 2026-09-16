@@ -7,11 +7,40 @@ location: "hq"        # Optional deployment location, carried in heartbeat/telem
 # NATS Subject Prefix (optional)
 subject_prefix: "agents"
 
+# stone-age.io Platform (optional)
+#
+# One home for the platform relationship. Three subsystems read it: the NATS
+# credential lifecycle (nats.auth.type: "platform"), the Nebula config source
+# (nebula.source: "platform"), and the leaf bootstrap (agent -leaf-config).
+# Leave the block out entirely and none of them are available.
+#
+# platform:
+#   url: "https://platform.example.com"
+#   identity: "thing@example.com"                 # the thing's login email
+#   password_env: "AGENT_PLATFORM_PASSWORD"       # reads the password from this env var
+#   sync_interval: "24h"                          # credential refresh, 1h-72h
+#   # session_file: default is beside nats.auth.creds_file
+#   # allow_insecure_url: false                   # http:// platform URL, development only
+
 # NATS Connection
 nats:
   urls: 
     - "nats://connect.your-service.com:4222"
   
+  # Host a nats-server in this process (optional)
+  #
+  # Non-empty means the agent runs the server from this config file. On a
+  # gateway that is the file `agent -leaf-config` wrote; it works equally with
+  # any hand-written nats-server config, so this is also how you run a plain
+  # embedded broker on a box with no platform. nats.urls must name the port it
+  # listens on -- startup refuses the pair if they disagree.
+  #
+  # Leave it unset where systemd or Docker already supervises nats-server: the
+  # bus then survives an agent restart, which is what you want when upgrading
+  # the agent on a live site.
+  #
+  # server_config: "/etc/agent/nats-leaf.conf"
+
   # Authentication (choose one method)
   auth:
     # Option 1: Credentials file (RECOMMENDED for production)
@@ -21,14 +50,9 @@ nats:
     # Option 2: stone-age.io platform (fetches and maintains .creds).
     # The agent is a Thing on the platform: it logs in as itself against the
     # things collection and its credential lives on its nats_user relation.
-    # type: "stone-age"
+    # Configure the platform itself in the top-level `platform:` block.
+    # type: "platform"
     # creds_file: "/etc/agent/device.creds"
-    # stone-age:
-    #   url: "https://platform.example.com"
-    #   identity: "thing@example.com"                # the thing's login email
-    #   password_env: "AGENT_PLATFORM_PASSWORD"      # reads password from this env var
-    #   session_file: "/etc/agent/platform-session.json"  # default: beside creds_file
-    #   # allow_insecure_url: false                  # http:// platform URL, development only
 
     # Option 3: Token authentication
     # type: "token"
@@ -79,12 +103,29 @@ tasks:
     enabled: true
     interval: "24h"
 
-  # Credential Sync - Renews the platform session token and adopts a credential
-  # the platform has re-minted. Only runs with stone-age auth. 1h-72h.
-  creds_sync:
-    enabled: true
-    interval: "24h"
+# Digital-twin sync (optional, off by default)
+#
+# Relays this site's reported state up to the hub and mirrors desired state
+# down. Off by default because it moves data-plane traffic -- an upgrade must
+# not silently start doing it. Requires the platform block.
+twin:
+  enabled: false
 
+# Readiness and metrics on this box (optional)
+#
+# /ready and /metrics, served locally. This exists because cmd.health travels
+# over NATS, which is the link that breaks: a box whose uplink is down is
+# exactly the one you want to ask, and that is when it goes quiet.
+#
+# ON by default, on loopback. Set addr to "" to serve neither -- the checks
+# still run and still log either way. A bind failure is logged, not fatal.
+#
+# NOTE: 9100 is also node_exporter's default port. If you run the exporter on
+# this box, move one of the two or neither will bind reliably.
+observability:
+  addr: "127.0.0.1:9100"
+  metrics_token: ""
+  interval: "15s"
 
 # Nebula Overlay Network (optional, disabled by default)
 #
@@ -99,7 +140,7 @@ tasks:
 nebula:
   enabled: false
 
-  # "platform" reads this agent's nebula_host record (requires stone-age auth).
+  # "platform" reads this agent's nebula_host record (requires platform auth).
   # "file" reads a config from disk and does not poll, cache or roll back.
   source: "platform"
   # config_file: "/etc/agent/nebula.yaml"   # only for source: "file"

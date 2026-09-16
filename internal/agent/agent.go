@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/edge"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
 	"github.com/stone-age-io/agent/internal/nebula"
 	"github.com/stone-age-io/agent/internal/platform"
@@ -59,7 +60,7 @@ func New(configPath string, version string) (*Agent, error) {
 		credsSyncer    scheduler.CredsSyncer
 		nebulaPlatform *platform.Client
 	)
-	if cfg.NATS.Auth.Type == "stone-age" {
+	if cfg.NATS.Auth.Type == "platform" {
 		platformClient := platform.NewClient(cfg, logger)
 
 		// First boot: fetch the credential before anything tries to connect
@@ -174,6 +175,22 @@ func New(configPath string, version string) (*Agent, error) {
 func (a *Agent) Run() error {
 	// Start the scheduler
 	a.scheduler.Start()
+
+	// The edge subsystems, on a box that hosts a NATS leaf or relays twin state.
+	// Started like the Nebula manager and stopped by the same cancel: it owns no
+	// signal handling and no ticker of its own, because this function already
+	// has both.
+	//
+	// Best-effort, for the same reason the overlay is. A gateway whose local bus
+	// will not come up is a serious problem, and an agent that refused to start
+	// over it would be one you could not ask what went wrong.
+	if edgeEnabled(a.config) {
+		go func() {
+			if err := edge.Run(a.ctx, edgeConfig(a.config), a.version); err != nil {
+				a.logger.Error("Edge subsystems stopped", zap.Error(err))
+			}
+		}()
+	}
 
 	a.logger.Info("Agent running",
 		zap.String("code", a.config.Code),

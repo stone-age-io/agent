@@ -72,7 +72,7 @@ type Client struct {
 	code      string
 	location  string
 	credsPath string
-	auth      config.StoneAgeAuth
+	auth      config.PlatformConfig
 	http      *http.Client
 	logger    *zap.Logger
 }
@@ -85,7 +85,7 @@ func NewClient(cfg *config.Config, logger *zap.Logger) *Client {
 		code:      cfg.Code,
 		location:  cfg.Location,
 		credsPath: cfg.NATS.Auth.CredsFile,
-		auth:      cfg.NATS.Auth.StoneAge,
+		auth:      cfg.Platform,
 		http:      &http.Client{Timeout: httpTimeout},
 		logger:    logger,
 	}

@@ -95,17 +95,37 @@ Understanding the design and components of the agent platform.
 - Report health and inventory
 - Publish telemetry to NATS
 
+**Optionally, on a site that is also a gateway** (see [Leaf Nodes](./leaf-node.md)):
+- Bootstrap and host the site's NATS **leaf node**
+- Relay the site's reported digital-twin state up, mirror desired state down
+- Serve `/ready` and `/metrics` **locally**, on the box
+- Run a Nebula overlay host in-process
+
+None of those is a mode. There is no `edge.enabled` key and no gateway flag on
+the platform either — a gateway is a Thing whose `thing_type` says so and whose
+config turns more of these on. A single flag naming the role would be a second
+control that can disagree with the first.
+
 **What it does NOT do:**
 - Parse or analyze metrics (just forwards)
 - Store historical data
 - Make decisions (stateless)
-- Expose HTTP endpoints
+- Expose HTTP endpoints, **except** `/ready` and `/metrics` when
+  `observability.addr` is set, and that defaults to loopback. It is opt-in for
+  exactly this reason: opening a port on an appliance should be a decision. The
+  justification for having it at all is that `cmd.health` travels over NATS,
+  which is the link that breaks — the box you most need to ask is the one whose
+  uplink is down, and that is when it goes quiet
 
 **Technology:**
-- **Language**: Go 1.24+
+- **Language**: Go 1.26+ (Nebula sets the floor)
 - **Service Management**: kardianos/service (cross-platform)
 - **Messaging**: NATS Core + JetStream
 - **Metrics Collection**: gopsutil (default), Prometheus expfmt (optional)
+- **Exposition**: prometheus/client_golang (already linked by Nebula, so free)
+- **Embedded server**: nats-server, linked in whether or not it is configured —
+  so a scanner flagging a nats-server CVE here is reporting code that does not
+  run unless `nats.server_config` is set
 - **Logging**: zap (structured logging)
 
 ---
@@ -198,7 +218,7 @@ Understanding the design and components of the agent platform.
 
 ## Message Flow Examples
 
-### 0. Credential Lifecycle (auth type: "stone-age")
+### 0. Credential Lifecycle (auth type: "platform")
 
 The agent is a Thing on the stone-age.io platform. It authenticates as itself;
 the auth response (with `expand`) carries everything bootstrap needs in one call.
@@ -233,7 +253,7 @@ Access rules on the platform scope everything to the authenticated thing: it can
 see only its own record and only its assigned NATS user, so no device can read
 another device's credentials.
 
-**Upkeep** runs once at startup and then on `tasks.creds_sync.interval` (24h by
+**Upkeep** runs once at startup and then on `platform.sync_interval` (24h by
 default). It deliberately keeps key material off the wire unless it changed:
 
 ```
@@ -381,7 +401,7 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 - Account isolation (tenant cannot access another tenant's subjects)
 - Subject-based permissions
 
-**Platform Credentials (stone-age auth):**
+**Platform Credentials (platform auth):**
 - Credentials fetched over HTTPS; a plain http:// platform URL is refused unless explicitly allowed for development
 - Password read from an environment variable (never in config files), and optional once the agent holds a session token
 - `.creds` and the session file written with owner-only permissions (0600), replaced atomically
@@ -397,8 +417,16 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 
 **In Transit:**
 - TLS for NATS connections (optional but recommended)
-- No HTTP endpoints exposed by agent
-- All communication via encrypted NATS
+- No inbound management API: the agent can only be instructed over its own
+  authenticated NATS connection, which it dials outbound
+- Outbound HTTPS to the Control Plane when the `platform:` block is set
+  (credentials, Nebula config, leaf bootstrap)
+- `/ready` and `/metrics` are served over plain HTTP on `observability.addr`,
+  `127.0.0.1:9100` by default. Loopback is not a permission boundary if other
+  users share the box -- set `observability.metrics_token`, or set `addr` empty,
+  before moving it off loopback
+- A gateway's embedded `nats-server` listens per its own config, which is the
+  one case where devices connect *in*
 
 **At Rest:**
 - Credentials stored with restricted permissions
