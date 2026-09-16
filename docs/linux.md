@@ -153,15 +153,20 @@ sudo chmod 600 /etc/agent/device.creds
 **Or let the stone-age.io platform manage credentials — the agent logs in as its Thing record, pulls creds from its nats_user relation, and keeps them current:**
 
 ```yaml
+platform:
+  url: "https://platform.example.com"
+  identity: "thing@example.com"              # the thing's login email
+  password_env: "AGENT_PLATFORM_PASSWORD"
+
 nats:
   auth:
-    type: "stone-age"
+    type: "platform"
     creds_file: "/etc/agent/device.creds"
-    stone-age:
-      url: "https://platform.example.com"
-      identity: "thing@example.com"          # the thing's login email
-      password_env: "AGENT_PLATFORM_PASSWORD"
 ```
+
+The `platform:` block is top level because three subsystems read it: this
+credential lifecycle, the [Nebula config source](nebula.md), and the
+[leaf bootstrap](leaf-node.md).
 
 Set the environment variable before starting the agent:
 ```bash

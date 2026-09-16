@@ -93,9 +93,9 @@ release:
     Pre-1.0: treat a minor version as potentially breaking, and pin what you
     deploy.
 
-    **Not to be confused with `leaf-sync`.** This agent manages one host; the
-    `leaf-sync` binary, released from the
-    [platform](https://github.com/stone-age-io/platform) repo, mirrors a site's
-    configuration into a NATS leaf node. A site often runs both.
+    **This replaces `leaf-sync`,** which used to be released from the
+    [platform](https://github.com/stone-age-io/platform) repo. Its leaf-node
+    duties are capabilities of this agent now, so a site runs one binary rather
+    than two. See `docs/leaf-node.md`.
 
     **Full changelog**: https://github.com/stone-age-io/agent/commits/{{ .Tag }}

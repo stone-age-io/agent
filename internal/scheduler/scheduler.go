@@ -245,16 +245,16 @@ func (s *Scheduler) scheduleTasks() error {
 	// Schedule credential sync WITH PANIC RECOVERY AND CONTEXT CHECK.
 	// Only for platform-managed agents — credsSyncer is nil for every other auth
 	// type, and the startup sync in agent.New has already run one pass.
-	if s.credsSyncer != nil && s.config.Tasks.CredsSync.Enabled {
+	if s.credsSyncer != nil && s.config.Platform.SyncInterval > 0 {
 		_, err := s.scheduler.NewJob(
-			gocron.DurationJob(s.config.Tasks.CredsSync.Interval),
+			gocron.DurationJob(s.config.Platform.SyncInterval),
 			gocron.NewTask(s.wrapTaskWithRecovery("creds_sync", s.syncCredentials)),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to schedule credential sync: %w", err)
 		}
 		s.logger.Info("Scheduled credential sync task",
-			zap.Duration("interval", s.config.Tasks.CredsSync.Interval))
+			zap.Duration("interval", s.config.Platform.SyncInterval))
 	}
 
 	// Schedule the Nebula config sync WITH PANIC RECOVERY AND CONTEXT CHECK.

@@ -205,7 +205,8 @@ Nebula's PKI requires it there.
 
 **The sync interval is a security number, not a tuning knob.** Nebula's only
 revocation mechanism is the blocklist carried by every peer, so *the poll
-interval is the revocation latency*. The 24h used for `creds_sync` is wrong here;
+interval is the revocation latency*. The 24h used for `platform.sync_interval` is
+wrong here;
 default to 10m, allow 1m–1h. A NATS command (`cmd.nebula_sync`) lets the platform
 collapse it to seconds when it matters, but polling remains the mechanism of
 record — the mesh must converge without the command channel, because the command
@@ -325,7 +326,7 @@ would shadow a service we tell people to run. Not a hypothetical.
 
 So `cmd.nebula` is its own command, shaped like `cmd.rotate_creds`: self-scoped,
 no allowlist, and answering with an error when the feature is off — exactly as
-`rotate_creds` does when `auth.type` is not `stone-age`.
+`rotate_creds` does when `auth.type` is not `platform`.
 
 #### Verbs
 

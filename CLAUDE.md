@@ -45,7 +45,9 @@ make install-tools
 
 ```
 agent/
-├── cmd/agent/main.go          # Entry point, service management
+├── cmd/agent/
+│   ├── main.go                # Entry point, service management
+│   └── leafconfig.go          # `agent -leaf-config`: one-shot leaf bootstrap
 ├── internal/
 │   ├── agent/agent.go         # Core agent orchestration
 │   ├── config/                # Configuration loading & validation
@@ -54,7 +56,20 @@ agent/
 │   ├── platform/              # stone-age.io platform credential lifecycle
 │   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
 │   │   ├── nebula.go          # NebulaSource: this thing's nebula_host config
+│   │   ├── leafconfig.go      # LeafConfig: GET /api/me/leaf-config
 │   │   └── session.go         # Session file (auth token + both revisions)
+│   ├── edge/                  # Leaf-node duties, on a box that runs one
+│   │   ├── run.go             # Run(): embedded server, observability, twin
+│   │   ├── leafconf.go        # buildLeafConf: nats-leaf.conf generator
+│   │   ├── bootstrap.go       # WriteLeafConfig: conf 0644 + creds 0600
+│   │   ├── config.go          # edge.Config, mapped from the agent's YAML
+│   │   ├── twin.go / kv.go    # Twin relay up, desired mirror down
+│   │   ├── checks.go          # nats_local (fail), hub_uplink (warn)
+│   │   └── collector.go       # agent_edge_* gauges from the leaf's varz/leafz
+│   ├── health/                # Readiness check registry + background prober
+│   ├── metrics/               # Prometheus exposition + scrape token
+│   ├── natsd/                 # Embedded nats-server (shared by edge)
+│   ├── observe/               # The /ready + /metrics listener
 │   ├── nebula/                # Embedded Nebula overlay host (opt-in)
 │   │   ├── nebula.go          # Manager: lifecycle, apply/verify/rollback, Health
 │   │   ├── source.go          # Source interface and FileSource
@@ -102,17 +117,22 @@ agent/
 2. **Config** (`internal/config/`):
    - Validates code (alphanumeric, dash, underscore only; legacy key `device_id` accepted as fallback)
    - Optional location (single NATS token), carried in heartbeat/telemetry payloads
-   - Supports auth types: creds, token, userpass, stone-age, none
+   - Supports auth types: creds, token, userpass, platform, none
+   - The platform relationship is a TOP-LEVEL `platform:` block, not nested under
+     `nats.auth`. Three subsystems read it — the NATS credential lifecycle, the
+     Nebula config source, and the leaf bootstrap — so burying it under one of
+     them made the other two ask "is some other section's type field set to a
+     particular string" instead of "is the block present"
    - Requires https for the platform URL unless `allow_insecure_url` is set
    - Platform-specific defaults for paths and exporter URLs
 
-3. **Platform** (`internal/platform/`): credential lifecycle for auth type `stone-age`
+3. **Platform** (`internal/platform/`): credential lifecycle for auth type `platform`
    - The agent is a Thing: authenticates as itself against the `things` auth collection;
      its credential lives on the related nats_user record's `creds_file` field
    - `EnsureCredentials()` — first boot only: password auth with
      `expand=nats_user,location`, writes .creds (0600, atomic). Skips if the file exists;
      restores it via the stored session (no password) if the file is gone but a token remains
-   - `Sync()` — startup + `tasks.creds_sync.interval`: refreshes the session token
+   - `Sync()` — startup + `platform.sync_interval`: refreshes the session token
      (**no expand**), probes `?fields=updated`, and reads the credential only when that
      revision moved. A .creds file embeds the nkey seed, and PocketBase does not apply
      `fields` to auth responses, so this split is what keeps key material off the wire
@@ -153,14 +173,17 @@ agent/
      consecutive auth failures, and the restart re-runs the startup credential sync
    - TLS 1.2+ support with optional mTLS
    - Async publishing with automatic retries
-   - `creds` and `stone-age` auth both connect with the .creds file; `UserCredentials`
+   - `creds` and `platform` auth both connect with the .creds file; `UserCredentials`
      re-reads it on every reconnect, so `ForceReconnect()` adopts a replaced credential
 
 6. **Scheduler** (`internal/scheduler/scheduler.go`):
    - Uses gocron/v2 for interval-based scheduling
    - Context-aware cancellation for clean shutdown
    - Panic recovery for all tasks
-   - `creds_sync` task is scheduled only when a CredsSyncer is supplied (stone-age auth)
+   - The internal `creds_sync` job is scheduled only when a CredsSyncer is supplied
+     (platform auth). Its cadence is `platform.sync_interval` -- there is no longer a
+     `tasks.creds_sync` config key, because the cadence of a platform conversation
+     belongs beside the platform rather than in the task list
    - `nebula_sync` task is scheduled only when a NebulaSyncer is supplied (overlay enabled)
 
 7. **Executor** (`internal/tasks/executor.go`):
@@ -168,6 +191,113 @@ agent/
    - Configurable metrics collection via MetricsCollector interface
    - Supports builtin (gopsutil) or exporter (Prometheus) sources
    - Command success/error recording
+
+8. **Edge** (`internal/edge/`): what an agent does when the box it runs on is also
+   a NATS **leaf node**. Absorbed from the platform repo, where it was a separate
+   binary called `leaf-sync`.
+
+   - **There is no `edge.enabled` key, deliberately.** "Gateway" is not a mode the
+     config declares; it is the sum of the capabilities it turns on. `edgeEnabled()`
+     (`internal/agent/edge.go`) is `nats.server_config != "" || twin.enabled ||
+     observability.addr != ""`. A single flag naming the role would be a second
+     control that can disagree with the first -- `edge.enabled: false` beside
+     `twin.enabled: true` has no correct behaviour
+   - **A gateway is a Thing, not a special record.** It logs in against `things` like
+     any other agent and calls `GET /api/me/leaf-config` for the leaf material. The
+     platform serves that to ANY authenticated Thing and gates it on nothing, because
+     everything in the payload is either public trust material (the operator, account
+     and `$SYS` account JWTs, which every server validates anyway) or the caller's own
+     credential, which it must already hold to connect. There was a `leaf_nodes`
+     collection; it was dropped, because `thing_types` already says what a device is
+   - **The JetStream domain IS the thing's code.** The platform computes it rather than
+     storing it, and `buildLeafConf` writes it into both `server_name` and
+     `jetstream { domain }`. The console matches a leaf's reported `server_name` back
+     to a Thing's code to show a site attached, so those two must not diverge
+   - The edge goroutine starts from `Run()` like the Nebula manager and stops on the
+     same cancel
+
+9. **Leaf config generation** (`internal/edge/leafconf.go`): **a generated
+   `nats-leaf.conf` must satisfy operator-mode validation, and no string assertion
+   can check that.** Two directives are mandatory and were both missing for months,
+   so the generator produced a file `nats-server` refused to load -- invisible,
+   because the only tests were `strings.Contains` over the output.
+
+   1. Every leaf remote needs an `account` key naming the local account.
+   2. `resolver_preload` needs the **`$SYS` account JWT** as well as the org's. The
+      operator JWT names a system account and `resolver: MEMORY` has nowhere to fetch
+      it, so without it the server dies with `error resolving system account: account
+      missing` **before JetStream starts**. Preloading the `$SYS` *account* JWT is
+      public trust material and grants nothing -- connecting AS `$SYS` needs a `$SYS`
+      **user** credential, which the platform never serves.
+
+   `TestBuildLeafConfIsAcceptedByNATSServer` runs the real generator's output through
+   the `nats-server` package's own `ProcessConfigFile` + `NewServer` (no ports, no
+   network). It moved from the platform repo unchanged apart from its imports, and that
+   was deliberate: **keep it, and do not replace it with more `Contains` checks.**
+
+10. **Twin sync** (`internal/edge/twin.go`): two KV buckets, one writer each, off by
+    default (`twin.enabled`).
+
+    | Bucket | Written by | Flows | Mechanism |
+    |---|---|---|---|
+    | `twin` | the device, at the edge | edge to hub | relay |
+    | `twin_desired` | operators, at the hub | hub to edge | JetStream **mirror** |
+
+    - **One writer per bucket is the whole safety property.** A single bucket written
+      from both ends does not pick a loser on a conflict, it *oscillates*: two
+      concurrent values swap across the link, then swap back, each write generating the
+      next event. Measured at ~170,000 writes to one key in 300 ms before the buckets
+      were split. Encoding the owner in the key (`thing.S01.state.temp`) was tried and
+      reverted -- same safety, but it taxes every key in firmware, rules and widgets,
+      and a mistyped segment silently never syncs. **Do not merge the buckets.**
+    - **Desired state is a mirror, not a relay,** because it has exactly one origin, and
+      it serves last-known values offline since the edge never writes it. Configured on
+      the RECEIVING side, so there is no hub-side stream to mutate and no race between
+      sites.
+    - **Reported state cannot be a source.** Aggregating N sites natively needs N sources
+      all named `KV_twin`, which requires the server's internal `iname` that nats.go
+      does not expose; the alternative is `twin_<code>` at every edge and a rule engine
+      reading a different bucket name per site. Hence the relay for this one direction --
+      do not "finish the job" by making it a source without solving that.
+    - Relay mechanics, boring on purpose: one watcher edge-to-hub so there is no echo;
+      compare-before-write (`WatchAll` replays every current value on start, so without
+      it each restart would burn a revision per key); that replay IS the resync after an
+      outage; deletes are relayed explicitly, because a KV delete is a tombstone rather
+      than an absence and dropping it leaves the key live at the hub forever; upsert and
+      never reconcile, so one site can never purge another site's keys.
+    - Buckets are created if absent and otherwise **left alone** -- unlike a private
+      mirror, these are shared with the console and operators, so the agent does not
+      reassert retention over whatever they set. Keep `twinBucketConfig()` in step with
+      `TWIN_BUCKET_CONFIG` in the platform's `ui/src/utils/twin.ts`: whoever creates a
+      bucket first defines it, and the two now live in different repositories so nothing
+      can enforce that they agree.
+
+11. **Readiness and metrics** (`internal/health`, `internal/metrics`, `internal/observe`):
+    a site's real health can only be measured on the site. `cmd.health` travels over
+    NATS, which is the link that breaks -- a box whose uplink is down is exactly the one
+    you want to ask, and that is when it goes quiet. `observability.addr` empty serves
+    neither endpoint; the checks still run and still log, and a bind failure is never
+    fatal.
+
+    - **An islanded edge WARNS, it does not fail.** `hub_uplink` is a warn and
+      `nats_local` is a fail. Local NATS still works and devices keep running, and that
+      autonomy is why a leaf node exists -- 503 would invert the design.
+    - **Omit, never zero.** When the leaf's monitoring port is unreachable the
+      server-derived series are left out rather than reported as 0: zero would claim an
+      islanded site with no devices, which is a much louder statement than "not
+      scraped". Same reason `skipped` ranks below `ok` in the check registry.
+    - The server-derived rows come from the leaf's own loopback monitoring port, which
+      is how the edge reads its own server **without ever holding a `$SYS` user
+      credential**. It works the same whether the leaf is embedded or a separate process.
+
+12. **`internal/health`, `internal/metrics` and `internal/natsd` are DUPLICATED from
+    the platform repo, not extracted into a shared module.** That was the decision and
+    it should stay one: two small copies that drift are cheaper to live with than a
+    third repository to version, tag and keep both consumers pinned to -- and the two
+    processes check genuinely different things (the Control Plane checks its operator
+    trust and its own database; the agent checks a local leaf and an uplink). The same
+    note is in the platform's CLAUDE.md. If they ever need to agree on something, write
+    a test on each side rather than a library between them.
 
 ## Platform-Specific Files
 
@@ -200,7 +330,7 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.logs` - Log file retrieval
 - `{prefix}.{code}.cmd.exec` - Custom command execution
 - `{prefix}.{code}.cmd.health` - Agent health check (includes agent version, and the `nebula` block when the overlay is enabled)
-- `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (stone-age auth only; answers with an error otherwise)
+- `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (platform auth only; answers with an error otherwise)
 - `{prefix}.{code}.cmd.nebula` - Overlay actions: `sync` (pull and apply now) or `restart` (bounce Nebula on the running config). Enabled agents only; answers with an error otherwise
 
 Command responses use `ts` (RFC3339 UTC) for their timestamp field.
@@ -212,6 +342,26 @@ afterwards would never land, and the caller would see a timeout on an operation
 that succeeded. The outcome is read from `cmd.health`. Anything spawned this way
 needs its own `recover()`: `handleWithRecovery` wraps the handler, not its
 goroutines.
+
+## Command line
+
+`agent` takes flags, not subcommands -- there is no cobra here and adding one for
+two one-shots would be a dependency for a `switch`.
+
+```bash
+agent -config /etc/agent/config.yaml   # run (the default)
+agent -version                         # print the version and exit
+agent -service install|start|stop|...  # register with the host service manager
+agent -leaf-config                     # one-shot: fetch this thing's leaf config,
+                                       # write nats-leaf.conf + creds, exit
+```
+
+**`-leaf-config` has to be separable from running.** The usual edge shape is a
+separately supervised `nats-server`, and that server needs its config file to exist
+before it starts -- which is before this agent has anything to connect to.
+Bootstrapping and running cannot be the same invocation. It requires
+`nats.auth.type: "platform"`, since a leaf config comes from the platform, and writes
+the conf 0644 beside the creds at 0600.
 
 ## Configuration
 
@@ -225,23 +375,38 @@ Key config sections:
 code: "unique-id"                # Required, alphanumeric/dash/underscore (legacy key: device_id)
 location: "hq"                   # Optional, single NATS token, carried in telemetry payloads
 subject_prefix: "agents"         # NATS subject prefix
+platform:                        # The platform relationship. TOP-LEVEL: three
+  url: "https://platform.example.com"      # subsystems read it (NATS creds, Nebula
+  identity: "thing@example.com"            # source, leaf bootstrap), so it is not
+  password_env: "AGENT_PLATFORM_PASSWORD"  # nested under any one of them.
+  sync_interval: "24h"           # 1h-72h; credential refresh. Was tasks.creds_sync.interval
+  session_file: "/path/to/platform-session.json"  # default: beside nats.auth.creds_file
+  allow_insecure_url: false      # http:// platform URL, development only
 nats:
   urls: ["nats://host:4222"]     # NATS server URLs
   auth:
-    type: "creds"                # creds, token, userpass, stone-age, none
+    type: "creds"                # creds, token, userpass, platform, none
     creds_file: "/path/to/creds"
-    stone-age:                   # Only for stone-age auth type (platform credentials)
-      url: "https://platform.example.com"
-      identity: "thing@example.com"     # the thing's login email
-      password_env: "AGENT_PLATFORM_PASSWORD"  # optional after first boot
-      session_file: "/path/to/platform-session.json"  # default: beside creds_file
-      allow_insecure_url: false  # http:// platform URL, development only
+  server_config: ""              # Non-empty: host a nats-server from this file, in
+                                 # this process. On a gateway that is the file
+                                 # `agent -leaf-config` wrote, but it works with any
+                                 # nats-server config. nats.urls must name the port
+                                 # it listens on -- startup refuses a disagreement.
+                                 # Empty where systemd or Docker supervises one, so
+                                 # the bus survives an agent restart.
   tls:
     enabled: true
     ca_file: "/path/to/ca.pem"
+twin:                            # Digital-twin sync, off by default: it moves
+  enabled: false                 # data-plane traffic, so an upgrade must not start
+                                 # doing it silently. Requires the platform block.
+observability:                   # /ready and /metrics on this box
+  addr: "127.0.0.1:9100"         # empty serves neither; checks still run and log
+  metrics_token: ""              # empty = open; Bearer or Basic when set
+  interval: "15s"
 nebula:                          # Embedded overlay host, off by default
   enabled: false
-  source: "platform"             # "platform" (needs stone-age auth) or "file"
+  source: "platform"             # "platform" (needs the platform block) or "file"
   config_file: "/path/to/nebula.yaml"        # Only for source: "file"
   cache_file: "/var/lib/agent/nebula-cache.yaml"  # Last config that reached the mesh
   sync_interval: "10m"           # 1m-1h. THIS IS THE REVOCATION LATENCY
@@ -255,9 +420,6 @@ tasks:
     interval: "5m"               # Minimum 30s
     source: "builtin"            # "builtin" (default) or "exporter"
     exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
-  creds_sync:                    # Only runs with stone-age auth
-    enabled: true
-    interval: "24h"              # 1h-72h range (under the platform's 7d token TTL)
 commands:
   scripts_directory: "/path/to/scripts"
   allowed_services: ["nginx"]

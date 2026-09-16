@@ -182,16 +182,16 @@ func testClient(t *testing.T, url string) *Client {
 	cfg := &config.Config{
 		Code:     "server-01",
 		Location: "hq",
+		Platform: config.PlatformConfig{
+			URL:         url,
+			Identity:    "thing@example.com",
+			PasswordEnv: passwordEnv,
+			SessionFile: filepath.Join(dir, "platform-session.json"),
+		},
 		NATS: config.NATSConfig{
 			Auth: config.AuthConfig{
-				Type:      "stone-age",
+				Type:      "platform",
 				CredsFile: filepath.Join(dir, "device.creds"),
-				StoneAge: config.StoneAgeAuth{
-					URL:         url,
-					Identity:    "thing@example.com",
-					PasswordEnv: passwordEnv,
-					SessionFile: filepath.Join(dir, "platform-session.json"),
-				},
 			},
 		},
 	}

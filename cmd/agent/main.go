@@ -39,10 +39,28 @@ func main() {
 	flag.StringVar(&svcFlag, "service", "", "Control the system service: install, uninstall, start, stop, restart")
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "Print the version and exit")
+	var leafConfig bool
+	flag.BoolVar(&leafConfig, "leaf-config", false,
+		"Fetch this thing's NATS leaf configuration from the platform, write nats-leaf.conf and its creds, and exit")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Println("agent", version)
+		return
+	}
+
+	// A one-shot, like -version and -service below: it does its work and
+	// returns, never reaching the service framework.
+	//
+	// It has to be separable from `run` because the usual edge shape is a
+	// separately supervised nats-server, and that server needs its config file
+	// to exist before it starts — which is before this agent has anything to
+	// connect to. Bootstrapping and running cannot be the same invocation.
+	if leafConfig {
+		if err := writeLeafConfig(configPath); err != nil {
+			fmt.Fprintln(os.Stderr, "agent:", err)
+			os.Exit(1)
+		}
 		return
 	}
 

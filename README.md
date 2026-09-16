@@ -52,6 +52,15 @@ Agent is a purpose-built system management tool that provides remote management 
 - **Manual Credentials**: Pre-distribute `.creds` files
 - **Token / UserPass**: Simple auth for development
 
+### Edge / gateway (all optional)
+- **NATS leaf node**: bootstrap a site's `nats-leaf.conf` from the platform (`agent -leaf-config`) and, if you want, host that server in this process
+- **Digital twin sync**: relay this site's reported state up to the hub, mirror desired state down, so the site keeps working through a WAN outage
+- **Nebula overlay**: run a mesh host in-process, with the config re-read on an interval so revocation actually reaches the device
+- **Local `/ready` and `/metrics`**: served on the box, because the box you most need to ask is the one whose uplink is down
+
+None of these is a mode you switch on. A "gateway" is just an agent with more of
+these keys set -- see **[Leaf Nodes](docs/leaf-node.md)**.
+
 ---
 
 ## Quick Start
@@ -185,6 +194,15 @@ sudo service agent start
 code: "server-prod-01"    # Identity token used in NATS subjects (legacy key: device_id)
 location: "hq"            # Optional deployment location, carried in telemetry payloads
 
+# stone-age.io platform (optional). One home for the platform relationship:
+# the NATS credential lifecycle, the Nebula config source and the leaf
+# bootstrap all read it. Leave the block out and none of them are available.
+# platform:
+#   url: "https://platform.example.com"
+#   identity: "thing@example.com"              # the thing's login email
+#   password_env: "AGENT_PLATFORM_PASSWORD"
+#   sync_interval: "24h"                       # credential refresh, 1h-72h
+
 # NATS Connection
 nats:
   urls: ["nats://nats.example.com:4222"]
@@ -195,13 +213,10 @@ nats:
 
     # Option 2: stone-age.io platform (fetches and maintains .creds).
     # The agent is a Thing on the platform: it logs in as itself and its
-    # credential lives on its nats_user relation.
-    # type: "stone-age"
+    # credential lives on its nats_user relation. Configure the platform
+    # itself in the top-level `platform:` block below.
+    # type: "platform"
     # creds_file: "/etc/agent/device.creds"
-    # stone-age:
-    #   url: "https://platform.example.com"
-    #   identity: "thing@example.com"     # the thing's login email
-    #   password_env: "AGENT_PLATFORM_PASSWORD"
 
 # Scheduled Tasks
 tasks:
@@ -220,6 +235,21 @@ tasks:
     services:
       - "nginx"
       - "postgresql"
+
+# Host a nats-server in this process (optional). On a gateway that is the file
+# `agent -leaf-config` wrote. Leave it empty where systemd or Docker already
+# supervises one -- the bus then survives an agent restart.
+# nats:
+#   server_config: "/etc/agent/nats-leaf.conf"
+
+# Digital-twin sync (optional, off by default: it moves data-plane traffic)
+# twin:
+#   enabled: true
+
+# /ready and /metrics on this box (optional). Loopback by default: opening a
+# port on an appliance should be a decision.
+# observability:
+#   addr: "127.0.0.1:9100"
 
 # Command Execution
 commands:
@@ -260,6 +290,7 @@ commands:
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
 - **[Platform Credentials](docs/credentials.md)** - Provisioning, renewing, and rotating credentials from the stone-age.io platform
+- **[Leaf Nodes](docs/leaf-node.md)** - Run a site's NATS leaf node, sync the digital twin, serve local health
 - **[Nebula Overlay](docs/nebula.md)** - Run the agent as a host on your organization's Nebula mesh
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 

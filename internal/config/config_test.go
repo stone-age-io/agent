@@ -888,22 +888,22 @@ commands:
 // TestLoadStoneAgeAuth covers the hyphenated `stone-age` config key end to end —
 // through viper and mapstructure, not just validate() — plus the derived session
 // file path and the https requirement.
-func TestLoadStoneAgeAuth(t *testing.T) {
+func TestLoadPlatformAuth(t *testing.T) {
 	dir := t.TempDir()
 	credsFile := filepath.Join(dir, "device.creds")
 
 	// The password satisfies validate() without anything existing on disk yet
 	yaml := `
 code: "server-01"
+platform:
+  url: "https://platform.example.com"
+  identity: "thing@example.com"
+  password_env: "AGENT_PLATFORM_PASSWORD"
 nats:
   urls: ["nats://localhost:4222"]
   auth:
-    type: "stone-age"
+    type: "platform"
     creds_file: "` + filepath.ToSlash(credsFile) + `"
-    stone-age:
-      url: "https://platform.example.com"
-      identity: "thing@example.com"
-      password_env: "AGENT_PLATFORM_PASSWORD"
 tasks:
   service_check:
     enabled: false
@@ -921,15 +921,15 @@ commands:
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	sa := cfg.NATS.Auth.StoneAge
+	sa := cfg.Platform
 	if sa.URL != "https://platform.example.com" {
-		t.Errorf("stone-age.url = %q, want the configured URL (is the hyphenated key parsing?)", sa.URL)
+		t.Errorf("platform.url = %q, want the configured URL", sa.URL)
 	}
 	if sa.Identity != "thing@example.com" {
-		t.Errorf("stone-age.identity = %q, want thing@example.com", sa.Identity)
+		t.Errorf("platform.identity = %q, want thing@example.com", sa.Identity)
 	}
 	if sa.PasswordEnv != "AGENT_PLATFORM_PASSWORD" {
-		t.Errorf("stone-age.password_env = %q, want AGENT_PLATFORM_PASSWORD", sa.PasswordEnv)
+		t.Errorf("platform.password_env = %q, want AGENT_PLATFORM_PASSWORD", sa.PasswordEnv)
 	}
 
 	wantSession := filepath.Join(dir, "platform-session.json")
@@ -937,16 +937,16 @@ commands:
 		t.Errorf("session_file = %q, want it derived beside creds_file as %q", sa.SessionFile, wantSession)
 	}
 
-	// creds_sync defaults on, inside the platform's token TTL
-	if !cfg.Tasks.CredsSync.Enabled {
-		t.Error("creds_sync should default to enabled")
-	}
-	if cfg.Tasks.CredsSync.Interval != 24*time.Hour {
-		t.Errorf("creds_sync interval = %v, want 24h", cfg.Tasks.CredsSync.Interval)
+	// The credential refresh defaults on, inside the platform's token TTL. A
+	// non-zero interval IS the switch: there is no separate enabled flag,
+	// because an agent that gets its credential from the platform always wants
+	// it refreshed.
+	if cfg.Platform.SyncInterval != 24*time.Hour {
+		t.Errorf("platform.sync_interval = %v, want 24h", cfg.Platform.SyncInterval)
 	}
 }
 
-func TestValidateStoneAgeAuth(t *testing.T) {
+func TestValidatePlatformAuth(t *testing.T) {
 	dir := t.TempDir()
 	credsFile := filepath.Join(dir, "device.creds")
 	sessionFile := filepath.Join(dir, "platform-session.json")
@@ -955,23 +955,23 @@ func TestValidateStoneAgeAuth(t *testing.T) {
 		return &Config{
 			Code:          "server-01",
 			SubjectPrefix: "agents",
+			Platform: PlatformConfig{
+				URL:          "https://platform.example.com",
+				Identity:     "thing@example.com",
+				PasswordEnv:  "AGENT_PLATFORM_PASSWORD",
+				SessionFile:  sessionFile,
+				SyncInterval: 24 * time.Hour,
+			},
 			NATS: NATSConfig{
 				URLs: []string{"nats://localhost:4222"},
 				Auth: AuthConfig{
-					Type:      "stone-age",
+					Type:      "platform",
 					CredsFile: credsFile,
-					StoneAge: StoneAgeAuth{
-						URL:         "https://platform.example.com",
-						Identity:    "thing@example.com",
-						PasswordEnv: "AGENT_PLATFORM_PASSWORD",
-						SessionFile: sessionFile,
-					},
 				},
 			},
 			Tasks: TasksConfig{
 				Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
 				SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
-				CredsSync:     CredsSyncConfig{Enabled: true, Interval: 24 * time.Hour},
 			},
 			Commands: CommandsConfig{Timeout: 30 * time.Second},
 			Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},
@@ -989,25 +989,25 @@ func TestValidateStoneAgeAuth(t *testing.T) {
 		},
 		{
 			name:    "http url rejected",
-			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.URL = "http://platform.example.com" },
+			mutate:  func(c *Config) { c.Platform.URL = "http://platform.example.com" },
 			wantErr: "must be https",
 		},
 		{
 			name: "http url allowed when opted in",
 			mutate: func(c *Config) {
-				c.NATS.Auth.StoneAge.URL = "http://platform.example.com"
-				c.NATS.Auth.StoneAge.AllowInsecureURL = true
+				c.Platform.URL = "http://platform.example.com"
+				c.Platform.AllowInsecureURL = true
 			},
 		},
 		{
 			name:    "missing url",
-			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.URL = "" },
-			wantErr: "stone-age.url is required",
+			mutate:  func(c *Config) { c.Platform.URL = "" },
+			wantErr: "platform.url is required",
 		},
 		{
 			name:    "missing identity",
-			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.Identity = "" },
-			wantErr: "stone-age.identity is required",
+			mutate:  func(c *Config) { c.Platform.Identity = "" },
+			wantErr: "platform.identity is required",
 		},
 		{
 			name:    "missing creds_file",
@@ -1017,17 +1017,17 @@ func TestValidateStoneAgeAuth(t *testing.T) {
 		{
 			// Nothing on disk to authenticate with, so the password is mandatory
 			name:    "no password and nothing bootstrapped",
-			mutate:  func(c *Config) { c.NATS.Auth.StoneAge.PasswordEnv = "" },
+			mutate:  func(c *Config) { c.Platform.PasswordEnv = "" },
 			wantErr: "password_env is required",
 		},
 		{
-			name:    "creds_sync interval too short",
-			mutate:  func(c *Config) { c.Tasks.CredsSync.Interval = 30 * time.Minute },
+			name:    "platform sync_interval too short",
+			mutate:  func(c *Config) { c.Platform.SyncInterval = 30 * time.Minute },
 			wantErr: "at least 1 hour",
 		},
 		{
-			name:    "creds_sync interval beyond token ttl",
-			mutate:  func(c *Config) { c.Tasks.CredsSync.Interval = 96 * time.Hour },
+			name:    "platform sync_interval beyond token ttl",
+			mutate:  func(c *Config) { c.Platform.SyncInterval = 96 * time.Hour },
 			wantErr: "must not exceed 72 hours",
 		},
 	}
@@ -1053,7 +1053,7 @@ func TestValidateStoneAgeAuth(t *testing.T) {
 
 // TestValidateStoneAgeAuthPasswordOptionalOnceBootstrapped pins the rule that
 // lets a deployment drop the thing's password after the first boot.
-func TestValidateStoneAgeAuthPasswordOptionalOnceBootstrapped(t *testing.T) {
+func TestValidatePlatformAuthPasswordOptionalOnceBootstrapped(t *testing.T) {
 	dir := t.TempDir()
 	credsFile := filepath.Join(dir, "device.creds")
 	if err := os.WriteFile(credsFile, []byte("creds"), 0600); err != nil {
@@ -1063,22 +1063,22 @@ func TestValidateStoneAgeAuthPasswordOptionalOnceBootstrapped(t *testing.T) {
 	cfg := &Config{
 		Code:          "server-01",
 		SubjectPrefix: "agents",
+		Platform: PlatformConfig{
+			URL:          "https://platform.example.com",
+			Identity:     "thing@example.com",
+			SessionFile:  filepath.Join(dir, "platform-session.json"),
+			SyncInterval: 24 * time.Hour,
+		},
 		NATS: NATSConfig{
 			URLs: []string{"nats://localhost:4222"},
 			Auth: AuthConfig{
-				Type:      "stone-age",
+				Type:      "platform",
 				CredsFile: credsFile,
-				StoneAge: StoneAgeAuth{
-					URL:         "https://platform.example.com",
-					Identity:    "thing@example.com",
-					SessionFile: filepath.Join(dir, "platform-session.json"),
-				},
 			},
 		},
 		Tasks: TasksConfig{
 			Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
 			SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
-			CredsSync:     CredsSyncConfig{Enabled: true, Interval: 24 * time.Hour},
 		},
 		Commands: CommandsConfig{Timeout: 30 * time.Second},
 		Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},
@@ -1125,7 +1125,7 @@ func TestValidateNebula(t *testing.T) {
 				SyncInterval:  10 * time.Minute,
 				VerifyTimeout: 30 * time.Second,
 			},
-			authType: "stone-age",
+			authType: "platform",
 			wantErr:  false,
 		},
 		{
@@ -1171,7 +1171,7 @@ func TestValidateNebula(t *testing.T) {
 				Source:        "http",
 				VerifyTimeout: 30 * time.Second,
 			},
-			authType: "stone-age",
+			authType: "platform",
 			wantErr:  true,
 			errText:  "must be \"platform\" or \"file\"",
 		},
@@ -1188,7 +1188,7 @@ func TestValidateNebula(t *testing.T) {
 				SyncInterval:  30 * time.Second,
 				VerifyTimeout: 30 * time.Second,
 			},
-			authType: "stone-age",
+			authType: "platform",
 			wantErr:  true,
 			errText:  "at least 1 minute",
 		},
@@ -1201,7 +1201,7 @@ func TestValidateNebula(t *testing.T) {
 				SyncInterval:  6 * time.Hour,
 				VerifyTimeout: 30 * time.Second,
 			},
-			authType: "stone-age",
+			authType: "platform",
 			wantErr:  true,
 			errText:  "must not exceed 1 hour",
 		},

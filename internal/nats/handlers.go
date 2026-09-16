@@ -780,7 +780,7 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 		enabledTasks = append(enabledTasks, "inventory")
 	}
 	// Reported only when it is actually scheduled, which needs platform auth
-	if h.credsRotator != nil && h.config.Tasks.CredsSync.Enabled {
+	if h.credsRotator != nil && h.config.Platform.SyncInterval > 0 {
 		enabledTasks = append(enabledTasks, "creds_sync")
 	}
 
