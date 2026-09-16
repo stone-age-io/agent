@@ -27,6 +27,20 @@ nats:
   urls: 
     - "nats://connect.your-service.com:4222"
   
+  # Host a nats-server in this process (optional)
+  #
+  # Non-empty means the agent runs the server from this config file. On a
+  # gateway that is the file `agent -leaf-config` wrote; it works equally with
+  # any hand-written nats-server config, so this is also how you run a plain
+  # embedded broker on a box with no platform. nats.urls must name the port it
+  # listens on -- startup refuses the pair if they disagree.
+  #
+  # Leave it unset where systemd or Docker already supervises nats-server: the
+  # bus then survives an agent restart, which is what you want when upgrading
+  # the agent on a live site.
+  #
+  # server_config: "/etc/agent/nats-leaf.conf"
+
   # Authentication (choose one method)
   auth:
     # Option 1: Credentials file (RECOMMENDED for production)
@@ -89,21 +103,6 @@ tasks:
     enabled: true
     interval: "24h"
 
-
-# Host a nats-server in this process (optional)
-#
-# Non-empty means the agent runs the server from this config file. On a gateway
-# that is the file `agent -leaf-config` wrote; it works equally with any
-# hand-written nats-server config. nats.urls must name the port it listens on --
-# startup refuses the pair if they disagree.
-#
-# Leave it empty where systemd or Docker already supervises nats-server: the bus
-# then survives an agent restart, which is what you want when upgrading the
-# agent on a live site.
-#
-#   nats:
-#     server_config: "/etc/agent/nats-leaf.conf"
-
 # Digital-twin sync (optional, off by default)
 #
 # Relays this site's reported state up to the hub and mirrors desired state
@@ -118,8 +117,11 @@ twin:
 # over NATS, which is the link that breaks: a box whose uplink is down is
 # exactly the one you want to ask, and that is when it goes quiet.
 #
-# addr empty serves neither -- the checks still run and still log. Loopback by
-# default: opening a port on an appliance should be a decision.
+# ON by default, on loopback. Set addr to "" to serve neither -- the checks
+# still run and still log either way. A bind failure is logged, not fatal.
+#
+# NOTE: 9100 is also node_exporter's default port. If you run the exporter on
+# this box, move one of the two or neither will bind reliably.
 observability:
   addr: "127.0.0.1:9100"
   metrics_token: ""

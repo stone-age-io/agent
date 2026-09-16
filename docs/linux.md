@@ -630,8 +630,13 @@ sudo userdel node_exporter
 
 3. **Firewall**: Block incoming connections if not needed
    ```bash
-   # Agent only needs outbound NATS connection
-   # No inbound ports required
+   # Telemetry and commands: outbound NATS only.
+   # Credentials, Nebula config and leaf bootstrap: outbound HTTPS (443) to the
+   # Control Plane, when the `platform:` block is set.
+   #
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # is not reachable off the box. A SITE GATEWAY is the exception: local
+   # devices connect in to the nats-server it hosts (4222 by default).
    ```
 
 4. **Log Rotation**: Ensure logs don't fill disk

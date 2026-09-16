@@ -108,6 +108,25 @@ that period, and this file starts where the versioned releases do.
 
   Update `config.yaml` before upgrading — the old keys are not read.
 
+- **The agent now opens a listening socket, which 0.1.0 did not.**
+  `observability.addr` defaults to `127.0.0.1:9100`, so upgrading starts serving
+  `/ready` and `/metrics` on loopback without anything being configured. Set
+  `observability.addr: ""` to keep the old behaviour; the checks still run and
+  still log either way.
+
+  Worth calling out on its own because 0.1.0 was described — here and in every
+  install guide — as having **no listening ports**, and firewall rules may have
+  been written against that. Nothing about it is reachable off the box by
+  default, and nothing can *instruct* the agent through it; the endpoints are
+  read-only. Two caveats:
+
+  - **9100 is `node_exporter`'s default port** on Linux and FreeBSD. On a box
+    running both, move one — a bind failure is logged, not fatal, so the symptom
+    is an endpoint that quietly never came up. `windows_exporter` uses 9182.
+  - **Loopback is not an authorization boundary** on a box with other users. Set
+    `observability.metrics_token` (Bearer, or Basic with any username) before
+    moving `addr` anywhere else.
+
 - **The agent no longer refuses to start when NATS is unreachable.** `nats.Connect`
   now retries in the background instead of failing construction, and the JetStream
   check moved from a one-shot fatal probe at startup to a check that runs on every

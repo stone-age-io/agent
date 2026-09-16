@@ -6,8 +6,18 @@ A lightweight, NATS-native system management and observability agent for Windows
 
 **Key Design Principles:**
 - Lightweight: <50MB RAM, <1% CPU target
-- Secure: TLS support, whitelist-based execution, no exposed HTTP endpoints
-- NATS-Native: All communication via NATS (JetStream for telemetry, Core NATS for commands)
+- Secure: TLS support, allowlisted execution, and no inbound management API
+- NATS-Native: management and telemetry are NATS (JetStream for telemetry, Core
+  NATS for commands), always dialed outbound
+
+**What listens.** "No listening ports" was true once and is not any more; say it
+precisely instead. Nothing can *instruct* the agent except over its own
+authenticated NATS connection, which it dials outbound -- that is the property
+worth claiming. But `observability.addr` defaults to `127.0.0.1:9100`, so every
+agent serves `/ready` and `/metrics` unless the key is set empty; the platform
+block talks outbound HTTPS to the Control Plane; and `nats.server_config` makes
+a gateway host a nats-server that local devices connect *in* to. Note the
+readiness default collides with node_exporter's own 9100 on Linux and FreeBSD.
 - Cross-Platform: Windows, Linux, FreeBSD support with platform-specific implementations
 
 ## Build & Test Commands

@@ -650,11 +650,16 @@ Start-Process msiexec.exe -ArgumentList "/x windows_exporter /quiet" -Wait
    Set-Acl "C:\ProgramData\Agent\Scripts" $acl
    ```
 
-3. **Firewall**: Agent only needs outbound NATS connection
+3. **Firewall**: Outbound NATS, plus outbound HTTPS if the platform block is set
    ```powershell
-   # No inbound ports required
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # is not reachable off the box. A SITE GATEWAY is the exception: local
+   # devices connect in to the nats-server it hosts (4222 by default).
+
    # Verify outbound is allowed:
    Test-NetConnection -ComputerName nats.example.com -Port 4222
+   # And, when the platform block is configured:
+   Test-NetConnection -ComputerName platform.example.com -Port 443
    ```
 
 4. **Windows Updates**: Keep Windows and agent updated

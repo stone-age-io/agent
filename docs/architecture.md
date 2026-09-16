@@ -417,8 +417,16 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 
 **In Transit:**
 - TLS for NATS connections (optional but recommended)
-- No HTTP endpoints exposed by agent
-- All communication via encrypted NATS
+- No inbound management API: the agent can only be instructed over its own
+  authenticated NATS connection, which it dials outbound
+- Outbound HTTPS to the Control Plane when the `platform:` block is set
+  (credentials, Nebula config, leaf bootstrap)
+- `/ready` and `/metrics` are served over plain HTTP on `observability.addr`,
+  `127.0.0.1:9100` by default. Loopback is not a permission boundary if other
+  users share the box -- set `observability.metrics_token`, or set `addr` empty,
+  before moving it off loopback
+- A gateway's embedded `nats-server` listens per its own config, which is the
+  one case where devices connect *in*
 
 **At Rest:**
 - Credentials stored with restricted permissions
