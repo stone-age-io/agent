@@ -8,7 +8,7 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-19
 
 > Building from source now needs **Go 1.26+**: the Nebula library sets the floor.
 > CI and the release pipeline read the version from `go.mod`, so they follow on
@@ -29,8 +29,28 @@ that period, and this file starts where the versioned releases do.
     It points at *any* nats-server config, not only a generated one, so it is
     equally how you run a plain embedded broker on a box with no platform at all.
     `nats.urls` must name the port it listens on; startup refuses a disagreement.
-  - `twin.enabled` — relay this site's reported state up to the hub and mirror
-    desired state down, so the site keeps deciding locally through a WAN outage.
+  - `sync:` — keep KV buckets in step with the hub, so the site keeps deciding
+    locally through a WAN outage. Two directions, two mechanisms, a list each:
+    `sync.mirrors` are maintained by the server (hub → edge), `sync.relays` are
+    pumped by the agent (edge → hub), and `sync.twin: true` is the preset for the
+    two digital-twin buckets. Each entry takes an optional `keys:` **key
+    pattern** — `line-a.>`, never `$KV.recipes.line-a.>` — which the agent turns
+    into a mirror's subject filter or a relay's filtered watcher.
+
+    A bucket may appear in one list or the other, **never both**: two writers on
+    one bucket do not converge, they oscillate. That used to be structural, with
+    two built-in buckets and no way to say anything else; it is now a check that
+    refuses to start and names the bucket.
+
+    A `keys:` on a **mirror** cannot be changed afterwards — nats-server rejects
+    any change to a mirror block on an existing stream
+    (`JSStreamMirrorNotUpdatableErr`), so narrowing one later means deleting and
+    recreating the bucket at every site.
+
+    The agent creates the local side of a declared bucket and never the hub side;
+    the two preset twin buckets, whose shape the platform knows, are the
+    exception. Design record:
+    **[docs/edge-sync-design.md](docs/edge-sync-design.md)**.
   - `observability.addr` — serve `/ready` and `/metrics` on the box. `cmd.health`
     travels over NATS, which is the link that breaks; the box you most need to ask
     is the one whose uplink is down, and that is when it goes quiet.
@@ -39,7 +59,7 @@ that period, and this file starts where the versioned releases do.
   the config declares — it is the sum of the capabilities it turns on, and any of
   them means the edge goroutine has a reason to exist. A single flag naming the
   role would be a second control that can disagree with the first:
-  `edge.enabled: false` beside `twin.enabled: true` has no correct behaviour.
+  `edge.enabled: false` beside `sync.twin: true` has no correct behaviour.
 
   On the platform side a gateway is just a **Thing**; the `leaf_nodes` collection
   is gone. `GET /api/me/leaf-config` is bound to `things`, takes no record id, and
@@ -190,5 +210,6 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/stone-age-io/agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/stone-age-io/agent/releases/tag/v0.1.0

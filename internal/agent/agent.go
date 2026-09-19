@@ -27,6 +27,7 @@ type Agent struct {
 	scheduler *scheduler.Scheduler
 	handlers  *natsclient.CommandHandlers
 	nebula    *nebula.Manager // nil unless the overlay is enabled
+	edge      *edge.Config    // always built; only used when edgeEnabled(config)
 	version   string
 	ctx       context.Context    // ADDED: Root context for clean shutdown
 	cancel    context.CancelFunc // ADDED: Cancel function for shutdown
@@ -58,10 +59,10 @@ func New(configPath string, version string) (*Agent, error) {
 	var (
 		credsRotator   natsclient.CredsRotator
 		credsSyncer    scheduler.CredsSyncer
-		nebulaPlatform *platform.Client
+		platformClient *platform.Client
 	)
 	if cfg.NATS.Auth.Type == "platform" {
-		platformClient := platform.NewClient(cfg, logger)
+		platformClient = platform.NewClient(cfg, logger)
 
 		// First boot: fetch the credential before anything tries to connect
 		if err := platformClient.EnsureCredentials(); err != nil {
@@ -83,7 +84,26 @@ func New(configPath string, version string) (*Agent, error) {
 
 		credsRotator = platformClient
 		credsSyncer = platformClient
-		nebulaPlatform = platformClient
+	}
+
+	// The hub's JetStream domain, which edge sync addresses the hub across the
+	// leaf link with. It is not a config key: it arrives with the leaf config
+	// from the platform, so a fleet is told it once on the Control Plane.
+	//
+	// Cached in the platform session file, so this touches the network at most
+	// once — on the first start after bootstrap. Best-effort like the credential
+	// sync above: an edge box whose platform is unreachable must still start, and
+	// startSync records every declared bucket as down so /ready and /metrics say
+	// why rather than going quiet.
+	var hubDomain string
+	if cfg.Sync.Any() && platformClient != nil {
+		domain, err := platformClient.HubDomain()
+		if err != nil {
+			logger.Error("Could not determine the hub's JetStream domain; edge sync will not start",
+				zap.Error(err))
+		} else {
+			hubDomain = domain
+		}
 	}
 
 	// The embedded overlay, if it is enabled. Built before NATS on purpose: with
@@ -92,7 +112,7 @@ func New(configPath string, version string) (*Agent, error) {
 	// but there is no reason to make it retry for longer than necessary.
 	var nebulaManager *nebula.Manager
 	if cfg.Nebula.Enabled {
-		source, err := nebulaSource(cfg, nebulaPlatform)
+		source, err := nebulaSource(cfg, platformClient)
 		if err != nil {
 			return nil, err
 		}
@@ -165,6 +185,7 @@ func New(configPath string, version string) (*Agent, error) {
 		scheduler: sched,
 		handlers:  handlers,
 		nebula:    nebulaManager,
+		edge:      edgeConfig(cfg, hubDomain),
 		version:   version,
 		ctx:       ctx,    // ADDED: Store context
 		cancel:    cancel, // ADDED: Store cancel function
@@ -176,7 +197,7 @@ func (a *Agent) Run() error {
 	// Start the scheduler
 	a.scheduler.Start()
 
-	// The edge subsystems, on a box that hosts a NATS leaf or relays twin state.
+	// The edge subsystems, on a box that hosts a NATS leaf or syncs KV buckets.
 	// Started like the Nebula manager and stopped by the same cancel: it owns no
 	// signal handling and no ticker of its own, because this function already
 	// has both.
@@ -186,7 +207,7 @@ func (a *Agent) Run() error {
 	// over it would be one you could not ask what went wrong.
 	if edgeEnabled(a.config) {
 		go func() {
-			if err := edge.Run(a.ctx, edgeConfig(a.config), a.version); err != nil {
+			if err := edge.Run(a.ctx, a.edge, a.version); err != nil {
 				a.logger.Error("Edge subsystems stopped", zap.Error(err))
 			}
 		}()

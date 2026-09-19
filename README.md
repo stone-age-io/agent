@@ -76,7 +76,7 @@ to reach the leaf server it hosts.
 
 ### Site gateway (all optional)
 - **NATS leaf node**: bootstrap a site's `nats-leaf.conf` from the platform (`agent -leaf-config`) and, if you want, host that server in this process
-- **Digital twin sync**: relay this site's reported state up to the hub, mirror desired state down, so the site keeps working through a WAN outage
+- **KV sync**: relay declared buckets up to the hub and mirror declared buckets down, so the site keeps working through a WAN outage
 
 None of these is a mode you switch on. There is no `edge.enabled` key and no
 gateway flag on the platform either -- a "gateway" is just an agent with more of
@@ -267,9 +267,16 @@ tasks:
       - "nginx"
       - "postgresql"
 
-# Digital-twin sync (optional, off by default: it moves data-plane traffic)
-# twin:
-#   enabled: true
+# KV bucket sync between this leaf's JetStream domain and the hub.
+# Optional, off by default: it moves data-plane traffic. Requires platform auth.
+# sync:
+#   twin: true                 # preset: the two digital-twin buckets
+#   mirrors:                   # hub -> edge, maintained by the server
+#     - bucket: "recipes"
+#       keys: "line-a.>"       # optional; CANNOT be changed after creation
+#   relays:                    # edge -> hub, pumped by the agent
+#     - bucket: "events"
+#       keys: "site.S01.>"     # optional. A bucket belongs to ONE list.
 
 # /ready and /metrics on this box. ON by default, on loopback -- set addr to ""
 # to serve neither. The checks still run and still log either way.
@@ -326,7 +333,7 @@ commands:
 ### Advanced Topics
 - **[Architecture Overview](docs/architecture.md)** - System design and components
 - **[Platform Credentials](docs/credentials.md)** - Provisioning, renewing, and rotating credentials from the stone-age.io platform
-- **[Leaf Nodes](docs/leaf-node.md)** - Run a site's NATS leaf node, sync the digital twin, serve local health
+- **[Leaf Nodes](docs/leaf-node.md)** - Run a site's NATS leaf node, sync KV buckets with the hub, serve local health
 - **[Nebula Overlay](docs/nebula.md)** - Run the agent as a host on your organization's Nebula mesh
 - **[Script Development](docs/script-development.md)** - Write custom scripts
 

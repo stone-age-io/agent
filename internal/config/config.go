@@ -25,7 +25,8 @@ type Config struct {
 	Platform      PlatformConfig      `mapstructure:"platform"`
 	NATS          NATSConfig          `mapstructure:"nats"`
 	Nebula        NebulaConfig        `mapstructure:"nebula"`
-	Twin          TwinConfig          `mapstructure:"twin"`
+	Twin          TwinConfig          `mapstructure:"twin"` // rejected on sight; see TwinConfig
+	Sync          SyncConfig          `mapstructure:"sync"`
 	Observability ObservabilityConfig `mapstructure:"observability"`
 	Tasks         TasksConfig         `mapstructure:"tasks"`
 	Commands      CommandsConfig      `mapstructure:"commands"`
@@ -74,14 +75,69 @@ type PlatformConfig struct {
 	AllowInsecureURL bool `mapstructure:"allow_insecure_url"`
 }
 
-// TwinConfig turns on digital-twin sync between this site's local JetStream
-// domain and the hub: a server-maintained mirror of `twin_desired` down, and a
-// relay of `twin` up.
+// SyncConfig syncs KV buckets between this site's local JetStream domain and
+// the hub, in two directions with two mechanisms:
+//
+//	mirrors  hub -> edge. The hub's bucket is mirrored into this leaf's domain
+//	         under the same name. The server maintains the copy; the agent only
+//	         declares it. The leaf never writes it, so reads keep serving
+//	         last-known values while the link is down.
+//
+//	relays   edge -> hub. The agent watches the local bucket and copies each
+//	         change to the same-named bucket at the hub, retrying while the link
+//	         is down.
 //
 // Off by default because it moves data-plane traffic — an upgrade must not
 // silently start doing it. Requires the platform block, since the hub's
-// JetStream domain is served by the leaf-config route rather than configured
+// JetStream domain arrives with the leaf config rather than being configured
 // here.
+//
+// A bucket may appear in one list or the other, never both: one bucket, one
+// writer, one direction. That used to be structural — there were two built-in
+// buckets and no way to say anything else — and with a list it has to be a
+// check instead. See validateSyncConfig.
+type SyncConfig struct {
+	// Twin is the preset: the two digital-twin buckets, with the retention the
+	// console agrees on. Replaces the former twin.enabled.
+	Twin bool `mapstructure:"twin"`
+
+	Mirrors []SyncBucket `mapstructure:"mirrors"`
+	Relays  []SyncBucket `mapstructure:"relays"`
+}
+
+// Any reports whether anything is declared. Used by edgeEnabled(), which asks
+// what a box does rather than what role it claims.
+func (s SyncConfig) Any() bool {
+	return s.Twin || len(s.Mirrors) > 0 || len(s.Relays) > 0
+}
+
+// SyncBucket is one declared bucket, in either direction.
+//
+// There is deliberately no field for a different name at the other end. A bucket
+// carrying the same name at both ends is the whole reason the upstream direction
+// is an application relay rather than a native JetStream source: a source would
+// force `twin_<code>` at every site, and then the console and the rule engine
+// would read a different bucket name per site.
+type SyncBucket struct {
+	Bucket string `mapstructure:"bucket"`
+
+	// Keys optionally narrows the entry to a key prefix — `line-a.>`, not
+	// `$KV.recipes.line-a.>`. Both directions spell it the same way and the
+	// agent builds whatever the mechanism underneath wants: a subject filter on
+	// a mirror, a filtered watcher on a relay.
+	//
+	// On a MIRROR this cannot be changed later. nats-server refuses any change
+	// to a mirror block on an existing stream (JSStreamMirrorNotUpdatableErr),
+	// so narrowing an existing mirror means deleting and recreating the bucket
+	// on every site by hand.
+	Keys string `mapstructure:"keys"`
+}
+
+// TwinConfig is retained only to catch the key it used to carry. twin.enabled
+// never worked — the hub domain never reached the running agent — so there is
+// nothing to be compatible with, but a config file still carrying it would
+// otherwise be silently ignored by viper. Rejecting it by name costs four lines
+// and saves an afternoon.
 type TwinConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
@@ -312,7 +368,7 @@ func setDefaults(v *viper.Viper) {
 	// platform-managed secrets.
 	// Off unless asked for. Each is one capability, not a role.
 	v.SetDefault("nats.server_config", "")
-	v.SetDefault("twin.enabled", false)
+	v.SetDefault("sync.twin", false)
 	v.SetDefault("observability.addr", "127.0.0.1:9100")
 	v.SetDefault("observability.metrics_token", "")
 	v.SetDefault("observability.interval", "15s")
@@ -516,6 +572,10 @@ func validate(cfg *Config) error {
 		return err
 	}
 
+	if err := validateSyncConfig(cfg); err != nil {
+		return err
+	}
+
 	// Validate metrics source
 	if cfg.Tasks.SystemMetrics.Enabled {
 		source := strings.ToLower(cfg.Tasks.SystemMetrics.Source)
@@ -645,5 +705,115 @@ func validateNebula(cfg *Config) error {
 		return fmt.Errorf("nebula.verify_timeout must not exceed 5 minutes (got: %v)", cfg.Nebula.VerifyTimeout)
 	}
 
+	return nil
+}
+
+// PresetBuckets are the bucket names sync.twin expands to.
+//
+// Duplicated from internal/edge rather than imported: edge imports platform,
+// platform imports config, so config importing edge would be a cycle.
+// TestPresetBucketNamesMatchConfig in internal/edge asserts the two agree, which
+// is the same answer this project already gives for the console's copy of the
+// twin bucket shape — a test on each side rather than a package between them.
+var PresetBuckets = []string{"twin", "twin_desired"}
+
+// validateSyncConfig checks the edge sync declarations.
+//
+// The important one is the last: a bucket in both lists has two writers, which
+// does not resolve to a loser but oscillates — two concurrent values swap across
+// the link and swap back, each write generating the next event, measured at
+// ~170,000 writes to one key in 300 ms. With two built-in buckets going opposite
+// directions that was unrepresentable. With a list it is one comparison away.
+func validateSyncConfig(cfg *Config) error {
+	// twin.enabled never worked: the hub's JetStream domain never reached the
+	// running agent, so the feature disabled itself on every start. Nothing can
+	// be relying on it, but viper ignores unknown keys, so a config file still
+	// carrying it would silently sync nothing at all.
+	if cfg.Twin.Enabled {
+		return fmt.Errorf("twin.enabled has been replaced by sync.twin - move it to:\n  sync:\n    twin: true")
+	}
+
+	if !cfg.Sync.Any() {
+		return nil
+	}
+
+	// The hub's JetStream domain arrives with the leaf config from the platform
+	// and is reachable no other way, so without platform auth there is nothing to
+	// address the hub with. Saying so here beats disabling itself at startup.
+	if cfg.NATS.Auth.Type != authPlatform {
+		return fmt.Errorf("sync is enabled but nats.auth.type is %q: the hub's JetStream domain arrives with the leaf config from the platform, so edge sync requires platform auth", cfg.NATS.Auth.Type)
+	}
+
+	seen := make(map[string]string, len(cfg.Sync.Mirrors)+len(cfg.Sync.Relays)+len(PresetBuckets))
+	if cfg.Sync.Twin {
+		for _, name := range PresetBuckets {
+			seen[name] = "the sync.twin preset"
+		}
+	}
+
+	for _, list := range []struct {
+		where   string
+		buckets []SyncBucket
+	}{
+		{"sync.mirrors", cfg.Sync.Mirrors},
+		{"sync.relays", cfg.Sync.Relays},
+	} {
+		for i, b := range list.buckets {
+			if err := validateBucketName(b.Bucket, list.where, i); err != nil {
+				return err
+			}
+			if err := validateKeyPattern(b.Keys, list.where, b.Bucket); err != nil {
+				return err
+			}
+			if prev, dup := seen[b.Bucket]; dup {
+				return fmt.Errorf("bucket %q is declared by both %s and %s: a bucket synced in both directions has two writers, which oscillates rather than converging - each bucket belongs to exactly one list",
+					b.Bucket, prev, list.where)
+			}
+			seen[b.Bucket] = list.where
+		}
+	}
+
+	return nil
+}
+
+// validateBucketName applies the same rule nats.go does for a KV bucket.
+func validateBucketName(name, where string, i int) error {
+	if name == "" {
+		return fmt.Errorf("%s[%d]: bucket is required", where, i)
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(name) {
+		return fmt.Errorf("%s[%d]: bucket %q must contain only alphanumeric characters, dashes, and underscores", where, i, name)
+	}
+	return nil
+}
+
+// validateKeyPattern checks a KV key filter.
+//
+// It is a key pattern, not a subject: `line-a.>`, never `$KV.recipes.line-a.>`.
+// The agent adds the `$KV.<bucket>.` prefix itself for a mirror's subject filter
+// and passes the pattern straight through for a relay's watcher, so a `$KV.`
+// written here would be silently doubled and match nothing.
+func validateKeyPattern(keys, where, bucket string) error {
+	if keys == "" {
+		return nil // no filter: the whole bucket
+	}
+	if strings.HasPrefix(keys, "$KV.") {
+		return fmt.Errorf("%s: keys for bucket %q is a key pattern, not a subject - write %q, not %q",
+			where, bucket, strings.TrimPrefix(strings.TrimPrefix(keys, "$KV."), bucket+"."), keys)
+	}
+
+	tokens := strings.Split(keys, ".")
+	for i, tok := range tokens {
+		switch {
+		case tok == "":
+			return fmt.Errorf("%s: keys %q for bucket %q has an empty token at position %d", where, keys, bucket, i)
+		case tok == ">" && i != len(tokens)-1:
+			return fmt.Errorf("%s: keys %q for bucket %q uses %q before the end; it matches the rest of a key and can only be last", where, keys, bucket, ">")
+		case tok == ">" || tok == "*":
+			// wildcards, fine
+		case !regexp.MustCompile(`^[a-zA-Z0-9_=-]+$`).MatchString(tok):
+			return fmt.Errorf("%s: keys %q for bucket %q has an invalid token %q", where, keys, bucket, tok)
+		}
+	}
 	return nil
 }

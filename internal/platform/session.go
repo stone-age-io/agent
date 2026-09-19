@@ -26,6 +26,16 @@ type session struct {
 	// Every writer must read-modify-write under Client.mu, or one sync drops the
 	// other's revision.
 	NebulaRevision string `json:"nebula_revision"`
+
+	// HubDomain is the hub's JetStream domain, cached from the last leaf-config
+	// fetch. It is not a secret and not a revision — it is here because it is the
+	// one thing the edge needs that arrives only over HTTP, and an edge that
+	// cannot reach the platform still has to bring its buckets up.
+	//
+	// Without this the value never reached the running agent at all: the
+	// one-shot bootstrap fetched it, wrote nats-leaf.conf (which does not carry
+	// it), and exited, so twin sync disabled itself on every start.
+	HubDomain string `json:"hub_domain"`
 }
 
 // loadSession returns the stored session, or a zero session if there isn't a

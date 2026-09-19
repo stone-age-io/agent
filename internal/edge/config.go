@@ -35,11 +35,21 @@ type Config struct {
 	// The twin relay addresses the hub across the leaf link with it.
 	HubDomain string
 
-	// TwinEnabled turns on digital-twin sync between the local leaf domain and
-	// the hub (see twin.go): a server-maintained mirror of `twin_desired` down,
-	// and a relay of `twin` up. Off by default — it moves data plane traffic, so
-	// an upgrade must not silently start doing it. Requires HubDomain.
+	// TwinEnabled turns on the digital-twin preset: a mirror of `twin_desired`
+	// down and a relay of `twin` up, with the bucket shape the console agrees on
+	// (see twin.go). Off by default — it moves data plane traffic, so an upgrade
+	// must not silently start doing it. Requires HubDomain.
+	//
+	// It is a bool rather than two entries supplied by the caller because the
+	// preset's bucket names and retention are this package's knowledge, and
+	// because a preset entry is allowed to create its hub-side bucket where a
+	// user-declared one is not.
 	TwinEnabled bool
+
+	// Mirrors and Relays are the user-declared buckets, hub → edge and
+	// edge → hub respectively. See sync.go.
+	Mirrors []Bucket
+	Relays  []Bucket
 
 	// SyncInterval paces the edge's own housekeeping and is reported in the
 	// readiness checks as the staleness budget.

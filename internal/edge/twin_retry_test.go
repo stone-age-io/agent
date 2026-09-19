@@ -43,7 +43,7 @@ func runRelayUntil(t *testing.T, local, hub *fakeTwinKV, timeout time.Duration, 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); _ = pumpReported(ctx, local, hub) }()
+	go func() { defer wg.Done(); _ = (&relay{src: local, dst: hub}).pump(ctx) }()
 
 	deadline := time.Now().Add(timeout)
 	met := false
@@ -66,7 +66,7 @@ func runRelayUntil(t *testing.T, local, hub *fakeTwinKV, timeout time.Duration, 
 // This is the bug the pending set exists for. The previous relay logged a failed
 // write and dropped it, on the stated grounds that the key would be "re-offered
 // by the next watcher restart's replay" -- but the watcher is on the LOCAL
-// bucket, which does not die when the hub does, and superviseReportedPump only
+// bucket, which does not die when the hub does, and relay.supervise only
 // restarts the pump when the WATCHER fails. So a value that changed during an
 // outage, failed its hub write, and never changed again was absent from the hub
 // permanently and silently.
@@ -123,7 +123,7 @@ func TestRelayRetrySendsTheCurrentValueNotTheFailedOne(t *testing.T) {
 
 	// Hub recovers; the retry should carry 25.
 	hub.setWriteErr(nil)
-	retryPending(context.Background(), local, hub, pending)
+	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
 
 	if v, ok := hub.get("thing.S01.temp"); !ok || v != "25" {
 		t.Errorf("hub has %q (present=%v), want 25 -- a retry replayed the stale failed value", v, ok)
@@ -141,7 +141,7 @@ func TestRelayRetryRelaysADeleteForAKeyRemovedDuringTheOutage(t *testing.T) {
 	hub := newFakeTwinKV(map[string][]byte{"thing.S01.temp": []byte("21")})
 
 	pending := map[string]struct{}{"thing.S01.temp": {}}
-	retryPending(context.Background(), local, hub, pending)
+	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
 
 	if _, ok := hub.get("thing.S01.temp"); ok {
 		t.Error("hub still holds a key that was deleted at the edge during the outage")
@@ -163,7 +163,7 @@ func TestRelayRetryKeepsAPoisonKeyFromBlockingOthers(t *testing.T) {
 	hub.setWriteErr(errHubDown)
 	pending := map[string]struct{}{"thing.S01.bad": {}}
 	local.store["thing.S01.bad"] = []byte("nope")
-	retryPending(context.Background(), local, hub, pending)
+	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
 	if len(pending) != 1 {
 		t.Fatalf("expected the failing key to stay pending, got %d", len(pending))
 	}

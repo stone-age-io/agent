@@ -21,7 +21,7 @@ import (
 // has no correct behaviour.
 func edgeEnabled(cfg *config.Config) bool {
 	return cfg.NATS.ServerConfig != "" ||
-		cfg.Twin.Enabled ||
+		cfg.Sync.Any() ||
 		cfg.Observability.Addr != ""
 }
 
@@ -31,7 +31,7 @@ func edgeEnabled(cfg *config.Config) bool {
 // repo without a single changed function signature — and it keeps the edge
 // package honest about what it actually needs, which is rather less than the
 // agent's full config.
-func edgeConfig(cfg *config.Config) *edge.Config {
+func edgeConfig(cfg *config.Config, hubDomain string) *edge.Config {
 	return &edge.Config{
 		// The edge always talks to the leaf on this box. When the agent hosts
 		// that server itself, natsd checks this against the port the config
@@ -48,15 +48,31 @@ func edgeConfig(cfg *config.Config) *edge.Config {
 		OutputDir: filepath.Dir(cfg.NATS.Auth.CredsFile),
 
 		EmbeddedConfig:    cfg.NATS.ServerConfig,
-		TwinEnabled:       cfg.Twin.Enabled,
 		ObserveAddr:       cfg.Observability.Addr,
 		MetricsToken:      cfg.Observability.MetricsToken,
 		ReadinessInterval: cfg.Observability.Interval,
 
-		// HubDomain is not configured here. It arrives with the leaf config from
+		TwinEnabled: cfg.Sync.Twin,
+		Mirrors:     syncBuckets(cfg.Sync.Mirrors),
+		Relays:      syncBuckets(cfg.Sync.Relays),
+
+		// HubDomain is not a config key. It arrives with the leaf config from
 		// the platform, which is why a fleet of gateways is told it once on the
-		// Control Plane instead of per box.
+		// Control Plane instead of per box — and it is passed in here because
+		// resolving it needs the platform client, which lives in agent.New.
+		HubDomain: hubDomain,
 	}
+}
+
+func syncBuckets(in []config.SyncBucket) []edge.Bucket {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]edge.Bucket, 0, len(in))
+	for _, b := range in {
+		out = append(out, edge.Bucket{Name: b.Bucket, Keys: b.Keys})
+	}
+	return out
 }
 
 func firstURL(urls []string) string {

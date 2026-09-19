@@ -44,6 +44,18 @@ var (
 		"JetStream usage on the local leaf, by storage tier. The number to watch on an edge box with a small disk.",
 		[]string{"tier"}, nil,
 	)
+	descSyncUp = prometheus.NewDesc(
+		"agent_edge_sync_up",
+		"1 when this declared bucket is syncing. 0 means it was declared and could not be brought up — "+
+			"most often a bucket that already exists in a shape the agent will not repair.",
+		[]string{"bucket", "direction"}, nil,
+	)
+	descRelayPending = prometheus.NewDesc(
+		"agent_edge_relay_pending",
+		"Keys whose write to the hub failed and are being retried. This is the outage backlog: it grows "+
+			"while the uplink is down and drains when it returns.",
+		[]string{"bucket"}, nil,
+	)
 )
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
@@ -51,6 +63,8 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- descUplink
 	ch <- descConns
 	ch <- descJetStream
+	ch <- descSyncUp
+	ch <- descRelayPending
 }
 
 func (c *collector) Collect(ch chan<- prometheus.Metric) {
@@ -59,6 +73,20 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	g(descConnected, boolGauge(c.state.connected()))
+
+	// One row per declared bucket, whether or not it came up — a bucket missing
+	// from here reads as "never asked to sync it", which is a different and much
+	// quieter statement than "declared and broken".
+	//
+	// The backlog is reported only for a relay that actually started. A mirror
+	// has no backlog, and a relay that never started has none rather than one of
+	// zero: same "omit, never zero" rule as the server-derived series below.
+	for _, e := range c.state.syncSnapshot() {
+		g(descSyncUp, boolGauge(e.up), e.bucket, e.direction)
+		if e.hasPending {
+			g(descRelayPending, float64(e.pending), e.bucket)
+		}
+	}
 
 	// The local server's own view. Skipped silently when the monitoring
 	// endpoint is not reachable — emitting zeros would report an islanded site

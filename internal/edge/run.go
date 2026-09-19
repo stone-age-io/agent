@@ -62,10 +62,11 @@ func Run(ctx context.Context, cfg *Config, version string) error {
 	defer nc.Close()
 	st.setConn(nc)
 
-	// Guards on cfg.TwinEnabled itself, and is fail-soft throughout: twin moves
-	// data-plane traffic and is opt-in, so failing to wire it up logs and leaves
-	// the bus alone rather than taking the site down with it.
-	startTwin(ctx, nc, cfg)
+	// Returns immediately when nothing is declared, and is fail-soft throughout:
+	// sync moves data-plane traffic and is opt-in, so failing to wire up a bucket
+	// logs, records it as down, and leaves the bus alone rather than taking the
+	// site down with it.
+	startSync(ctx, nc, cfg, st)
 
 	<-ctx.Done()
 	return nil

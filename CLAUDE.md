@@ -67,14 +67,15 @@ agent/
 │   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
 │   │   ├── nebula.go          # NebulaSource: this thing's nebula_host config
 │   │   ├── leafconfig.go      # LeafConfig: GET /api/me/leaf-config
-│   │   └── session.go         # Session file (auth token + both revisions)
+│   │   └── session.go         # Session file (token, revisions, hub domain)
 │   ├── edge/                  # Leaf-node duties, on a box that runs one
-│   │   ├── run.go             # Run(): embedded server, observability, twin
+│   │   ├── run.go             # Run(): embedded server, observability, sync
 │   │   ├── leafconf.go        # buildLeafConf: nats-leaf.conf generator
 │   │   ├── bootstrap.go       # WriteLeafConfig: conf 0644 + creds 0600
 │   │   ├── config.go          # edge.Config, mapped from the agent's YAML
-│   │   ├── twin.go / kv.go    # Twin relay up, desired mirror down
-│   │   ├── checks.go          # nats_local (fail), hub_uplink (warn)
+│   │   ├── sync.go            # Declared buckets: mirrors down, relays up
+│   │   ├── twin.go / kv.go    # The twin preset + the relay itself
+│   │   ├── checks.go          # nats_local (fail), hub_uplink + sync (warn)
 │   │   └── collector.go       # agent_edge_* gauges from the leaf's varz/leafz
 │   ├── health/                # Readiness check registry + background prober
 │   ├── metrics/               # Prometheus exposition + scrape token
@@ -106,7 +107,8 @@ agent/
 │   └── utils/
 │       ├── math.go            # Utility functions (Round)
 │       └── timeutil.go        # NowRFC3339 timestamp helper for wire payloads
-├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md, a design record not a guide)
+├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md and
+│                              # edge-sync-design.md, design records not guides)
 ├── Makefile                   # Build automation
 └── go.mod                     # Go 1.26+ required (Nebula sets the floor)
 ```
@@ -208,10 +210,10 @@ agent/
 
    - **There is no `edge.enabled` key, deliberately.** "Gateway" is not a mode the
      config declares; it is the sum of the capabilities it turns on. `edgeEnabled()`
-     (`internal/agent/edge.go`) is `nats.server_config != "" || twin.enabled ||
+     (`internal/agent/edge.go`) is `nats.server_config != "" || sync.Any() ||
      observability.addr != ""`. A single flag naming the role would be a second
      control that can disagree with the first -- `edge.enabled: false` beside
-     `twin.enabled: true` has no correct behaviour
+     `sync.twin: true` has no correct behaviour
    - **A gateway is a Thing, not a special record.** It logs in against `things` like
      any other agent and calls `GET /api/me/leaf-config` for the leaf material. The
      platform serves that to ANY authenticated Thing and gates it on nothing, because
@@ -245,13 +247,19 @@ agent/
    network). It moved from the platform repo unchanged apart from its imports, and that
    was deliberate: **keep it, and do not replace it with more `Contains` checks.**
 
-10. **Twin sync** (`internal/edge/twin.go`): two KV buckets, one writer each, off by
-    default (`twin.enabled`).
+10. **Edge sync** (`internal/edge/sync.go`, `internal/edge/twin.go`): KV buckets moved
+    between this site's JetStream domain and the hub, off by default. Two directions,
+    two mechanisms, a list each. See `docs/edge-sync-design.md` for the decision record.
 
-    | Bucket | Written by | Flows | Mechanism |
-    |---|---|---|---|
-    | `twin` | the device, at the edge | edge to hub | relay |
-    | `twin_desired` | operators, at the hub | hub to edge | JetStream **mirror** |
+    | Direction | Mechanism | Config |
+    |---|---|---|
+    | hub to edge | JetStream **mirror** (server-maintained) | `sync.mirrors` |
+    | edge to hub | application **relay** | `sync.relays` |
+
+    `sync.twin: true` is a preset expanding to one entry in each direction —
+    `twin_desired` mirrored down, `twin` relayed up. It replaces the former
+    `twin.enabled`, which is now **rejected by name** at config load: it never worked
+    (see below) and viper silently ignores keys it does not know.
 
     - **One writer per bucket is the whole safety property.** A single bucket written
       from both ends does not pick a loser on a conflict, it *oscillates*: two
@@ -259,28 +267,54 @@ agent/
       next event. Measured at ~170,000 writes to one key in 300 ms before the buckets
       were split. Encoding the owner in the key (`thing.S01.state.temp`) was tried and
       reverted -- same safety, but it taxes every key in firmware, rules and widgets,
-      and a mistyped segment silently never syncs. **Do not merge the buckets.**
-    - **Desired state is a mirror, not a relay,** because it has exactly one origin, and
+      and a mistyped segment silently never syncs.
+      **This used to be structural and is now a check.** With two built-in buckets going
+      opposite directions it was unrepresentable; with a list it is one typo away, so
+      `config.validateSyncConfig` refuses to start when a bucket appears in both
+      directions. That check is the invariant now — do not weaken it.
+    - **Downstream is a mirror, not a relay,** because it has exactly one origin, and
       it serves last-known values offline since the edge never writes it. Configured on
       the RECEIVING side, so there is no hub-side stream to mutate and no race between
       sites.
-    - **Reported state cannot be a source.** Aggregating N sites natively needs N sources
+    - **Upstream cannot be a source.** Aggregating N sites natively needs N sources
       all named `KV_twin`, which requires the server's internal `iname` that nats.go
       does not expose; the alternative is `twin_<code>` at every edge and a rule engine
       reading a different bucket name per site. Hence the relay for this one direction --
-      do not "finish the job" by making it a source without solving that.
+      do not "finish the job" by making it a source without solving that. **This is also
+      why `SyncBucket` has no rename field:** a bucket carries the same name at both
+      ends, or the reason the relay exists evaporates.
+    - **A mirror's filter cannot be changed later.** nats-server rejects any change to a
+      mirror block on an existing stream (`JSStreamMirrorNotUpdatableErr`), so narrowing
+      an existing mirror means deleting and recreating the bucket on every site by hand.
+      `ensureMirror` detects the mismatch and reports it rather than repairing it.
+    - `keys:` is a KV **key pattern** in both directions (`line-a.>`, never
+      `$KV.recipes.line-a.>`); the agent builds the `$KV.<bucket>.` prefix for a
+      mirror's subject filter and passes the pattern straight to `WatchFiltered` for a
+      relay. Config rejects a `$KV.` written there, because it would be silently
+      doubled.
     - Relay mechanics, boring on purpose: one watcher edge-to-hub so there is no echo;
-      compare-before-write (`WatchAll` replays every current value on start, so without
+      compare-before-write (the watcher replays every current value on start, so without
       it each restart would burn a revision per key); that replay IS the resync after an
       outage; deletes are relayed explicitly, because a KV delete is a tombstone rather
       than an absence and dropping it leaves the key live at the hub forever; upsert and
       never reconcile, so one site can never purge another site's keys.
+    - **The edge creates local buckets, never hub buckets** — except for the two preset
+      names, whose shape the platform knows. A typo in one site's YAML that creates a
+      local bucket is that site's problem; one that creates a hub bucket is everyone's,
+      with whatever retention that site guessed, and the console then adopts it.
     - Buckets are created if absent and otherwise **left alone** -- unlike a private
       mirror, these are shared with the console and operators, so the agent does not
-      reassert retention over whatever they set. Keep `twinBucketConfig()` in step with
+      reassert retention over whatever they set. Keep `bucketConfig()` in step with
       `TWIN_BUCKET_CONFIG` in the platform's `ui/src/utils/twin.ts`: whoever creates a
       bucket first defines it, and the two now live in different repositories so nothing
       can enforce that they agree.
+    - **The hub's JetStream domain is not a config key.** It arrives with the leaf config
+      from the platform and is cached in the session file (`platform.Client.HubDomain`),
+      so the network is touched at most once. It reached the running agent nowhere at
+      all until this was added, which is why `twin.enabled` disabled itself on every
+      start for the whole of its life. `config.PresetBuckets` duplicates the two preset
+      names because `config` cannot import `edge` (edge → platform → config would
+      cycle); `TestPresetBucketNamesMatchConfig` guards the drift.
 
 11. **Readiness and metrics** (`internal/health`, `internal/metrics`, `internal/observe`):
     a site's real health can only be measured on the site. `cmd.health` travels over
@@ -407,9 +441,20 @@ nats:
   tls:
     enabled: true
     ca_file: "/path/to/ca.pem"
-twin:                            # Digital-twin sync, off by default: it moves
-  enabled: false                 # data-plane traffic, so an upgrade must not start
+sync:                            # KV buckets moved between this leaf's JetStream
+  twin: false                    # domain and the hub. Off by default: it moves
+                                 # data-plane traffic, so an upgrade must not start
                                  # doing it silently. Requires the platform block.
+                                 # `twin: true` is the preset for the two digital-twin
+                                 # buckets. (The old `twin.enabled` is rejected by name.)
+  mirrors:                       # hub -> edge, server-maintained
+    - bucket: "recipes"
+      keys: "line-a.>"           # optional key pattern. CANNOT be changed later:
+                                 # nats-server refuses to update a mirror block.
+  relays:                        # edge -> hub, application relay
+    - bucket: "events"
+      keys: "site.S01.>"         # optional; a site cannot relay keys outside it
+                                 # A bucket may appear in ONE list, never both.
 observability:                   # /ready and /metrics on this box
   addr: "127.0.0.1:9100"         # empty serves neither; checks still run and log
   metrics_token: ""              # empty = open; Bearer or Basic when set

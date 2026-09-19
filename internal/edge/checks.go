@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nats-io/nats.go"
@@ -10,17 +11,38 @@ import (
 	"github.com/stone-age-io/agent/internal/health"
 )
 
-// state is what the checks and the collector read. It is only the live
-// connection now: the config mirror that used to feed cycle counts, per
-// collection record counts and error lists into here went with the mirror.
+// state is what the checks and the collector read: the live connection, and one
+// row per declared sync bucket.
 //
-// Its ancestor carried all of that and was called syncState. Two checks went
-// with it — sync_freshness and sync_errors — rather than being kept and made to
-// report on nothing. A check that cannot fail is worse than no check: it shows
-// green beside a real problem and teaches people the dashboard is decorative.
+// Its ancestor carried the config mirror's cycle counts, per-collection record
+// counts and error lists, and was called syncState. Two checks went with it when
+// the mirror was removed — sync_freshness and sync_errors — rather than being
+// kept and made to report on nothing. A check that cannot fail is worse than no
+// check: it shows green beside a real problem and teaches people the dashboard
+// is decorative. The rows below are that rule applied in the other direction:
+// they report on something real, so they are worth carrying.
 type state struct {
 	mu   sync.Mutex
 	conn *nats.Conn
+	sync []*syncEntry
+}
+
+// syncEntry is one declared bucket's live status, for the check and the
+// collector. One per entry, registered before anything can fail, so a bucket
+// that never came up reports DOWN rather than going missing — an entry absent
+// from /metrics looks exactly like an agent that was never asked to sync it.
+type syncEntry struct {
+	bucket    string
+	direction string
+	up        bool
+	detail    string
+
+	// pending is the relay's backlog, and hasPending says whether it is known at
+	// all. Mirrors never set it, and a relay that has not started has no backlog
+	// to report rather than a backlog of zero — the same "omit, never zero" rule
+	// the collector applies to the server-derived series.
+	pending    int
+	hasPending bool
 }
 
 func (s *state) setConn(nc *nats.Conn) {
@@ -35,11 +57,42 @@ func (s *state) connected() bool {
 	return s.conn != nil && s.conn.IsConnected()
 }
 
-// registerChecks adds the two questions an edge box can answer first-hand.
+func (s *state) registerSync(bucket, direction string) *syncEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := &syncEntry{bucket: bucket, direction: direction}
+	s.sync = append(s.sync, e)
+	return e
+}
+
+func (s *state) setSyncUp(e *syncEntry, up bool, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.up, e.detail = up, detail
+}
+
+func (s *state) setSyncPending(e *syncEntry, pending int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.pending, e.hasPending = pending, true
+}
+
+// syncSnapshot returns copies, so readers never hold the lock while formatting.
+func (s *state) syncSnapshot() []syncEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]syncEntry, 0, len(s.sync))
+	for _, e := range s.sync {
+		out = append(out, *e)
+	}
+	return out
+}
+
+// registerChecks adds the questions an edge box can answer first-hand.
 //
-// Both are answerable here and nowhere else, which is the whole reason these
-// endpoints exist. The Control Plane holds the operator and $SYS and has no
-// credential inside any organization's account, so it cannot see whether this
+// All of them are answerable here and nowhere else, which is the whole reason
+// these endpoints exist. The Control Plane holds the operator and $SYS and has
+// no credential inside any organization's account, so it cannot see whether this
 // site's local bus is up. It can count gateways configured; it cannot tell you
 // one is down.
 func registerChecks(reg *health.Registry, st *state) {
@@ -78,6 +131,36 @@ func registerChecks(reg *health.Registry, st *state) {
 			"no outbound leaf connection to the hub",
 			"This site is islanded: local NATS still works and devices keep running, but nothing reaches "+
 				"the platform. Check the WAN link, and nats.leaf_url on the Control Plane.",
+		)
+	})
+
+	// One check for every declared bucket. With one hardcoded pair, log lines
+	// were enough; with a list an operator declared, a single silently skipped
+	// entry looks exactly like a healthy agent.
+	//
+	// Warn, never fail, for the same reason as hub_uplink: a site whose sync is
+	// down is still serving its devices, and that autonomy is the point.
+	reg.Register("sync", func(ctx context.Context) health.Result {
+		entries := st.syncSnapshot()
+		if len(entries) == 0 {
+			return health.Skip("no buckets declared")
+		}
+
+		var down []string
+		for _, e := range entries {
+			if !e.up {
+				down = append(down, fmt.Sprintf("%s %s (%s)", e.direction, e.bucket, e.detail))
+			}
+		}
+		if len(down) == 0 {
+			return health.OK(fmt.Sprintf("%d bucket(s) syncing", len(entries)))
+		}
+
+		return health.Warn(
+			fmt.Sprintf("%d of %d bucket(s) not syncing: %s", len(down), len(entries), strings.Join(down, "; ")),
+			"A mirror is created once and never repaired, so a bucket that already exists in the wrong "+
+				"shape has to be deleted to be recreated. A hub-side bucket must be created at the hub "+
+				"first; the agent does not create shared hub buckets from a site's config.",
 		)
 	})
 }

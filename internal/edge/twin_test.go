@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,14 +33,15 @@ func (e *fakeEntry) Operation() jetstream.KeyValueOp { return e.op }
 
 // fakeWatcher is a hand-fed jetstream.KeyWatcher.
 type fakeWatcher struct {
-	ch chan jetstream.KeyValueEntry
+	ch   chan jetstream.KeyValueEntry
+	keys string
 }
 
 func (w *fakeWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.ch }
 func (w *fakeWatcher) Stop() error                             { return nil }
 
 // fakeTwinKV is an in-memory twinSide. Every Put and Delete is also published to
-// its watchers, so wiring two of them through pumpReported reproduces the real
+// its watchers, so wiring two of them through relay.pump reproduces the real
 // feedback path — which is the only way a ping-pong bug shows up in a test.
 type fakeTwinKV struct {
 	mu       sync.Mutex
@@ -112,18 +114,21 @@ func (f *fakeTwinKV) Delete(_ context.Context, key string, _ ...jetstream.KVDele
 	return nil
 }
 
-func (f *fakeTwinKV) WatchAll(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+func (f *fakeTwinKV) Watch(_ context.Context, keys string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	w := &fakeWatcher{ch: make(chan jetstream.KeyValueEntry, 256)}
-	// Replay current values, then the nil end-of-replay marker, exactly as a
-	// real WatchAll does.
-	keys := make([]string, 0, len(f.store))
+	w := &fakeWatcher{ch: make(chan jetstream.KeyValueEntry, 256), keys: keys}
+	// Replay the matching current values, then the nil end-of-replay marker,
+	// exactly as a real watcher does.
+	known := make([]string, 0, len(f.store))
 	for k := range f.store {
-		keys = append(keys, k)
+		known = append(known, k)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	sort.Strings(known)
+	for _, k := range known {
+		if !keyMatches(keys, k) {
+			continue
+		}
 		w.ch <- &fakeEntry{key: k, value: f.store[k], op: jetstream.KeyValuePut}
 	}
 	w.ch <- nil
@@ -131,17 +136,45 @@ func (f *fakeTwinKV) WatchAll(_ context.Context, _ ...jetstream.WatchOpt) (jetst
 	return w, nil
 }
 
-// emit delivers a change to every live watcher, like the server would.
+// emit delivers a change to every live watcher whose filter matches, like the
+// server would. Filtering here rather than in the pump is deliberate: the real
+// filtering happens server-side, so a pump that quietly relied on seeing
+// everything would pass a test that did it the other way round.
 func (f *fakeTwinKV) emit(e jetstream.KeyValueEntry) {
 	f.mu.Lock()
 	ws := append([]*fakeWatcher(nil), f.watchers...)
 	f.mu.Unlock()
 	for _, w := range ws {
+		if !keyMatches(w.keys, e.Key()) {
+			continue
+		}
 		select {
 		case w.ch <- e:
 		default: // full buffer: drop rather than deadlock the test
 		}
 	}
+}
+
+// keyMatches applies NATS subject-token matching to a KV key: `*` for one token,
+// `>` for the rest.
+func keyMatches(filter, key string) bool {
+	if filter == "" || filter == jetstream.AllKeys {
+		return true
+	}
+	f := strings.Split(filter, ".")
+	k := strings.Split(key, ".")
+	for i, tok := range f {
+		if tok == ">" {
+			return i <= len(k)-1
+		}
+		if i >= len(k) {
+			return false
+		}
+		if tok != "*" && tok != k[i] {
+			return false
+		}
+	}
+	return len(f) == len(k)
 }
 
 func (f *fakeTwinKV) keys() []string {
@@ -168,13 +201,20 @@ func (f *fakeTwinKV) putCount() int {
 	return len(f.puts)
 }
 
-// runRelay starts the reported pump (edge -> hub) and lets it settle.
+// runRelay starts an upstream pump (edge -> hub) and lets it settle.
 func runRelay(t *testing.T, local, hub *fakeTwinKV, settle time.Duration) {
 	t.Helper()
+	runRelayKeys(t, local, hub, "", settle)
+}
+
+// runRelayKeys is runRelay with a key filter on the watcher.
+func runRelayKeys(t *testing.T, local, hub *fakeTwinKV, keys string, settle time.Duration) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	r := &relay{src: local, dst: hub, keys: keys}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); _ = pumpReported(ctx, local, hub) }()
+	go func() { defer wg.Done(); _ = r.pump(ctx) }()
 	time.Sleep(settle)
 	cancel()
 	wg.Wait()
@@ -182,7 +222,7 @@ func runRelay(t *testing.T, local, hub *fakeTwinKV, settle time.Duration) {
 
 // --- relayEntry --------------------------------------------------------------
 
-// The equality short-circuit: WatchAll replays every value on start, so a relay
+// The equality short-circuit: the watcher replays every value on start, so a relay
 // that wrote unconditionally would rewrite the whole bucket on every restart and
 // burn a revision per key.
 func TestRelayEntrySkipsWhenDestinationAgrees(t *testing.T) {
@@ -348,7 +388,7 @@ func TestRelayRestartIsIdempotent(t *testing.T) {
 }
 
 // Edge writes made while the relay was down reach the hub on restart, via the
-// WatchAll replay. That covers a relay RESTART; a relay that stays up while the
+// watcher replay. That covers a relay RESTART; a relay that stays up while the
 // HUB is down is a different path, and is covered by the pending-set tests in
 // twin_retry_test.go. Hub-side keys the edge has never heard of are left alone: the relay is
 // an upsert of what this site knows, not a reconcile of the whole bucket, so one
@@ -382,7 +422,7 @@ func TestRelayDeletePropagatesToHub(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); _ = pumpReported(ctx, local, hub) }()
+	go func() { defer wg.Done(); _ = (&relay{src: local, dst: hub}).pump(ctx) }()
 
 	time.Sleep(100 * time.Millisecond) // let the initial replay settle
 	if err := local.Delete(ctx, "thing.S01.temp"); err != nil {

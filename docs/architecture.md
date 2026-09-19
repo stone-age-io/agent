@@ -97,7 +97,7 @@ Understanding the design and components of the agent platform.
 
 **Optionally, on a site that is also a gateway** (see [Leaf Nodes](./leaf-node.md)):
 - Bootstrap and host the site's NATS **leaf node**
-- Relay the site's reported digital-twin state up, mirror desired state down
+- Relay declared KV buckets up to the hub, mirror declared buckets down
 - Serve `/ready` and `/metrics` **locally**, on the box
 - Run a Nebula overlay host in-process
 

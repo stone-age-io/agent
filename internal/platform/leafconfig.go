@@ -90,9 +90,39 @@ func (c *Client) LeafConfig() (*LeafConfig, error) {
 	}
 
 	prev.Token = token
+	prev.HubDomain = cfg.HubDomain
 	c.saveSession(prev)
 
 	return &cfg, nil
+}
+
+// HubDomain returns the hub's JetStream domain: from the session file if a leaf
+// config has ever been fetched, otherwise by fetching one now.
+//
+// The cache is what matters. Edge sync needs this value on every start, and an
+// edge box is precisely the thing whose platform may be unreachable — so the
+// common path reads a local file and the network is touched once, on the first
+// start after bootstrap.
+//
+// It deliberately does not re-fetch to check for drift. A hub's JetStream domain
+// changing is a deployment-wide event that invalidates every leaf's config, not
+// something to poll for; `agent -leaf-config` is the thing that re-reads it.
+func (c *Client) HubDomain() (string, error) {
+	c.mu.Lock()
+	cached := c.loadSession().HubDomain
+	c.mu.Unlock()
+
+	if cached != "" {
+		return cached, nil
+	}
+
+	// Takes c.mu itself, so it must be called unlocked — Go mutexes are not
+	// reentrant. It also persists the domain, so this path runs at most once.
+	lc, err := c.LeafConfig()
+	if err != nil {
+		return "", err
+	}
+	return lc.HubDomain, nil
 }
 
 // validate refuses a half-provisioned response by NAME.

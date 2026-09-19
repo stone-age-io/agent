@@ -1,6 +1,6 @@
 # Leaf Nodes
 
-Run a site's NATS leaf node, keep its digital twin in step with the hub, and
+Run a site's NATS leaf node, keep its KV buckets in step with the hub, and
 serve health locally — all from the same agent binary that already manages the
 box.
 
@@ -14,8 +14,8 @@ record on the platform.
 A gateway is a **Thing** whose agent happens to have more capabilities turned on.
 Its `thing_type` on the platform already says it is a gateway; a second marker in
 the config would be a second thing to get wrong, and `edge.enabled: false` beside
-`twin.enabled: true` has no correct behaviour. So the agent decides for itself:
-if any of `nats.server_config`, `twin.enabled` or `observability.addr` is set,
+`sync.twin: true` has no correct behaviour. So the agent decides for itself:
+if any of `nats.server_config`, a `sync:` declaration or `observability.addr` is set,
 the edge goroutine has work to do.
 
 This also means you can take any one of them on its own. A box that serves
@@ -126,12 +126,29 @@ paid on every install regardless; noted so the number is not a surprise.
 
 ---
 
-## 4. Digital twin sync
+## 4. KV sync
 
-Off by default (`twin.enabled`), because it moves data-plane traffic and an
-upgrade must not silently start doing that. It needs the `platform:` block, since
-the hub's JetStream domain arrives with the leaf config rather than being
-configured per box.
+Off by default, because it moves data-plane traffic and an upgrade must not
+silently start doing that. It needs the `platform:` block, since the hub's
+JetStream domain arrives with the leaf config rather than being configured per
+box.
+
+Two directions, two mechanisms, a list each:
+
+```yaml
+sync:
+  twin: true                 # preset: the two digital-twin buckets
+
+  mirrors:                   # hub -> edge, maintained by the server
+    - bucket: recipes
+      keys: "line-a.>"       # optional. CANNOT be changed later — see below
+
+  relays:                    # edge -> hub, pumped by the agent
+    - bucket: events
+      keys: "site.S01.>"     # optional
+```
+
+`sync.twin: true` is shorthand for the two buckets the platform already knows:
 
 | Bucket | Written by | Flows | Mechanism |
 |---|---|---|---|
@@ -141,6 +158,49 @@ configured per box.
 The point is edge autonomy: a site whose uplink drops keeps writing reported state
 locally and catches the hub up when the link returns, while still reading the
 last-known desired state from its local mirror.
+
+> **`twin.enabled` is gone.** It is rejected by name at config load. It never
+> worked — the hub's JetStream domain never reached the running agent, so it
+> disabled itself on every start — so there is nothing to migrate, but a config
+> file still carrying it would otherwise be silently ignored. Write
+> `sync: { twin: true }`.
+
+### A bucket belongs to one list
+
+A bucket named in both directions has two writers, and two writers oscillate
+rather than converge (see the next section). The agent refuses to start and names
+the bucket. With the two built-in buckets that was unrepresentable; with a list
+it is one typo away.
+
+### `keys:` is a key pattern, in both directions
+
+Write `line-a.>`, never `$KV.recipes.line-a.>`. The agent builds the subject a
+mirror's filter needs and hands the same pattern straight to the relay's watcher.
+A `$KV.` written here is rejected, because it would otherwise be doubled and
+match nothing.
+
+On a **relay**, `keys:` is what makes a site physically unable to relay another
+site's keyspace up, rather than merely conventionally unlikely to.
+
+On a **mirror**, it cannot be changed afterwards. nats-server rejects any change
+to a mirror block on an existing stream:
+
+```
+JSStreamMirrorNotUpdatableErr (10055): stream mirror configuration can not be updated
+```
+
+So narrowing an existing mirror means deleting the bucket at every site and
+letting the agent recreate it. Get it right the first time. The agent detects the
+mismatch and reports it in `/ready` rather than repairing it.
+
+### The agent does not create hub buckets
+
+A bucket in `sync.mirrors` or `sync.relays` must already exist at the hub; the
+agent creates only the local side. A typo in one site's YAML that creates a local
+bucket is that site's problem, but one that creates a *hub* bucket is everyone's,
+with whatever retention that site happened to guess — and the console then adopts
+it. The two preset twin buckets are the exception, because the platform knows
+their shape.
 
 ### One writer per bucket is the whole safety property
 
@@ -164,7 +224,7 @@ served locally from the last-known values, which is precisely what you want when
 the link is down. The mirror is configured on the *receiving* side, so there is no
 hub-side stream to mutate and no race between sites.
 
-**Reported state cannot be a source,** which would otherwise be the symmetric
+**Upstream cannot be a source,** which would otherwise be the symmetric
 answer. Aggregating N sites at the hub means N sources all named `KV_twin`;
 same-named sources need the server's internal `iname`, which nats.go does not
 expose. The alternative is `twin_<code>` at every edge, which makes a rule engine
@@ -178,7 +238,7 @@ Boring on purpose:
 
 - **One watcher**, edge → hub. There is no reverse pump, so there is no echo.
 - **Compare before write.** A value already equal at the hub is skipped. This is
-  an optimisation, not the safety property — `WatchAll` replays every current
+  an optimisation, not the safety property — the watcher replays every current
   value on start, so without it each restart would rewrite the bucket and burn a
   revision per key.
 - **That replay is also the resync.** Reconnecting after an outage walks every
@@ -196,7 +256,7 @@ Boring on purpose:
 
 Buckets are created if absent and otherwise **left alone**. Unlike a private
 mirror, these are shared with the console and with operators, so the agent does
-not reassert retention over whatever they set. Keep `twinBucketConfig()` in step
+not reassert retention over whatever they set. Keep `bucketConfig()` in step
 with `TWIN_BUCKET_CONFIG` in the platform's `ui/src/utils/twin.ts` — whoever
 creates a bucket first defines it, and the two now live in different repositories,
 so nothing can enforce that they agree.
@@ -236,6 +296,7 @@ failure is logged rather than fatal.
 |---|---|
 | `nats_local` | **fail** — the agent is not connected to the local leaf |
 | `hub_uplink` | **warn** — no outbound leaf connection: this site is *islanded* |
+| `sync` | **warn** — a declared bucket could not be brought up, and says which |
 
 **An islanded site warns rather than fails, and still answers 200.** Local NATS
 keeps working and devices keep running; that autonomy is the entire reason a leaf
@@ -247,6 +308,8 @@ node exists, so reporting it as unready would invert the design.
 | `agent_edge_hub_uplink_connected` | 0 = islanded |
 | `agent_edge_nats_connections` | Devices actually attached at this site |
 | `agent_edge_jetstream_bytes` | The number to watch on a small edge disk |
+| `agent_edge_sync_up{bucket,direction}` | 0 = declared and not syncing |
+| `agent_edge_relay_pending{bucket}` | The outage backlog: keys waiting on the hub |
 
 The server-derived rows come from the leaf's own loopback monitoring port — the
 `http:` line the generated `nats-leaf.conf` carries. It is unauthenticated by
@@ -279,8 +342,8 @@ a clean bill of health.
      auth:
        type: "platform"
        creds_file: "/etc/agent/device.creds"
-   twin:
-     enabled: true
+   sync:
+     twin: true
    observability:
      addr: "127.0.0.1:9100"
    ```
