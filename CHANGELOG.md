@@ -8,6 +8,29 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [0.2.1] - 2026-09-19
+
+### Fixed
+
+- **A declared mirror whose hub bucket does not exist no longer reports itself
+  healthy.** `ensureMirror` never asked the hub anything, and JetStream cannot
+  validate a cross-domain mirror source when the stream is created — so a mirror
+  naming a bucket the hub does not have was accepted, reported
+  `agent_edge_sync_up = 1`, and received nothing for ever. It is now checked on
+  every start and reported as down, with the bucket named.
+
+- **`sync.twin: true` works on a fresh organization again.** The same omission
+  dropped hub-side creation for the preset's `twin_desired`: 0.2.0 created the
+  hub bucket on the relay path only, so a deployment whose console had not
+  already created `twin_desired` mirrored a stream that was not there. This is
+  the more likely of the two to bite, because `sync.twin: true` is the documented
+  path.
+
+  Both were one omission — only the relay path asked the hub anything. Both
+  directions now go through a single `hubBucket()`, which is also the only place
+  that decides whether the agent may create a bucket at the hub: the two preset
+  names yes, a user-declared one never.
+
 ## [0.2.0] - 2026-09-19
 
 > Building from source now needs **Go 1.26+**: the Nebula library sets the floor.
@@ -210,6 +233,7 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/stone-age-io/agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/stone-age-io/agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/stone-age-io/agent/releases/tag/v0.1.0
