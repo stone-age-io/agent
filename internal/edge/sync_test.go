@@ -161,3 +161,45 @@ func TestMirrorEntryReportsNoBacklog(t *testing.T) {
 		t.Error("a mirror reported a backlog; it has no relay and the series must be omitted")
 	}
 }
+
+// Only the twin preset may create a bucket at the hub.
+//
+// A user-declared entry that names a bucket the hub does not have is a typo, and
+// creating it would put a stream on the SHARED hub with whatever retention one
+// site guessed — which the console then adopts. A typo that creates a local
+// bucket is one site's problem.
+func TestOnlyPresetEntriesMayCreateHubBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		e         entry
+		mayCreate bool
+	}{
+		{"preset mirror", entry{Bucket: Bucket{Name: twinDesiredBucket}, direction: directionMirror, preset: true}, true},
+		{"preset relay", entry{Bucket: Bucket{Name: twinBucket}, direction: directionRelay, preset: true}, true},
+		{"user mirror", entry{Bucket: Bucket{Name: "recipes"}, direction: directionMirror}, false},
+		{"user relay", entry{Bucket: Bucket{Name: "events"}, direction: directionRelay}, false},
+	} {
+		if tc.e.preset != tc.mayCreate {
+			t.Errorf("%s: preset=%v, want %v — hubBucket() keys hub-side creation off this flag",
+				tc.name, tc.e.preset, tc.mayCreate)
+		}
+	}
+}
+
+// Every declared bucket the agent creates carries a description, and the two
+// preset buckets keep the wording the console uses.
+func TestDescriptionCoversBothDirections(t *testing.T) {
+	for _, tc := range []struct {
+		e    entry
+		want string
+	}{
+		{entry{direction: directionMirror, preset: true}, "Digital twin: desired state (written by operators)"},
+		{entry{direction: directionRelay, preset: true}, "Digital twin: reported state (written at the edge)"},
+		{entry{direction: directionMirror}, "Mirrored from the hub by the agent"},
+		{entry{direction: directionRelay}, "Relayed to the hub by the agent"},
+	} {
+		if got := description(tc.e); got != tc.want {
+			t.Errorf("description(%+v) = %q, want %q", tc.e, got, tc.want)
+		}
+	}
+}

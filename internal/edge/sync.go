@@ -138,7 +138,7 @@ func startSync(ctx context.Context, nc *nats.Conn, cfg *Config, st *state) {
 		var err error
 		switch e.direction {
 		case directionMirror:
-			err = ensureMirror(ctx, localJS, e, cfg.HubDomain)
+			err = ensureMirror(ctx, localJS, hubJS, e, cfg.HubDomain)
 		case directionRelay:
 			err = startRelay(ctx, localJS, hubJS, e, func(pending int) { st.setSyncPending(h, pending) })
 		}
@@ -165,6 +165,40 @@ func markDown(st *state, h *syncEntry, e entry, format string, args ...any) {
 	st.setSyncUp(h, false, detail)
 }
 
+// hubBucket opens the far end of an entry, and is the ONE place that decides
+// whether the agent may create a bucket at the hub.
+//
+// A preset entry may, because the platform knows those two names and their
+// shape. A user-declared one may not: a typo in one site's YAML that creates a
+// local bucket is that site's problem, but one that creates a hub bucket is
+// everyone's, with whatever retention that site happened to guess, and the
+// console then adopts it.
+//
+// **Both directions must come through here.** The mirror path originally did
+// not, and the result was silent in exactly the way this whole feature is meant
+// not to be: JetStream cannot validate a cross-domain mirror source when the
+// stream is created, so a mirror of a hub bucket that does not exist is accepted,
+// reports healthy, and receives nothing for ever.
+func hubBucket(ctx context.Context, hubJS jetstream.JetStream, e entry) (jetstream.KeyValue, error) {
+	if e.preset {
+		kv, err := openOrCreateKV(ctx, hubJS, bucketConfig(e.Name, description(e)))
+		if err != nil {
+			return nil, fmt.Errorf("hub bucket: %w", err)
+		}
+		return kv, nil
+	}
+
+	kv, err := hubJS.KeyValue(ctx, e.Name)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		return nil, errors.New("hub bucket: no such bucket at the hub; create it there first " +
+			"(an agent does not create shared hub buckets from a site's config)")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("hub bucket: %w", err)
+	}
+	return kv, nil
+}
+
 // ensureMirror creates the local bucket as a mirror of the hub's, if it is
 // absent. A mirror is configured entirely on the receiving side, so there is no
 // hub-side stream to mutate and no race between sites.
@@ -175,7 +209,15 @@ func markDown(st *state, h *syncEntry, e entry, format string, args ...any) {
 // mismatches it can detect are reported as DOWN rather than as a warning beside
 // a green check, because in both cases the declared configuration is not the one
 // in effect.
-func ensureMirror(ctx context.Context, localJS jetstream.JetStream, e entry, hubDomain string) error {
+//
+// The hub side is checked FIRST, and on every start rather than only when the
+// local bucket is absent: a local mirror that already exists is just as empty as
+// a new one when the thing it mirrors is not there.
+func ensureMirror(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry, hubDomain string) error {
+	if _, err := hubBucket(ctx, hubJS, e); err != nil {
+		return err
+	}
+
 	want := mirrorSource(e, hubDomain)
 
 	if _, err := localJS.KeyValue(ctx, e.Name); err == nil {
@@ -201,7 +243,7 @@ func ensureMirror(ctx context.Context, localJS jetstream.JetStream, e entry, hub
 		return err
 	}
 
-	cfg := bucketConfig(e.Name, mirrorDescription(e))
+	cfg := bucketConfig(e.Name, description(e))
 	cfg.Mirror = want
 	if _, err := localJS.CreateKeyValue(ctx, cfg); err != nil {
 		return err
@@ -231,11 +273,19 @@ func mirrorSource(e entry, hubDomain string) *jetstream.StreamSource {
 	return src
 }
 
-func mirrorDescription(e entry) string {
-	if e.preset {
+// description is what a bucket this agent creates says about itself to anyone
+// reading `nats kv ls`. The preset keeps the wording the console uses.
+func description(e entry) string {
+	switch {
+	case e.preset && e.direction == directionMirror:
 		return "Digital twin: desired state (written by operators)"
+	case e.preset:
+		return "Digital twin: reported state (written at the edge)"
+	case e.direction == directionMirror:
+		return "Mirrored from the hub by the agent"
+	default:
+		return "Relayed to the hub by the agent"
 	}
-	return "Mirrored from the hub by the agent"
 }
 
 // startRelay opens both ends of an upstream entry and starts its pump.
@@ -245,24 +295,12 @@ func mirrorDescription(e entry) string {
 // It takes a reporting closure rather than the state, so the relay's only tie to
 // readiness is one function of one int.
 func startRelay(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry, report func(pending int)) error {
-	var (
-		hub jetstream.KeyValue
-		err error
-	)
-	if e.preset {
-		hub, err = openOrCreateKV(ctx, hubJS, bucketConfig(e.Name, relayDescription(e)))
-	} else {
-		hub, err = hubJS.KeyValue(ctx, e.Name)
-		if errors.Is(err, jetstream.ErrBucketNotFound) {
-			err = errors.New("no such bucket at the hub; create it there first " +
-				"(an agent does not create shared hub buckets from a site's config)")
-		}
-	}
+	hub, err := hubBucket(ctx, hubJS, e)
 	if err != nil {
-		return fmt.Errorf("hub bucket: %w", err)
+		return err
 	}
 
-	local, err := openOrCreateKV(ctx, localJS, bucketConfig(e.Name, relayDescription(e)))
+	local, err := openOrCreateKV(ctx, localJS, bucketConfig(e.Name, description(e)))
 	if err != nil {
 		return fmt.Errorf("local bucket: %w", err)
 	}
@@ -272,11 +310,4 @@ func startRelay(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry
 	log.Printf("edge: relaying %q edge → hub, keys %q", e.Name, r.watchKeys())
 	go r.supervise(ctx)
 	return nil
-}
-
-func relayDescription(e entry) string {
-	if e.preset {
-		return "Digital twin: reported state (written at the edge)"
-	}
-	return "Relayed to the hub by the agent"
 }

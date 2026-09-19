@@ -202,6 +202,12 @@ with whatever retention that site happened to guess — and the console then ado
 it. The two preset twin buckets are the exception, because the platform knows
 their shape.
 
+The hub side is checked on every start, in **both** directions, and a missing one
+is reported in `/ready`. That matters most for a mirror: JetStream cannot validate
+a cross-domain mirror source when the stream is created, so a mirror of a bucket
+the hub does not have would otherwise be accepted, look healthy, and receive
+nothing for ever.
+
 ### One writer per bucket is the whole safety property
 
 A single bucket written from both ends does not pick a loser on a conflict — it

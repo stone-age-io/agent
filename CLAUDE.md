@@ -302,6 +302,10 @@ agent/
       names, whose shape the platform knows. A typo in one site's YAML that creates a
       local bucket is that site's problem; one that creates a hub bucket is everyone's,
       with whatever retention that site guessed, and the console then adopts it.
+      `hubBucket()` is the single place that decides this, and **both directions must
+      go through it.** The mirror path once did not, and JetStream cannot validate a
+      cross-domain mirror source at creation time — so a mirror of a hub bucket that
+      does not exist was accepted, reported healthy, and received nothing for ever.
     - Buckets are created if absent and otherwise **left alone** -- unlike a private
       mirror, these are shared with the console and operators, so the agent does not
       reassert retention over whatever they set. Keep `bucketConfig()` in step with
