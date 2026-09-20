@@ -106,9 +106,24 @@ func (c *ExporterCollector) Collect(ctx context.Context) (*SystemMetrics, error)
 	c.logger.Debug("Metrics scrape completed successfully",
 		zap.Float64("cpu_percent", metrics.CPUUsagePercent),
 		zap.Float64("memory_free_gb", metrics.MemoryFreeGB),
+		zap.Float64("memory_used_percent", metrics.MemoryUsedPercent),
 		zap.Int("disk_count", len(metrics.Disks)))
 
 	return metrics, nil
+}
+
+// firstGauge returns the value of the first gauge present among names, and
+// whether any of them was found. An empty name never matches, so a platform
+// with no fallback passes one through without a special case.
+func firstGauge(families map[string]*dto.MetricFamily, names ...string) (float64, bool) {
+	for _, name := range names {
+		family, ok := families[name]
+		if !ok || len(family.Metric) == 0 || family.Metric[0].Gauge == nil {
+			continue
+		}
+		return family.Metric[0].Gauge.GetValue(), true
+	}
+	return 0, false
 }
 
 // parsePrometheusMetrics parses Prometheus format metrics using expfmt
@@ -198,38 +213,21 @@ func (c *ExporterCollector) parsePrometheusMetrics(reader io.Reader) (*SystemMet
 		c.mu.Unlock()
 	}
 
-	// Extract memory free bytes using platform-specific metric name
-	memoryFound := false
-
-	// Platform-specific memory handling
-	switch runtime.GOOS {
-	case "linux":
-		// Linux: Try MemAvailable first (preferred), then MemFree as fallback
-		if family, ok := metricFamilies["node_memory_MemAvailable_bytes"]; ok {
-			if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
-				bytes := family.Metric[0].Gauge.GetValue()
-				metrics.MemoryFreeGB = utils.Round(bytes / 1024 / 1024 / 1024)
-				memoryFound = true
-			}
-		} else if family, ok := metricFamilies["node_memory_MemFree_bytes"]; ok {
-			// Fallback to MemFree
-			if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
-				bytes := family.Metric[0].Gauge.GetValue()
-				metrics.MemoryFreeGB = utils.Round(bytes / 1024 / 1024 / 1024)
-				memoryFound = true
-				c.logger.Debug("Using MemFree fallback (MemAvailable not found)")
-			}
-		}
-	default:
-		// Windows, FreeBSD use single metric
-		if family, ok := metricFamilies[metricNames.MemoryFree]; ok {
-			if len(family.Metric) > 0 && family.Metric[0].Gauge != nil {
-				bytes := family.Metric[0].Gauge.GetValue()
-				metrics.MemoryFreeGB = utils.Round(bytes / 1024 / 1024 / 1024)
-				memoryFound = true
-			}
-		}
+	// Memory: available, then installed. MemoryFreeAlt is how a platform gets a
+	// second choice without a branch here — Linux prefers MemAvailable and
+	// settles for MemFree — which keeps every exporter metric name in
+	// metrics_names.go rather than half here and half there.
+	memFreeBytes, memoryFound := firstGauge(metricFamilies, metricNames.MemoryFree, metricNames.MemoryFreeAlt)
+	if memoryFound {
+		metrics.MemoryFreeGB = bytesToGB(memFreeBytes)
 	}
+
+	// The total is reported when the exporter has it and omitted when it does
+	// not, rather than defaulted to 0: see SystemMetrics.MemoryTotalGB.
+	if memTotalBytes, ok := firstGauge(metricFamilies, metricNames.MemoryTotal); ok {
+		metrics.MemoryTotalGB = bytesToGB(memTotalBytes)
+	}
+	metrics.deriveMemoryUsed()
 
 	// Extract disk metrics for ALL drives (automatic discovery)
 	// Build a map of drive -> metrics for easier lookup
@@ -375,7 +373,14 @@ func (c *ExporterCollector) parsePrometheusMetrics(reader io.Reader) (*SystemMet
 	if !memoryFound {
 		c.logger.Warn("Memory metric not found",
 			zap.String("expected_metric", metricNames.MemoryFree),
-			zap.Bool("has_metric", metricFamilies[metricNames.MemoryFree] != nil))
+			zap.String("fallback_metric", metricNames.MemoryFreeAlt))
+	}
+	if metrics.MemoryTotalGB == 0 {
+		// Not a failure: the payload omits the total and the percentage rather
+		// than publishing zeros. Worth a line, because an alert written against
+		// memory_used_percent will silently never fire.
+		c.logger.Warn("Memory total metric not found; memory_total_gb and memory_used_percent will be omitted",
+			zap.String("expected_metric", metricNames.MemoryTotal))
 	}
 	if len(metrics.Disks) == 0 {
 		c.logger.Warn("No disk metrics found",

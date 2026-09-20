@@ -51,10 +51,6 @@ type Config struct {
 	Mirrors []Bucket
 	Relays  []Bucket
 
-	// SyncInterval paces the edge's own housekeeping and is reported in the
-	// readiness checks as the staleness budget.
-	SyncInterval time.Duration
-
 	// ObserveAddr is the listen address for /ready and /metrics. Empty means the
 	// endpoints are not served — the readiness checks still run and still log,
 	// they just are not reachable over the network. Opening a port on an edge

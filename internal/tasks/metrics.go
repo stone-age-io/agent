@@ -24,6 +24,19 @@ type SystemMetrics struct {
 	MemoryFreeGB    float64       `json:"memory_free_gb"`
 	Disks           []DiskMetrics `json:"disks"` // All drives detected on system
 	TS              string        `json:"ts"`
+
+	// MemoryTotalGB and MemoryUsedPercent exist because free alone cannot be
+	// alerted on. "memory_free_gb below 2" means something different on a 4 GB
+	// gateway and a 64 GB server, so every consumer had to know the box's size
+	// out of band to write a rule. DiskMetrics has carried total and percent
+	// since the beginning; this is memory catching up.
+	//
+	// Omitted rather than zeroed when the source does not report a total — an
+	// exporter missing MemTotal would otherwise publish 0 GB installed and
+	// 0% used, which reads as an idle machine rather than as an unanswered
+	// question. Same rule as the edge collector's server-derived series.
+	MemoryTotalGB     float64 `json:"memory_total_gb,omitempty"`
+	MemoryUsedPercent float64 `json:"memory_used_percent,omitempty"`
 }
 
 // DiskMetrics represents metrics for a single disk drive
@@ -34,6 +47,31 @@ type DiskMetrics struct {
 	TotalGB          float64 `json:"total_gb"`            // Total space in GB
 	ReadBytesPerSec  float64 `json:"read_bytes_per_sec"`  // Read rate (requires previous measurement)
 	WriteBytesPerSec float64 `json:"write_bytes_per_sec"` // Write rate (requires previous measurement)
+}
+
+// bytesToGB is the one conversion both collectors use, rounded the same way as
+// every other figure in the payload.
+func bytesToGB(b float64) float64 {
+	return utils.Round(b / 1024 / 1024 / 1024)
+}
+
+// deriveMemoryUsed fills MemoryUsedPercent from the two figures the collectors
+// actually read. Both collectors call it rather than each computing the same
+// division, so there is one definition of what "used" means: total minus
+// available, where available is the OS's own idea of what a new process could
+// get (MemAvailable on Linux, not MemFree).
+//
+// A zero or missing total leaves both derived fields alone, so they stay absent
+// from the payload instead of claiming 0%.
+func (m *SystemMetrics) deriveMemoryUsed() {
+	if m.MemoryTotalGB <= 0 {
+		return
+	}
+	used := m.MemoryTotalGB - m.MemoryFreeGB
+	if used < 0 {
+		used = 0
+	}
+	m.MemoryUsedPercent = utils.Round(used / m.MemoryTotalGB * 100)
 }
 
 // TelemetryError is the error message published on a telemetry subject when
@@ -99,6 +137,12 @@ func validateMetrics(m *SystemMetrics, collector MetricsCollector) error {
 	// ALWAYS validate memory (gauge metric, not affected by first scrape)
 	if m.MemoryFreeGB < 0 {
 		return fmt.Errorf("invalid memory free: %.2f GB (cannot be negative)", m.MemoryFreeGB)
+	}
+	if m.MemoryTotalGB < 0 {
+		return fmt.Errorf("invalid memory total: %.2f GB (cannot be negative)", m.MemoryTotalGB)
+	}
+	if m.MemoryUsedPercent < 0 || m.MemoryUsedPercent > 100 {
+		return fmt.Errorf("invalid memory used: %.2f%% (must be 0-100)", m.MemoryUsedPercent)
 	}
 
 	// ALWAYS validate all disk metrics

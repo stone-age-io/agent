@@ -161,7 +161,7 @@ control that can disagree with the first.
    **Telemetry** (JetStream Publish):
    ```
    Publish: agents.device-123.telemetry.system
-   Payload: {"code":"device-123","location":"hq","cpu_usage_percent":15.2,"memory_free_gb":8.5,...,"ts":"..."}
+   Payload: {"code":"device-123","location":"hq","cpu_usage_percent":15.2,"memory_free_gb":8.5,"memory_total_gb":16.0,"memory_used_percent":46.88,...,"ts":"..."}
    ```
    - Asynchronous
    - Durable (stored in JetStream)
@@ -524,13 +524,31 @@ nats request "agents.device-123.cmd.health" '{}'
     "platform": "linux",
     "name": "Ubuntu 24.04",
     "version": "24.04"
+  },
+  "config": {
+    "code": "device-123",
+    "location": "hq",
+    "subject_prefix": "agents",
+    "version": "0.2.1",
+    "enabled_tasks": ["heartbeat", "system_metrics", "creds_sync"],
+    "allowed_commands": ["df -h"],
+    "allowed_services": ["nginx"],
+    "allowed_log_paths": ["/var/log/*.log"]
   }
 }
 ```
 
+The three allowlists are the three gates — `cmd.exec`, `cmd.service` and
+`cmd.logs` each refuse anything not named in one of them. They are reported
+here because "not allowed" is otherwise the same answer whether an entry is
+missing or merely spelled differently, and checking meant shell access to the
+box. They are configuration, not secrets: they list what an authenticated
+caller was already permitted to do.
+
 **Health Status:**
 - `healthy`: All systems operational
-- `degraded`: Some issues (>50% metrics failures, >10 reconnects)
+- `degraded`: JetStream unusable, >50% metrics failures, or the overlay enabled
+  and not carrying traffic
 - `unhealthy`: NATS disconnected
 
 ---

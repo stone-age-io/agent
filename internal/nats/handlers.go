@@ -249,12 +249,29 @@ type NATSHealth struct {
 	OutBytes   uint64 `json:"out_bytes"`
 }
 
+// ConfigInfo is the part of the configuration worth answering questions about
+// remotely.
+//
+// The three allowlists are here because they are the three gates, and a
+// rejected command is otherwise undiagnosable without shell access to the box:
+// cmd.exec, cmd.service and cmd.logs each refuse anything not named in one of
+// them, and "not allowed" is the same answer whether the entry is missing or
+// merely spelled differently. They are configuration, not secrets — they are
+// the list of things an authenticated caller was already permitted to do.
+//
+// This is deliberately NOT a general config dump. A whole-config command would
+// mean owning a redaction policy for every field added afterwards, where the
+// cost of forgetting once is a leaked credential.
 type ConfigInfo struct {
 	Code          string   `json:"code"`
 	Location      string   `json:"location"`
 	SubjectPrefix string   `json:"subject_prefix"`
 	Version       string   `json:"version"`
 	EnabledTasks  []string `json:"enabled_tasks"`
+
+	AllowedCommands []string `json:"allowed_commands"`
+	AllowedServices []string `json:"allowed_services"`
+	AllowedLogPaths []string `json:"allowed_log_paths"`
 }
 
 type rotateCredsResponse struct {
@@ -779,17 +796,26 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 	if h.config.Tasks.Inventory.Enabled {
 		enabledTasks = append(enabledTasks, "inventory")
 	}
-	// Reported only when it is actually scheduled, which needs platform auth
+	// The two internal jobs are reported only when they are actually scheduled.
+	// Each condition mirrors the one in scheduler.scheduleTasks, and each is the
+	// presence of the interface the scheduler needs rather than a config key —
+	// the same test, so this list cannot claim a job that is not running.
 	if h.credsRotator != nil && h.config.Platform.SyncInterval > 0 {
 		enabledTasks = append(enabledTasks, "creds_sync")
 	}
+	if h.nebulaCtl != nil {
+		enabledTasks = append(enabledTasks, "nebula_sync")
+	}
 
 	return &ConfigInfo{
-		Code:          h.code,
-		Location:      h.config.Location,
-		SubjectPrefix: h.subjectPrefix,
-		Version:       h.version,
-		EnabledTasks:  enabledTasks,
+		Code:            h.code,
+		Location:        h.config.Location,
+		SubjectPrefix:   h.subjectPrefix,
+		Version:         h.version,
+		EnabledTasks:    enabledTasks,
+		AllowedCommands: h.config.Commands.AllowedCommands,
+		AllowedServices: h.config.Commands.AllowedServices,
+		AllowedLogPaths: h.config.Commands.AllowedLogPaths,
 	}
 }
 
@@ -825,11 +851,6 @@ func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetr
 	// milliseconds after connecting where this reports degraded because the answer
 	// has not come back yet. It corrects itself on the next health request.
 	if !natsHealth.JetStream {
-		return "degraded"
-	}
-
-	// DEGRADED: High reconnect count (connection unstable)
-	if natsHealth.Reconnects > 10 {
 		return "degraded"
 	}
 

@@ -64,11 +64,13 @@ func (c *BuiltinCollector) Collect(ctx context.Context) (*SystemMetrics, error) 
 	}
 
 	// Collect Memory
-	memFreeGB, err := c.collectMemory(ctx)
+	memFreeGB, memTotalGB, err := c.collectMemory(ctx)
 	if err != nil {
 		c.logger.Warn("Failed to collect memory metrics", zap.Error(err))
 	} else {
 		metrics.MemoryFreeGB = memFreeGB
+		metrics.MemoryTotalGB = memTotalGB
+		metrics.deriveMemoryUsed()
 	}
 
 	// Collect Disks (space + I/O)
@@ -129,14 +131,18 @@ func (c *BuiltinCollector) collectCPU(ctx context.Context) (float64, error) {
 	return utils.Round(usagePercent), nil
 }
 
-func (c *BuiltinCollector) collectMemory(ctx context.Context) (float64, error) {
+// collectMemory returns available and total memory in GB.
+//
+// Available rather than Free: it is the OS's own estimate of what a new process
+// could actually get, which counts reclaimable cache that Free does not. On a
+// healthy Linux box Free is routinely near zero and alarming for no reason.
+func (c *BuiltinCollector) collectMemory(ctx context.Context) (float64, float64, error) {
 	vmem, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	// Return available memory in GB (matches existing MemoryFreeGB field)
-	return utils.Round(float64(vmem.Available) / 1024 / 1024 / 1024), nil
+	return bytesToGB(float64(vmem.Available)), bytesToGB(float64(vmem.Total)), nil
 }
 
 func (c *BuiltinCollector) collectDisks(ctx context.Context) ([]DiskMetrics, error) {

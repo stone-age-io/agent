@@ -8,6 +8,60 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+### Added
+
+- **System metrics now carry `memory_total_gb` and `memory_used_percent`.**
+  Free alone could not be alerted on: "`memory_free_gb` below 2" means
+  something different on a 4 GB gateway and a 64 GB server, so every consumer
+  had to know each box's size out of band to write a rule. `disks` has carried
+  total and percent since the beginning; this is memory catching up.
+
+  Both are **omitted rather than zeroed** when the source does not report a
+  total, which in practice means an exporter without `MemTotal`. Publishing
+  0 GB installed and 0% used would read as an idle machine rather than as an
+  unanswered question — the same rule the edge collector applies to its
+  server-derived series. The agent logs a warning in that case, because an
+  alert written against `memory_used_percent` would otherwise silently never
+  fire.
+
+- **`cmd.health` reports the three allowlists** — `allowed_commands`,
+  `allowed_services` and `allowed_log_paths` — in its `config` block. They are
+  the three gates, and a rejected command was otherwise undiagnosable without
+  shell access to the box: "not allowed" is the same answer whether an entry is
+  missing or merely spelled differently. They are configuration rather than
+  secrets, being the list of things an authenticated caller was already
+  permitted to do.
+
+  This is deliberately not a general config-dump command. That would mean
+  owning a redaction policy for every field added afterwards, where the cost of
+  forgetting once is a leaked credential.
+
+- **`enabled_tasks` includes `nebula_sync`**, which has been a real scheduled
+  job since 0.2.0 and was missing from the list. Both internal jobs are now
+  reported on the same condition the scheduler uses to schedule them — the
+  presence of the interface, not a config key — so the list cannot claim a job
+  that is not running.
+
+### Changed
+
+- **The ">10 reconnects means degraded" rule is gone.** It counted reconnects
+  for the lifetime of the process, so an agent up for a year through eleven
+  server restarts reported `degraded` for ever after, and the only fix that
+  kept the rule would have been to add state for a sliding window. `connected`
+  already answers the question the rule was reaching for, and `reconnects` is
+  still in the response for anyone who wants to graph it. `degraded` now means
+  JetStream unusable, a majority of metrics scrapes failing, or the overlay
+  enabled and not carrying traffic.
+
+### Removed
+
+- `edge.Config.SyncInterval`, which was declared and documented but never
+  populated by `edgeConfig()` and never read. It will come back with the
+  periodic re-attempt of failed sync wiring, which is the job it was written
+  for; until then it was a field describing behaviour the agent did not have.
+
 ## [0.2.1] - 2026-09-19
 
 ### Fixed

@@ -9,6 +9,8 @@ type MetricNames struct {
 	CPUTime        string // Counter: total CPU time
 	CPUIdleLabel   string // Label value for idle mode
 	MemoryFree     string // Gauge: available memory bytes
+	MemoryFreeAlt  string // Gauge: fallback when MemoryFree is absent ("" if none)
+	MemoryTotal    string // Gauge: installed memory bytes
 	DiskFreeBytes  string // Gauge: disk free bytes
 	DiskSizeBytes  string // Gauge: disk total size
 	DiskReadBytes  string // Counter: disk read bytes
@@ -24,6 +26,7 @@ func GetMetricNames() MetricNames {
 			CPUTime:        "windows_cpu_time_total",
 			CPUIdleLabel:   "idle",
 			MemoryFree:     "windows_memory_available_bytes",
+			MemoryTotal:    "windows_memory_physical_total_bytes",
 			DiskFreeBytes:  "windows_logical_disk_free_bytes",
 			DiskSizeBytes:  "windows_logical_disk_size_bytes",
 			DiskReadBytes:  "windows_logical_disk_read_bytes_total",
@@ -35,6 +38,8 @@ func GetMetricNames() MetricNames {
 			CPUTime:        "node_cpu_seconds_total",
 			CPUIdleLabel:   "idle",
 			MemoryFree:     "node_memory_MemAvailable_bytes",
+			MemoryFreeAlt:  "node_memory_MemFree_bytes",
+			MemoryTotal:    "node_memory_MemTotal_bytes",
 			DiskFreeBytes:  "node_filesystem_avail_bytes",
 			DiskSizeBytes:  "node_filesystem_size_bytes",
 			DiskReadBytes:  "node_disk_read_bytes_total",
@@ -47,6 +52,8 @@ func GetMetricNames() MetricNames {
 			CPUTime:        "node_cpu_seconds_total",
 			CPUIdleLabel:   "idle",
 			MemoryFree:     "node_memory_MemAvailable_bytes",
+			MemoryFreeAlt:  "node_memory_MemFree_bytes",
+			MemoryTotal:    "node_memory_MemTotal_bytes",
 			DiskFreeBytes:  "node_filesystem_avail_bytes",
 			DiskSizeBytes:  "node_filesystem_size_bytes",
 			DiskReadBytes:  "node_disk_read_bytes_total",

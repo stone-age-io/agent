@@ -32,6 +32,17 @@ func TestBuiltinCollector_Collect(t *testing.T) {
 		t.Errorf("MemoryFreeGB = %.2f, expected > 0", metrics1.MemoryFreeGB)
 	}
 
+	// The total is what makes the free figure alertable, so the builtin
+	// collector must always produce it — gopsutil has no path where it knows
+	// available memory but not installed memory.
+	if metrics1.MemoryTotalGB < metrics1.MemoryFreeGB {
+		t.Errorf("MemoryTotalGB = %.2f, expected >= MemoryFreeGB %.2f",
+			metrics1.MemoryTotalGB, metrics1.MemoryFreeGB)
+	}
+	if metrics1.MemoryUsedPercent <= 0 || metrics1.MemoryUsedPercent > 100 {
+		t.Errorf("MemoryUsedPercent = %.2f, expected 0 < p <= 100", metrics1.MemoryUsedPercent)
+	}
+
 	// Should have at least one disk
 	if len(metrics1.Disks) == 0 {
 		t.Error("Expected at least one disk")
@@ -232,6 +243,37 @@ func TestValidateMetrics(t *testing.T) {
 			},
 			expectError: true,
 		},
+		{
+			// An exporter that reports available memory but no total leaves
+			// both derived fields at zero, which is omitted rather than
+			// published. That has to stay valid, or a node_exporter without
+			// MemTotal would fail the whole scrape instead of losing one field.
+			name: "memory with no total is valid",
+			metrics: &SystemMetrics{
+				CPUUsagePercent: 10.0,
+				MemoryFreeGB:    8.0,
+			},
+			expectError: false,
+		},
+		{
+			name: "negative memory total is invalid",
+			metrics: &SystemMetrics{
+				CPUUsagePercent: 10.0,
+				MemoryFreeGB:    8.0,
+				MemoryTotalGB:   -16.0,
+			},
+			expectError: true,
+		},
+		{
+			name: "memory used over 100 percent is invalid",
+			metrics: &SystemMetrics{
+				CPUUsagePercent:   10.0,
+				MemoryFreeGB:      8.0,
+				MemoryTotalGB:     16.0,
+				MemoryUsedPercent: 150.0,
+			},
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,6 +284,40 @@ func TestValidateMetrics(t *testing.T) {
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestDeriveMemoryUsed covers the one piece of arithmetic both collectors share.
+//
+// The "free exceeds total" case is not hypothetical: the two figures come from
+// different metric families in exporter mode and are scraped at slightly
+// different moments, so a transient inversion is possible — and a negative
+// percentage would fail validation and drop the whole scrape rather than the
+// one field.
+func TestDeriveMemoryUsed(t *testing.T) {
+	tests := []struct {
+		name     string
+		free     float64
+		total    float64
+		wantUsed float64
+	}{
+		{"half used", 8.0, 16.0, 50.0},
+		{"nothing used", 16.0, 16.0, 0.0},
+		{"no total reported leaves it absent", 8.0, 0.0, 0.0},
+		{"free exceeding total clamps to zero", 20.0, 16.0, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &SystemMetrics{MemoryFreeGB: tt.free, MemoryTotalGB: tt.total}
+			m.deriveMemoryUsed()
+			if m.MemoryUsedPercent != tt.wantUsed {
+				t.Errorf("MemoryUsedPercent = %.2f, want %.2f", m.MemoryUsedPercent, tt.wantUsed)
+			}
+			if err := validateMetrics(m, NewBuiltinCollector(zap.NewNop())); err != nil {
+				t.Errorf("derived metrics failed validation: %v", err)
 			}
 		})
 	}
