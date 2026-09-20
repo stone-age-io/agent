@@ -22,7 +22,7 @@ This also means you can take either one on its own. A box that hosts a plain
 embedded broker with no platform at all is fine — `nats.server_config` points at
 *any* `nats-server` config file, not only one this agent generated.
 
-`observability.addr` is **not** in that list, although it was until 0.2.2.
+`observability.addr` is **not** in that list, although it was before 0.3.0.
 Serving `/ready` is not leaf work: every agent does it, gateway or not, and the
 agent owns that endpoint. A gateway simply contributes three more checks to it —
 `nats_local`, `hub_uplink` and `sync` — which are the ones that need a leaf on

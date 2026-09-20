@@ -8,7 +8,19 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-20
+
+> **`cmd.health` reports `degraded` in situations where it used to report
+> `healthy`.** Its status word is now derived from the readiness checks rather
+> than from a separate list of conditions, so an islanded gateway, a bucket
+> that will not sync, a rolled-back overlay or a platform sync that has stopped
+> working all reach it. None of these are new faults — they were happening and
+> going unreported over NATS. Anything alerting on `status != "healthy"` will
+> get louder, and should. `/ready` is unaffected: warnings still answer 200.
+>
+> The other upgrade-visible change is that an agent with no leaf node no longer
+> opens a second NATS connection. If you count connections per device at the
+> server, expect that number to drop.
 
 ### Fixed
 
@@ -357,7 +369,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/stone-age-io/agent/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/stone-age-io/agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/stone-age-io/agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/stone-age-io/agent/releases/tag/v0.1.0
