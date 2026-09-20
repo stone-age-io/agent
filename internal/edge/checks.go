@@ -43,6 +43,12 @@ type syncEntry struct {
 	// the collector applies to the server-derived series.
 	pending    int
 	hasPending bool
+
+	// loggedDetail is the last failure written to the log. Wiring is retried on
+	// a timer now, and a bucket whose hub side does not exist fails identically
+	// every time — without this the retry would write the same line for ever and
+	// bury whatever else the box was saying.
+	loggedDetail string
 }
 
 func (s *state) setConn(nc *nats.Conn) {
@@ -69,6 +75,34 @@ func (s *state) setSyncUp(e *syncEntry, up bool, detail string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e.up, e.detail = up, detail
+	if up {
+		// Forget what was logged while it was down, so a bucket that breaks
+		// again the same way still says so once.
+		e.loggedDetail = ""
+	}
+}
+
+// syncIsUp reports whether an entry is currently wired up, so the retry loop
+// leaves working entries alone. Re-running ensureMirror on a healthy mirror
+// would be harmless; restarting a healthy relay would start a second watcher
+// on the same bucket.
+func (s *state) syncIsUp(e *syncEntry) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return e.up
+}
+
+// shouldLogDown reports whether this failure is worth a log line, and records
+// it as logged. New failures and changed reasons are printed; a repeat of the
+// same reason on the next retry tick is not.
+func (s *state) shouldLogDown(e *syncEntry, detail string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e.loggedDetail == detail {
+		return false
+	}
+	e.loggedDetail = detail
+	return true
 }
 
 func (s *state) setSyncPending(e *syncEntry, pending int) {

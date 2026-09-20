@@ -441,10 +441,37 @@ type Health struct {
 }
 
 // Health reports the state of the overlay.
+//
+// It blocks while an apply is in flight, which can be minutes: Sync holds the
+// lock across apply, verify (up to verify_timeout), a possible restart and a
+// possible rollback. That is fine for a command handler, which is answering one
+// caller, and NOT fine for the readiness prober, which is shared — see
+// HealthIfIdle.
 func (m *Manager) Health() *Health {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.healthLocked()
+}
+
+// HealthIfIdle is Health for callers that must not wait, returning nil when the
+// manager is mid-apply.
+//
+// The readiness prober is the caller. Its checks run under a deadline, but a
+// mutex does not respect a context: a check blocked on this lock would hold up
+// the whole probe — every other check with it — for as long as a verify takes,
+// and a wedged prober is indistinguishable from a wedged agent. "A sync is in
+// progress" is a perfectly good thing to report for one interval.
+func (m *Manager) HealthIfIdle() *Health {
+	if !m.mu.TryLock() {
+		return nil
+	}
+	defer m.mu.Unlock()
+
+	return m.healthLocked()
+}
+
+func (m *Manager) healthLocked() *Health {
 	h := &Health{
 		Enabled:        true,
 		Source:         m.source.Name(),

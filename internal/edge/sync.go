@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -86,13 +87,31 @@ func kvFilterSubject(bucket, keys string) string {
 	return fmt.Sprintf("$KV.%s.%s", bucket, keys)
 }
 
-// startSync wires up every declared bucket and starts the relays.
+// syncRetryInterval is how often a bucket that could not be wired up is tried
+// again. A var so tests can shrink it, exactly like twinRetryInterval.
+//
+// A constant rather than a config key, for the same reason monitorURL is one:
+// there is no deployment where a different number is right, and a key here
+// would be a second control that can disagree with nothing. Sixty seconds is
+// below anyone's patience for "I created the bucket, why is it still down" and
+// far above the cost of two JetStream lookups.
+var syncRetryInterval = 60 * time.Second
+
+// startSync wires up every declared bucket, starts the relays, and keeps
+// retrying whatever would not come up.
 //
 // Best-effort throughout, in the same spirit as the heartbeat: a bucket that
 // cannot be brought up is logged, recorded as down for /ready and /metrics, and
 // skipped. Config sync and the local bus must keep working even when the data
 // plane cannot, and an agent that refused to start over a hub bucket would be
 // one nobody could ask what went wrong.
+//
+// THE RETRY IS WHY THIS IS NOT A ONE-SHOT. Wiring used to be attempted exactly
+// once, at startup, so the ordinary deployment sequence — install the gateway,
+// then create the bucket at the hub — left the site reporting that bucket down
+// until somebody restarted the agent. Relays already healed themselves once
+// started (relay.supervise) and mirrors are maintained by the server; it was
+// only the wiring step that had no second chance.
 func startSync(ctx context.Context, nc *nats.Conn, cfg *Config, st *state) {
 	entries := plan(cfg)
 	if len(entries) == 0 {
@@ -132,22 +151,70 @@ func startSync(ctx context.Context, nc *nats.Conn, cfg *Config, st *state) {
 	// Registered before anything else can fail, so a bucket that never comes up
 	// is visibly down rather than absent. An entry missing from /metrics looks
 	// exactly like an agent that was never asked to sync it.
+	pending := make([]wiring, 0, len(entries))
 	for _, e := range entries {
-		h := st.registerSync(e.Name, e.direction)
+		pending = append(pending, wiring{entry: e, handle: st.registerSync(e.Name, e.direction)})
+	}
+
+	wireDown(ctx, localJS, hubJS, cfg, st, pending)
+	go retryWiring(ctx, localJS, hubJS, cfg, st, pending)
+}
+
+// wiring pairs a declared entry with the status row the checks and the
+// collector read, so the retry loop can find both.
+type wiring struct {
+	entry  entry
+	handle *syncEntry
+}
+
+// wireDown attempts every entry that is not currently up, and leaves the rest
+// alone.
+//
+// Skipping the ones that are up is the whole correctness requirement here. A
+// second ensureMirror on a healthy mirror would be harmless, but a second
+// startRelay would open a second watcher on the same bucket and relay every
+// change twice — which is not a conflict (one writer still owns the bucket) but
+// doubles the hub's write rate for ever, silently.
+func wireDown(ctx context.Context, localJS, hubJS jetstream.JetStream, cfg *Config, st *state, ws []wiring) {
+	for _, w := range ws {
+		if st.syncIsUp(w.handle) {
+			continue
+		}
 
 		var err error
-		switch e.direction {
+		switch w.entry.direction {
 		case directionMirror:
-			err = ensureMirror(ctx, localJS, hubJS, e, cfg.HubDomain)
+			err = ensureMirror(ctx, localJS, hubJS, w.entry, cfg.HubDomain)
 		case directionRelay:
-			err = startRelay(ctx, localJS, hubJS, e, func(pending int) { st.setSyncPending(h, pending) })
+			h := w.handle
+			err = startRelay(ctx, localJS, hubJS, w.entry, func(p int) { st.setSyncPending(h, p) })
 		}
 
 		if err != nil {
-			markDown(st, h, e, "%v", err)
+			markDown(st, w.handle, w.entry, "%v", err)
 			continue
 		}
-		st.setSyncUp(h, true, "")
+		st.setSyncUp(w.handle, true, "")
+	}
+}
+
+// retryWiring re-attempts the entries that are down, until they are not.
+//
+// It runs even when everything came up first time: a bucket can be deleted at
+// the hub while the agent runs, and this is what brings it back when it is
+// recreated. The loop is cheap — it does nothing at all once every entry is up,
+// because wireDown skips them.
+func retryWiring(ctx context.Context, localJS, hubJS jetstream.JetStream, cfg *Config, st *state, ws []wiring) {
+	ticker := time.NewTicker(syncRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			wireDown(ctx, localJS, hubJS, cfg, st, ws)
+		}
 	}
 }
 
@@ -159,9 +226,18 @@ func failAll(st *state, entries []entry, format string, args ...any) {
 	}
 }
 
+// markDown records an entry as not syncing, and says so once.
+//
+// The log line is suppressed when the reason has not changed since the last
+// one: wireDown runs on a timer, and a hub bucket that does not exist fails
+// with the same message every minute for as long as nobody creates it. The
+// state is still updated every time, so /ready and /metrics stay current — it
+// is only the log that goes quiet.
 func markDown(st *state, h *syncEntry, e entry, format string, args ...any) {
 	detail := fmt.Sprintf(format, args...)
-	log.Printf("⚠️ edge: sync %s %q disabled: %s", e.direction, e.Name, detail)
+	if st.shouldLogDown(h, detail) {
+		log.Printf("⚠️ edge: sync %s %q not syncing: %s", e.direction, e.Name, detail)
+	}
 	st.setSyncUp(h, false, detail)
 }
 

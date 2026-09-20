@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/health"
 	"github.com/stone-age-io/agent/internal/nebula"
 	"github.com/stone-age-io/agent/internal/tasks"
 	"github.com/stone-age-io/agent/internal/utils"
@@ -24,6 +25,16 @@ type CredsRotator interface {
 	Rotate() (bool, error)
 }
 
+// HealthReporter is the agent's readiness prober, as the health command needs
+// it. Implemented by *observe.Server.
+//
+// Declared here rather than imported for the same reason as CredsRotator: this
+// package should not grow a dependency on how the endpoint is served. What it
+// wants is the latest answer, not the machinery that produced it.
+type HealthReporter interface {
+	Report() *health.Report
+}
+
 // CommandHandlers manages all command subscriptions and handlers
 type CommandHandlers struct {
 	logger        *zap.Logger
@@ -35,6 +46,7 @@ type CommandHandlers struct {
 	natsClient    *Client
 	credsRotator  CredsRotator     // nil unless this agent gets its credentials from the platform
 	nebulaCtl     NebulaController // nil unless the embedded overlay is enabled
+	reporter      HealthReporter   // the readiness registry, shared with /ready
 }
 
 // NebulaController is the embedded Nebula overlay, as the command handlers need
@@ -55,7 +67,8 @@ type NebulaController interface {
 // it is not available on this agent.
 // nebulaCtl may be nil, in which case the nebula command reports that the
 // overlay is not enabled on this agent.
-func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator, nebulaCtl NebulaController) *CommandHandlers {
+// reporter supplies the readiness report that cmd.health answers with.
+func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator, nebulaCtl NebulaController, reporter HealthReporter) *CommandHandlers {
 	return &CommandHandlers{
 		logger:        logger,
 		config:        cfg,
@@ -66,6 +79,7 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 		natsClient:    natsClient,
 		credsRotator:  credsRotator,
 		nebulaCtl:     nebulaCtl,
+		reporter:      reporter,
 	}
 }
 
@@ -229,6 +243,23 @@ type healthResponse struct {
 	// Nebula is absent unless the embedded overlay is enabled, so an agent
 	// without it emits exactly the response it did before the feature existed.
 	Nebula *nebula.Health `json:"nebula,omitempty"`
+
+	// Checks is the readiness report — the same one /ready serves, from the same
+	// registry, probed on the same schedule.
+	//
+	// THIS IS WHY THERE IS NO `edge` BLOCK HERE. Everything a gateway knows
+	// first-hand (is the local leaf up, is the hub uplink attached, is each
+	// declared bucket syncing and why not) is a registered check, so it arrives
+	// in this field without a second struct to define, fill and keep in step
+	// with the edge's own state. The same goes for the platform conversation and
+	// the overlay: one registry decides what is wrong, and both channels report
+	// it. Adding a fact to cmd.health means registering a check, which also puts
+	// it on /ready and in agent_check_state — rather than writing it into three
+	// places and watching them drift.
+	//
+	// It can be up to one probe interval stale; Checked carries the timestamp so
+	// a reader can see that rather than having to know the interval.
+	Checks *health.Report `json:"checks,omitempty"`
 }
 
 type NATSHealth struct {
@@ -728,8 +759,13 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		nebulaHealth = h.nebulaCtl.Health()
 	}
 
-	// Determine overall health status
-	status := h.determineHealthStatus(natsHealth, taskMetrics, nebulaHealth)
+	// The readiness report, which is also what decides the status below
+	var report *health.Report
+	if h.reporter != nil {
+		report = h.reporter.Report()
+	}
+
+	status := determineHealthStatus(report)
 
 	response := healthResponse{
 		Status: status,
@@ -740,6 +776,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		Config: configInfo,
 		OS:     osInfo,
 		Nebula: nebulaHealth,
+		Checks: report,
 	}
 
 	responseBytes, err := json.Marshal(response)
@@ -836,48 +873,46 @@ func (h *CommandHandlers) getOSInfo() *tasks.OSInfo {
 	return osInfo
 }
 
-// determineHealthStatus calculates overall health status
-func (h *CommandHandlers) determineHealthStatus(natsHealth *NATSHealth, taskMetrics *tasks.TaskHealthMetrics, nebulaHealth *nebula.Health) string {
-	// UNHEALTHY: NATS disconnected
-	if !natsHealth.Connected {
-		return "unhealthy"
-	}
-
-	// DEGRADED: connected, but JetStream is not usable — telemetry is going
-	// nowhere. This used to abort startup; now that an unreachable bus no longer
-	// stops the agent, this is what keeps the failure from being silent.
-	//
-	// The check runs asynchronously on connect, so there is a window of a few
-	// milliseconds after connecting where this reports degraded because the answer
-	// has not come back yet. It corrects itself on the next health request.
-	if !natsHealth.JetStream {
+// determineHealthStatus maps the readiness report onto the three words this
+// command has always answered with.
+//
+// It is a pure function of the report, and that is the point. It used to be a
+// ladder of inline conditions — NATS connected, JetStream usable, reconnect
+// count, metrics failure rate, overlay carrying traffic — every one of which
+// was also, or should have been, a readiness check. Two lists of what "wrong"
+// means drift: the edge's checks were never in this one at all, so a gateway
+// with every synced bucket down answered "healthy" over NATS while its own
+// /ready endpoint said otherwise.
+//
+// The mapping is the report's own severity order, which is why warn and fail
+// are worth distinguishing in the first place:
+//
+//	fail  -> unhealthy   something is broken and the agent is not doing its job
+//	warn  -> degraded    it works, and someone should look at it
+//	ok    -> healthy
+//
+// A nil report means the prober has not produced one yet, which agent.New's
+// ordering makes very nearly impossible — it starts the prober, synchronously,
+// before the command subscriptions exist. If it happens anyway, "degraded" is
+// the honest answer: a diagnostic that has not run is not a clean bill of
+// health. Same rule as metrics.Set.Observe, where a nil report reads as not
+// ready.
+func determineHealthStatus(rep *health.Report) string {
+	if rep == nil {
 		return "degraded"
 	}
 
-	// DEGRADED: High metrics failure rate (>50% failures)
-	// Only check if we have enough samples to be meaningful
-	if taskMetrics.MetricsCount > 0 {
-		failureRate := float64(taskMetrics.MetricsFailures) / float64(taskMetrics.MetricsCount)
-		if failureRate > 0.5 {
-			return "degraded"
-		}
+	switch rep.State {
+	case health.StateFail:
+		return "unhealthy"
+	case health.StateWarn:
+		return "degraded"
+	case health.StateOK:
+		return "healthy"
+	default:
+		// Every check skipped. Not a clean bill of health: nothing was examined.
+		return "degraded"
 	}
-
-	// DEGRADED: the overlay is enabled but not carrying traffic. Never unhealthy:
-	// telemetry and commands are unaffected, and turning a fleet dashboard red for
-	// someone else's network problem is noise.
-	//
-	// Note the asymmetry this cannot fix. On an agent whose NATS rides the overlay,
-	// a mesh failure means this response never arrives at all, so the signal is
-	// unobservable in exactly the case where it matters most.
-	if nebulaHealth != nil {
-		if !nebulaHealth.Running || nebulaHealth.Tunnels == 0 || nebulaHealth.RolledBack {
-			return "degraded"
-		}
-	}
-
-	// HEALTHY: NATS connected and stable
-	return "healthy"
 }
 
 // respondError sends a generic error response

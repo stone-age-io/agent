@@ -12,12 +12,43 @@ import (
 
 	"github.com/stone-age-io/agent/internal/health"
 	"github.com/stone-age-io/agent/internal/natsd"
-	"github.com/stone-age-io/agent/internal/observe"
 )
 
-// Run brings up this gateway's edge subsystems and blocks until ctx is done.
+// Edge is this gateway's leaf-node duties: the embedded server if it hosts one,
+// the connection to the local leaf, and the declared KV sync.
 //
-// It is started as a goroutine from agent.New, like the Nebula manager, and
+// It is built before it is run, because what it knows has to be registered with
+// the agent's readiness registry and metrics before either starts serving. The
+// agent owns those endpoints — an agent with no leaf still answers /ready, and
+// it did not always: `observability.addr` defaults to a real address, so every
+// agent in the fleet used to satisfy edgeEnabled() and start this subsystem,
+// dial a second NATS connection, and register leaf checks about a leaf it did
+// not have. A plain device then reported nats_local FAIL for ever while its
+// actual connection was fine.
+type Edge struct {
+	cfg *Config
+	st  *state
+}
+
+// New builds the edge without starting anything.
+func New(cfg *Config) *Edge {
+	return &Edge{cfg: cfg, st: &state{}}
+}
+
+// RegisterChecks adds the questions only a box with a leaf on it can answer.
+// Call it before the agent starts its prober.
+func (e *Edge) RegisterChecks(reg *health.Registry) {
+	registerChecks(reg, e.st)
+}
+
+// Collector returns the agent_edge_* gauges, for the agent's metrics endpoint.
+func (e *Edge) Collector() prometheus.Collector {
+	return &collector{state: e.st}
+}
+
+// Run brings up the edge and blocks until ctx is done.
+//
+// It is started as a goroutine from agent.Run, like the Nebula manager, and
 // stopped by the same cancel. It owns no signal handling and no ticker of its
 // own: the agent already has both.
 //
@@ -27,46 +58,27 @@ import (
 // so it can come up before the overlay does, while this one is always local and
 // reconnects forever. Sharing one would entangle the credential-rotation
 // reconnect path with the twin watchers for no gain.
-func Run(ctx context.Context, cfg *Config, version string) error {
-	if cfg.EmbeddedConfig != "" {
-		srv, err := startEmbeddedNATS(cfg)
+func (e *Edge) Run(ctx context.Context) error {
+	if e.cfg.EmbeddedConfig != "" {
+		srv, err := startEmbeddedNATS(e.cfg)
 		if err != nil {
 			return err
 		}
 		defer srv.Stop()
 	}
 
-	st := &state{}
-
-	// Observability starts BEFORE the connection attempt, so a box that cannot
-	// reach its own bus still answers /ready — reporting the failure is the
-	// whole job, and an endpoint that only appears once things work is useless
-	// at exactly the moment it is needed.
-	var reg health.Registry
-	registerChecks(&reg, st)
-	observe.New(observe.Options{
-		Namespace:  "agent",
-		Version:    version,
-		Addr:       cfg.ObserveAddr,
-		Token:      cfg.MetricsToken,
-		Interval:   cfg.ReadinessInterval,
-		Registry:   &reg,
-		Collectors: []prometheus.Collector{&collector{state: st}},
-		LogLabel:   "agent edge readiness",
-	}).Start(ctx)
-
-	nc, err := nats.Connect(cfg.LocalNatsURL, localConnectOptions(cfg)...)
+	nc, err := nats.Connect(e.cfg.LocalNatsURL, localConnectOptions(e.cfg)...)
 	if err != nil {
-		return fmt.Errorf("connect to local NATS at %s: %w", cfg.LocalNatsURL, err)
+		return fmt.Errorf("connect to local NATS at %s: %w", e.cfg.LocalNatsURL, err)
 	}
 	defer nc.Close()
-	st.setConn(nc)
+	e.st.setConn(nc)
 
 	// Returns immediately when nothing is declared, and is fail-soft throughout:
 	// sync moves data-plane traffic and is opt-in, so failing to wire up a bucket
 	// logs, records it as down, and leaves the bus alone rather than taking the
-	// site down with it.
-	startSync(ctx, nc, cfg, st)
+	// site down with it. Entries that fail are retried on a timer; see sync.go.
+	startSync(ctx, nc, e.cfg, e.st)
 
 	<-ctx.Done()
 	return nil
@@ -78,6 +90,12 @@ func Run(ctx context.Context, cfg *Config, version string) error {
 // up after about two minutes, after which this process is a zombie holding a
 // dead connection and reporting nothing. An edge box outlives its own bus
 // restarting, so it retries forever.
+//
+// The credential is a .creds file because a leaf node's own identity always is:
+// `agent -leaf-config` writes one, and a gateway authenticates to its local leaf
+// with it. There is no token or userpass branch here for that reason — and this
+// used to be reached by agents that had neither, which is half of why a plain
+// device must not run the edge at all.
 func localConnectOptions(cfg *Config) []nats.Option {
 	return []nats.Option{
 		nats.UserCredentials(cfg.CredsFile),

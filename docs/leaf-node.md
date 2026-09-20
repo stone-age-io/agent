@@ -14,14 +14,19 @@ record on the platform.
 A gateway is a **Thing** whose agent happens to have more capabilities turned on.
 Its `thing_type` on the platform already says it is a gateway; a second marker in
 the config would be a second thing to get wrong, and `edge.enabled: false` beside
-`sync.twin: true` has no correct behaviour. So the agent decides for itself:
-if any of `nats.server_config`, a `sync:` declaration or `observability.addr` is set,
-the edge goroutine has work to do.
+`sync.twin: true` has no correct behaviour. So the agent decides for itself: if
+either `nats.server_config` or a `sync:` declaration is set, the edge goroutine
+has work to do.
 
-This also means you can take any one of them on its own. A box that serves
-`/ready` but hosts no server is fine. A box that hosts a plain embedded broker
-with no platform at all is fine — `nats.server_config` points at *any*
-`nats-server` config file, not only one this agent generated.
+This also means you can take either one on its own. A box that hosts a plain
+embedded broker with no platform at all is fine — `nats.server_config` points at
+*any* `nats-server` config file, not only one this agent generated.
+
+`observability.addr` is **not** in that list, although it was until 0.2.2.
+Serving `/ready` is not leaf work: every agent does it, gateway or not, and the
+agent owns that endpoint. A gateway simply contributes three more checks to it —
+`nats_local`, `hub_uplink` and `sync` — which are the ones that need a leaf on
+the box to mean anything.
 
 > **Previously `leaf-sync`.** This was a separate binary in the platform
 > repository. It also mirrored an organization's config collections into the
@@ -286,6 +291,11 @@ observability:
 curl -s localhost:9100/ready
 curl -s localhost:9100/metrics
 ```
+
+The same report is also in `cmd.health`, under `checks`, so a fleet dashboard
+sees exactly what a local scrape sees — one registry, two channels. A gateway
+adds `nats_local` (fail), `hub_uplink` (warn) and `sync` (warn) to the checks
+every agent already runs.
 
 A site's real health can only be measured on the site. `cmd.health` travels over
 NATS, which is the link that breaks — the box you most need to ask is the one

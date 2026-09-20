@@ -203,3 +203,87 @@ func TestDescriptionCoversBothDirections(t *testing.T) {
 		}
 	}
 }
+
+// A relay that is already running must never be started a second time.
+//
+// This is the correctness requirement behind the retry loop. Re-running
+// ensureMirror on a healthy mirror would be harmless, but a second watcher on
+// the same bucket relays every change twice — not a conflict, since one writer
+// still owns the bucket, but double the hub's write rate for ever and silent.
+//
+// The JetStream handles are nil on purpose: if wireDown tries to wire an entry
+// it was supposed to skip, it dereferences one and the test panics.
+func TestWireDownSkipsEntriesThatAreAlreadyUp(t *testing.T) {
+	st := &state{}
+	ws := []wiring{
+		{entry: entry{Bucket: Bucket{Name: "twin"}, direction: directionRelay}, handle: st.registerSync("twin", directionRelay)},
+		{entry: entry{Bucket: Bucket{Name: "recipes"}, direction: directionMirror}, handle: st.registerSync("recipes", directionMirror)},
+	}
+	for _, w := range ws {
+		st.setSyncUp(w.handle, true, "")
+	}
+
+	wireDown(context.Background(), nil, nil, &Config{HubDomain: "hub"}, st, ws)
+
+	for _, e := range st.syncSnapshot() {
+		if !e.up {
+			t.Errorf("entry %q went down after a retry pass that should have skipped it", e.bucket)
+		}
+	}
+}
+
+// The retry loop runs on its ticker and stops with the context.
+func TestRetryWiringStopsWithTheContext(t *testing.T) {
+	restore := syncRetryInterval
+	syncRetryInterval = 5 * time.Millisecond
+	defer func() { syncRetryInterval = restore }()
+
+	st := &state{}
+	ws := []wiring{{
+		entry:  entry{Bucket: Bucket{Name: "twin"}, direction: directionRelay},
+		handle: st.registerSync("twin", directionRelay),
+	}}
+	st.setSyncUp(ws[0].handle, true, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		retryWiring(ctx, nil, nil, &Config{HubDomain: "hub"}, st, ws)
+		close(done)
+	}()
+
+	time.Sleep(25 * time.Millisecond) // several ticks, all of them no-ops
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("retryWiring did not return after its context was cancelled")
+	}
+}
+
+// A failure that has not changed is recorded every time and logged once.
+//
+// wireDown runs on a timer now, and a hub bucket nobody has created yet fails
+// with the same message every minute. Without this the agent would write that
+// line for ever and bury whatever else the box was saying.
+func TestRepeatedSyncFailureIsLoggedOnce(t *testing.T) {
+	st := &state{}
+	h := st.registerSync("recipes", directionMirror)
+
+	if !st.shouldLogDown(h, "no such bucket at the hub") {
+		t.Error("the first failure should be logged")
+	}
+	if st.shouldLogDown(h, "no such bucket at the hub") {
+		t.Error("the same failure should not be logged again on the next retry")
+	}
+	if !st.shouldLogDown(h, "bucket exists but is not a mirror") {
+		t.Error("a different failure should be logged")
+	}
+
+	// Recovering and breaking the same way again is news.
+	st.setSyncUp(h, true, "")
+	if !st.shouldLogDown(h, "bucket exists but is not a mirror") {
+		t.Error("a failure recurring after a recovery should be logged again")
+	}
+}

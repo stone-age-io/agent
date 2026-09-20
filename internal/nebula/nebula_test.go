@@ -231,3 +231,36 @@ func TestReadCacheWithoutCacheFile(t *testing.T) {
 		t.Fatal("readCache() returned no error when no cache file is configured")
 	}
 }
+
+// The readiness prober must never block on an apply.
+//
+// Sync holds the manager lock across apply, verify (up to verify_timeout) and
+// any rollback — minutes in the worst case. A readiness check blocked on that
+// lock would hold up the whole probe, because a mutex does not respect the
+// check's deadline, and a wedged prober looks exactly like a wedged agent.
+func TestHealthIfIdleDoesNotWaitForAnApply(t *testing.T) {
+	m := testManager(t, &fakeSource{})
+
+	// Stand in for a sync in flight.
+	m.mu.Lock()
+
+	done := make(chan *Health, 1)
+	go func() { done <- m.HealthIfIdle() }()
+
+	select {
+	case h := <-done:
+		if h != nil {
+			t.Error("HealthIfIdle returned a report while the manager was locked; it must report busy instead")
+		}
+	case <-time.After(2 * time.Second):
+		m.mu.Unlock()
+		t.Fatal("HealthIfIdle blocked on the manager lock: a slow apply would wedge the readiness prober")
+	}
+
+	m.mu.Unlock()
+
+	// Idle again, so it answers.
+	if h := m.HealthIfIdle(); h == nil {
+		t.Error("HealthIfIdle returned busy for an idle manager")
+	}
+}

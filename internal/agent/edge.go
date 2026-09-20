@@ -11,18 +11,30 @@ import (
 //
 // There is deliberately no `edge.enabled` key behind this. "Gateway" is not a
 // mode the config declares; it is the sum of the capabilities it turns on. A box
-// that hosts a NATS server has a server to supervise, a box that relays twin
-// state has a relay to run, and a box that serves /ready has an endpoint to
-// serve — each is its own key, and any of them means the edge goroutine has a
-// reason to exist.
+// that hosts a NATS server has a server to supervise and a box that syncs KV
+// buckets has buckets to wire up — each is its own key, and either means the
+// edge goroutine has a reason to exist.
 //
 // The alternative, a single flag naming the role, is a second control that can
-// disagree with the first: `edge.enabled: false` beside `twin.enabled: true`
-// has no correct behaviour.
+// disagree with the first: `edge.enabled: false` beside `sync.twin: true` has
+// no correct behaviour.
+//
+// OBSERVABILITY IS NOT IN THIS LIST, and used to be. `observability.addr`
+// defaults to 127.0.0.1:9100, so every agent ever deployed satisfied this
+// predicate and started the edge subsystem — which dials its own second NATS
+// connection using nothing but a .creds file, ignoring token and userpass auth
+// and the whole nats.tls block, and registers three checks about a leaf node
+// the box does not have. On a creds-authenticated device that bought a
+// duplicate idle connection per agent and a nats_local check reporting the hub
+// as "the local leaf"; on a token-authenticated one the dial failed and /ready
+// returned 503 for ever while the agent's real connection was fine.
+//
+// Serving /ready everywhere was the correct intent — the README's argument for
+// it still holds, and cmd.health travels over the link that breaks. It is the
+// agent that serves it now, with checks it can actually answer, and the edge
+// contributes its leaf checks only when there is a leaf. See observe.go.
 func edgeEnabled(cfg *config.Config) bool {
-	return cfg.NATS.ServerConfig != "" ||
-		cfg.Sync.Any() ||
-		cfg.Observability.Addr != ""
+	return cfg.NATS.ServerConfig != "" || cfg.Sync.Any()
 }
 
 // edgeConfig maps the agent's YAML onto the edge package's own struct.
@@ -47,10 +59,7 @@ func edgeConfig(cfg *config.Config, hubDomain string) *edge.Config {
 		// anyway.
 		OutputDir: filepath.Dir(cfg.NATS.Auth.CredsFile),
 
-		EmbeddedConfig:    cfg.NATS.ServerConfig,
-		ObserveAddr:       cfg.Observability.Addr,
-		MetricsToken:      cfg.Observability.MetricsToken,
-		ReadinessInterval: cfg.Observability.Interval,
+		EmbeddedConfig: cfg.NATS.ServerConfig,
 
 		TwinEnabled: cfg.Sync.Twin,
 		Mirrors:     syncBuckets(cfg.Sync.Mirrors),

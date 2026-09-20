@@ -534,9 +534,41 @@ nats request "agents.device-123.cmd.health" '{}'
     "allowed_commands": ["df -h"],
     "allowed_services": ["nginx"],
     "allowed_log_paths": ["/var/log/*.log"]
+  },
+  "checks": {
+    "ready": true,
+    "state": "warn",
+    "checked": "2025-11-17T12:00:03Z",
+    "checks": [
+      {"name": "hub_uplink", "state": "warn", "detail": "no outbound leaf connection to the hub",
+       "fix": "This site is islanded: local NATS still works and devices keep running..."},
+      {"name": "jetstream", "state": "ok", "detail": "available"},
+      {"name": "nats", "state": "ok", "detail": "connected"},
+      {"name": "nats_local", "state": "ok", "detail": "connected"},
+      {"name": "nebula", "state": "skipped", "detail": "the overlay is not enabled"},
+      {"name": "platform_sync", "state": "ok", "detail": "last sync 4m12s ago"},
+      {"name": "sync", "state": "ok", "detail": "2 bucket(s) syncing"},
+      {"name": "task_metrics", "state": "ok", "detail": "288 collected, 0 failed"}
+    ]
   }
 }
 ```
+
+`checks` is the readiness report — the same one `/ready` serves, from the same
+registry on the same probe schedule, so the two channels cannot disagree about
+what is wrong with this agent. It can be up to one probe interval stale;
+`checked` carries the timestamp.
+
+**There is deliberately no `edge` block.** Everything a gateway knows
+first-hand — is the local leaf up, is the hub uplink attached, is each declared
+bucket syncing and why not — is a registered check and arrives here already.
+Adding a fact to this response means registering a check, which also puts it on
+`/ready` and in `agent_check_state`, rather than writing it into three places
+and watching them drift.
+
+Checks marked `skipped` do not apply to this agent — no overlay configured, no
+leaf on the box, metrics disabled. Skipped ranks *below* `ok`: it means nothing
+was examined, not that everything was fine.
 
 The three allowlists are the three gates — `cmd.exec`, `cmd.service` and
 `cmd.logs` each refuse anything not named in one of them. They are reported
@@ -545,11 +577,18 @@ missing or merely spelled differently, and checking meant shell access to the
 box. They are configuration, not secrets: they list what an authenticated
 caller was already permitted to do.
 
-**Health Status:**
-- `healthy`: All systems operational
-- `degraded`: JetStream unusable, >50% metrics failures, or the overlay enabled
-  and not carrying traffic
-- `unhealthy`: NATS disconnected
+**Health Status** is a pure function of the worst check in `checks`:
+- `healthy`: every check reported `ok`
+- `degraded`: some check reported `warn` — it works and someone should look at
+  it (an islanded site, a bucket that will not sync, a rolled-back overlay,
+  JetStream unusable, a majority of metrics scrapes failing)
+- `unhealthy`: some check reported `fail` — currently NATS being disconnected,
+  and on a gateway the local leaf being unreachable
+
+A warning does **not** make the agent unready: `/ready` still answers 200. The
+two endpoints answer different questions — "may I route traffic here" and "is
+anything wrong" — and collapsing them is how a green tick comes to mean
+nothing.
 
 ---
 

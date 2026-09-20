@@ -10,7 +10,70 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plain device no longer starts the edge subsystem.** `observability.addr`
+  defaults to `127.0.0.1:9100`, and it was one of the three disjuncts in
+  `edgeEnabled()` — so every agent ever deployed ran the edge, whether or not
+  it had a leaf node. That meant a second NATS connection built from nothing
+  but a `.creds` file, ignoring `token`/`userpass` auth and the entire
+  `nats.tls` block, plus three readiness checks about a leaf the box did not
+  have.
+
+  On a creds-authenticated device the effect was a duplicate idle connection
+  per agent and a `nats_local` check describing the hub as "the local leaf". On
+  a token-authenticated or private-CA one the dial failed outright and `/ready`
+  returned 503 for ever, while the agent's actual connection was fine.
+
+  Serving `/ready` everywhere was the right intent and still happens — the
+  agent owns the endpoint now, with checks it can answer for itself, and the
+  edge contributes its three leaf checks only when there is a leaf.
+  `edgeEnabled()` is now `nats.server_config != "" || sync.Any()`.
+
+- **Sync wiring is retried instead of attempted once.** A bucket that could not
+  be brought up at startup stayed down until someone restarted the agent, which
+  made the ordinary deployment order — install the gateway, then create the
+  bucket at the hub — a two-step dance with a restart in the middle. It is now
+  re-attempted every 60 seconds until it comes up, and the repeated failure is
+  logged only when the reason changes.
+
+  Entries that are already up are skipped, which is the correctness
+  requirement: a second `startRelay` on a live bucket would open a second
+  watcher and double the hub's write rate for ever, silently.
+
 ### Added
+
+- **`cmd.health` carries `checks`: the readiness report, the same one `/ready`
+  serves**, from the same registry on the same probe schedule. The status word
+  is now a pure function of it — `fail` → `unhealthy`, `warn` → `degraded`,
+  `ok` → `healthy`.
+
+  This is why there is no `edge` block in the response. Everything a gateway
+  knows first-hand — local leaf up, hub uplink attached, each declared bucket
+  syncing and why not — is a registered check, so it arrives without a second
+  structure to define, fill and keep in step with the edge's own state. Before
+  this, a gateway with every synced bucket down answered `healthy` over NATS
+  while its own `/ready` endpoint disagreed, because the command's status
+  ladder and the readiness registry were two separate opinions about what
+  "wrong" means.
+
+  New checks: `nats`, `jetstream`, `task_metrics`, `nebula` and
+  `platform_sync` on every agent; `nats_local`, `hub_uplink` and `sync` where
+  there is a leaf. They reach Prometheus too, as `agent_check_state`.
+
+- **`platform_sync` reports when the platform conversation last succeeded.** A
+  credential sync that quietly stops working is fatal on a delay: the `.creds`
+  on disk keeps working until the platform re-mints or revokes it, and only
+  then does the agent discover it has been unable to reach the platform for
+  weeks. It warns after two missed intervals.
+
+### Changed
+
+- `observe.Start` runs the first readiness probe synchronously rather than in a
+  goroutine, which is what `health.Prober.Start` already documented and what
+  guarantees `cmd.health` always has a report to answer with. Every check reads
+  state the process already holds, so the first round costs microseconds.
+
 
 - **System metrics now carry `memory_total_gb` and `memory_used_percent`.**
   Free alone could not be alerted on: "`memory_free_gb` below 2" means
@@ -58,9 +121,16 @@ that period, and this file starts where the versioned releases do.
 ### Removed
 
 - `edge.Config.SyncInterval`, which was declared and documented but never
-  populated by `edgeConfig()` and never read. It will come back with the
-  periodic re-attempt of failed sync wiring, which is the job it was written
-  for; until then it was a field describing behaviour the agent did not have.
+  populated by `edgeConfig()` and never read. The sync retry added above is the
+  job it was written for, and it did not need it: that interval is a package
+  constant (`syncRetryInterval`), for the same reason `monitorURL` is one —
+  there is no deployment where a different number is right, so a field here
+  would be a control that can only disagree with itself.
+
+- `edge.Config.ObserveAddr`, `MetricsToken` and `ReadinessInterval`. The agent
+  serves those endpoints now and reads the config keys directly; leaving the
+  fields on the edge's struct would have been three more values copied to a
+  place that no longer uses them.
 
 ## [0.2.1] - 2026-09-19
 

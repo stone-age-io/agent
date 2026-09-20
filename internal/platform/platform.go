@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/stone-age-io/agent/internal/config"
@@ -75,6 +76,33 @@ type Client struct {
 	auth      config.PlatformConfig
 	http      *http.Client
 	logger    *zap.Logger
+
+	// lastSync is when the platform conversation last succeeded, for the
+	// readiness check. Its own atomic rather than a field under mu: a readiness
+	// probe must never block behind an HTTP round trip that is holding the
+	// session lock, which is exactly the moment the check is most interesting.
+	lastSync atomic.Int64
+}
+
+// LastSync reports when this client last completed a sync or rotation, or the
+// zero time if it never has.
+//
+// This exists because a credential sync that silently stops working is fatal on
+// a delay: the .creds on disk keeps working until the platform re-mints or
+// revokes it, and only then does the agent discover it has been unable to talk
+// to the platform for weeks. Nothing reported that before — creds_sync appeared
+// in cmd.health as a string in a list of task names and nowhere else.
+func (c *Client) LastSync() time.Time {
+	ns := c.lastSync.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// markSynced records a successful platform conversation.
+func (c *Client) markSynced() {
+	c.lastSync.Store(time.Now().UnixNano())
 }
 
 // NewClient builds a client from validated config. The URL scheme is checked in
@@ -221,6 +249,7 @@ func (c *Client) syncLocked() (bool, error) {
 	// because its revision on the platform has not moved.
 	if revision != "" && revision == prev.CredsRevision && c.credsFileExists() {
 		c.saveSession(session{Token: token, CredsRevision: revision})
+		c.markSynced()
 		return false, nil
 	}
 
@@ -234,6 +263,7 @@ func (c *Client) syncLocked() (bool, error) {
 		return false, err
 	}
 	c.saveSession(session{Token: token, CredsRevision: user.Updated})
+	c.markSynced()
 
 	return changed, nil
 }
@@ -280,6 +310,7 @@ func (c *Client) Rotate() (bool, error) {
 		return false, err
 	}
 	c.saveSession(session{Token: token, CredsRevision: user.Updated})
+	c.markSynced()
 
 	return changed, nil
 }

@@ -84,6 +84,15 @@ func New(opts Options) *Server {
 	}
 }
 
+// Report returns the latest readiness report, or nil before the first probe.
+//
+// It is how cmd.health answers with the same facts /ready serves, from the same
+// registry and the same probe — rather than the NATS command and the HTTP
+// endpoint each deciding for themselves what is wrong with this agent.
+func (s *Server) Report() *health.Report {
+	return s.prober.Snapshot()
+}
+
 // Start begins probing and, when an address is configured, serves /ready and
 // /metrics on it.
 //
@@ -92,7 +101,13 @@ func New(opts Options) *Server {
 // no monitoring; opening a port on an appliance is a decision someone should
 // have made on purpose.
 func (s *Server) Start(ctx context.Context) {
-	go s.prober.Start(ctx)
+	// NOT in a goroutine. Prober.Start runs the checks once synchronously and
+	// only then returns, which is what guarantees there is a report to serve
+	// the moment anything asks — /ready on the first scrape, and cmd.health on
+	// the first request after the agent subscribes. Wrapping this in `go` gave
+	// that away for nothing: every check here reads state the process already
+	// holds, so the first round costs microseconds.
+	s.prober.Start(ctx)
 
 	if s.addr == "" {
 		return

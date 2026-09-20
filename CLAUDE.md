@@ -9,6 +9,7 @@ A lightweight, NATS-native system management and observability agent for Windows
 - Secure: TLS support, allowlisted execution, and no inbound management API
 - NATS-Native: management and telemetry are NATS (JetStream for telemetry, Core
   NATS for commands), always dialed outbound
+- Cross-Platform: Windows, Linux, FreeBSD support with platform-specific implementations
 
 **What listens.** "No listening ports" was true once and is not any more; say it
 precisely instead. Nothing can *instruct* the agent except over its own
@@ -18,7 +19,19 @@ agent serves `/ready` and `/metrics` unless the key is set empty; the platform
 block talks outbound HTTPS to the Control Plane; and `nats.server_config` makes
 a gateway host a nats-server that local devices connect *in* to. Note the
 readiness default collides with node_exporter's own 9100 on Linux and FreeBSD.
-- Cross-Platform: Windows, Linux, FreeBSD support with platform-specific implementations
+
+**Observability belongs to the agent, not to the edge.** It reads as an edge
+feature because the whole `observe`/`health`/`metrics` stack arrived with the
+edge -- and for one release it *was* one, which is how `observability.addr`
+came to be a disjunct in `edgeEnabled()`. Since that key defaults to a real
+address, every agent in the fleet then started the edge subsystem: a second
+NATS connection built from nothing but a `.creds` file (ignoring token and
+userpass auth and the whole `nats.tls` block), plus three readiness checks
+about a leaf node the box did not have. Creds-authenticated devices carried a
+duplicate idle connection and reported the hub as "the local leaf"; token-
+authenticated ones failed the dial and served `/ready` as 503 for ever while
+their real connection was fine. `internal/agent/observe.go` owns the registry
+now and the edge contributes to it. Do not put the endpoint back in `edge`.
 
 ## Build & Test Commands
 
@@ -59,7 +72,10 @@ agent/
 │   ├── main.go                # Entry point, service management
 │   └── leafconfig.go          # `agent -leaf-config`: one-shot leaf bootstrap
 ├── internal/
-│   ├── agent/agent.go         # Core agent orchestration
+│   ├── agent/
+│   │   ├── agent.go           # Core agent orchestration
+│   │   ├── observe.go         # The readiness registry: checks any agent can answer
+│   │   └── edge.go            # edgeEnabled() + the YAML -> edge.Config mapping
 │   ├── config/                # Configuration loading & validation
 │   │   ├── config.go          # Config structs and Load()
 │   │   └── defaults.go        # Platform-specific defaults
@@ -69,11 +85,11 @@ agent/
 │   │   ├── leafconfig.go      # LeafConfig: GET /api/me/leaf-config
 │   │   └── session.go         # Session file (token, revisions, hub domain)
 │   ├── edge/                  # Leaf-node duties, on a box that runs one
-│   │   ├── run.go             # Run(): embedded server, observability, sync
+│   │   ├── run.go             # Edge: build, RegisterChecks, Collector, Run
 │   │   ├── leafconf.go        # buildLeafConf: nats-leaf.conf generator
 │   │   ├── bootstrap.go       # WriteLeafConfig: conf 0644 + creds 0600
 │   │   ├── config.go          # edge.Config, mapped from the agent's YAML
-│   │   ├── sync.go            # Declared buckets: mirrors down, relays up
+│   │   ├── sync.go            # Declared buckets: mirrors down, relays up, wiring retried
 │   │   ├── twin.go / kv.go    # The twin preset + the relay itself
 │   │   ├── checks.go          # nats_local (fail), hub_uplink + sync (warn)
 │   │   └── collector.go       # agent_edge_* gauges from the leaf's varz/leafz
@@ -210,10 +226,14 @@ agent/
 
    - **There is no `edge.enabled` key, deliberately.** "Gateway" is not a mode the
      config declares; it is the sum of the capabilities it turns on. `edgeEnabled()`
-     (`internal/agent/edge.go`) is `nats.server_config != "" || sync.Any() ||
-     observability.addr != ""`. A single flag naming the role would be a second
-     control that can disagree with the first -- `edge.enabled: false` beside
-     `sync.twin: true` has no correct behaviour
+     (`internal/agent/edge.go`) is `nats.server_config != "" || sync.Any()`. A single
+     flag naming the role would be a second control that can disagree with the first
+     -- `edge.enabled: false` beside `sync.twin: true` has no correct behaviour.
+     `observability.addr` is **not** in that list; see "What listens" above for what
+     happened when it was
+   - `edge.Edge` is built in `agent.New` and run from `agent.Run`. The split exists
+     because `RegisterChecks` and `Collector()` have to reach the agent's readiness
+     registry before anything probes or scrapes it
    - **A gateway is a Thing, not a special record.** It logs in against `things` like
      any other agent and calls `GET /api/me/leaf-config` for the leaf material. The
      platform serves that to ANY authenticated Thing and gates it on nothing, because
@@ -272,6 +292,17 @@ agent/
       opposite directions it was unrepresentable; with a list it is one typo away, so
       `config.validateSyncConfig` refuses to start when a bucket appears in both
       directions. That check is the invariant now — do not weaken it.
+    - **Wiring is retried, on a one-minute ticker** (`syncRetryInterval`, a var so
+      tests can shrink it, like `twinRetryInterval`). It used to be attempted once
+      at startup, so the ordinary deployment order -- install the gateway, then
+      create the bucket at the hub -- left that bucket reporting down until somebody
+      restarted the agent. Relays already healed themselves once started
+      (`relay.supervise`) and mirrors are maintained by the server; the wiring step
+      was the one with no second chance. `wireDown` **must** skip entries that are
+      already up: re-running `ensureMirror` is harmless, but a second `startRelay`
+      opens a second watcher on the same bucket and doubles the hub's write rate
+      for ever, silently. The repeat-failure log is suppressed when the reason has
+      not changed, because a missing hub bucket fails identically every minute
     - **Downstream is a mirror, not a relay,** because it has exactly one origin, and
       it serves last-known values offline since the edge never writes it. Configured on
       the RECEIVING side, so there is no hub-side stream to mutate and no race between
@@ -320,12 +351,32 @@ agent/
       names because `config` cannot import `edge` (edge → platform → config would
       cycle); `TestPresetBucketNamesMatchConfig` guards the drift.
 
-11. **Readiness and metrics** (`internal/health`, `internal/metrics`, `internal/observe`):
-    a site's real health can only be measured on the site. `cmd.health` travels over
-    NATS, which is the link that breaks -- a box whose uplink is down is exactly the one
-    you want to ask, and that is when it goes quiet. `observability.addr` empty serves
-    neither endpoint; the checks still run and still log, and a bind failure is never
-    fatal.
+11. **Readiness and metrics** (`internal/health`, `internal/metrics`, `internal/observe`,
+    wired in `internal/agent/observe.go`): a site's real health can only be measured on
+    the site. `cmd.health` travels over NATS, which is the link that breaks -- a box
+    whose uplink is down is exactly the one you want to ask, and that is when it goes
+    quiet. `observability.addr` empty serves neither endpoint; the checks still run and
+    still log, and a bind failure is never fatal.
+
+    - **ONE REGISTRY DECIDES WHAT IS WRONG, and both channels report it.** `cmd.health`
+      carries the prober's `health.Report` in `checks`, and its three words are a pure
+      function of `Report.State` (`fail` -> unhealthy, `warn` -> degraded, `ok` ->
+      healthy). There is deliberately **no `edge` block** in that response: everything
+      a gateway knows first-hand is a registered check, so it arrives without a second
+      struct to define, fill and keep in step. Adding a fact to `cmd.health` means
+      registering a check -- which also puts it on `/ready` and in
+      `agent_check_state`. The old inline ladder is what let a gateway with every
+      bucket down answer "healthy" over NATS while its own `/ready` disagreed.
+    - The registry is assembled from two sources that never overlap: `registerAgentChecks`
+      (`nats`, `jetstream`, `task_metrics`, `nebula`, `platform_sync`) answers for any
+      agent; `Edge.RegisterChecks` adds `nats_local`, `hub_uplink` and `sync`, which need
+      a leaf on the box to mean anything.
+    - **`observe.Start` calls `prober.Start` synchronously, not in a goroutine**, and
+      `agent.New` starts it *before* subscribing to commands. That ordering is what
+      guarantees `cmd.health` always has a report to answer with. Every check reads
+      state the process already holds, so the first round costs microseconds.
+    - A check must never dial anything. A readiness probe that makes network calls
+      turns the probe rate into a load generator and a slow dependency into an outage.
 
     - **An islanded edge WARNS, it does not fail.** `hub_uplink` is a warn and
       `nats_local` is a fail. Local NATS still works and devices keep running, and that
@@ -377,7 +428,7 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.service` - Service control (start/stop/restart)
 - `{prefix}.{code}.cmd.logs` - Log file retrieval
 - `{prefix}.{code}.cmd.exec` - Custom command execution
-- `{prefix}.{code}.cmd.health` - Agent health check (includes agent version, and the `nebula` block when the overlay is enabled)
+- `{prefix}.{code}.cmd.health` - Agent health check (agent version, the `nebula` block when the overlay is enabled, the three command allowlists, and `checks`: the same readiness report `/ready` serves)
 - `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (platform auth only; answers with an error otherwise)
 - `{prefix}.{code}.cmd.nebula` - Overlay actions: `sync` (pull and apply now) or `restart` (bounce Nebula on the running config). Enabled agents only; answers with an error otherwise
 

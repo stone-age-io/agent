@@ -7,10 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/stone-age-io/agent/internal/config"
 	"github.com/stone-age-io/agent/internal/edge"
+	"github.com/stone-age-io/agent/internal/health"
 	natsclient "github.com/stone-age-io/agent/internal/nats"
 	"github.com/stone-age-io/agent/internal/nebula"
+	"github.com/stone-age-io/agent/internal/observe"
 	"github.com/stone-age-io/agent/internal/platform"
 	"github.com/stone-age-io/agent/internal/scheduler"
 	"github.com/stone-age-io/agent/internal/tasks"
@@ -27,7 +31,8 @@ type Agent struct {
 	scheduler *scheduler.Scheduler
 	handlers  *natsclient.CommandHandlers
 	nebula    *nebula.Manager // nil unless the overlay is enabled
-	edge      *edge.Config    // always built; only used when edgeEnabled(config)
+	edge      *edge.Edge      // nil unless this box has a leaf to look after
+	observe   *observe.Server // always built: every agent answers for itself
 	version   string
 	ctx       context.Context    // ADDED: Root context for clean shutdown
 	cancel    context.CancelFunc // ADDED: Cancel function for shutdown
@@ -158,8 +163,52 @@ func New(configPath string, version string) (*Agent, error) {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
+	// The edge, on a box that has a leaf to look after. Built here and run from
+	// Run(), because its checks and gauges have to be registered with the
+	// readiness registry below before anything starts probing or scraping.
+	var edgeNode *edge.Edge
+	if edgeEnabled(cfg) {
+		edgeNode = edge.New(edgeConfig(cfg, hubDomain))
+	}
+
+	// Readiness and metrics. EVERY agent has these, not only a gateway: a box
+	// whose uplink is down is exactly the one you want to ask how it is, and
+	// cmd.health travels over the link that broke.
+	//
+	// The registry is assembled here, from two sources that never overlap. The
+	// agent registers what any agent can answer about itself; the edge adds the
+	// three questions that need a leaf on the box. This is what fixed a plain
+	// device serving /ready with a failing check about a leaf it never had —
+	// see edgeEnabled and observe.go.
+	reg := &health.Registry{}
+	registerAgentChecks(reg, cfg, natsClient, executor, nebulaManager, platformClient)
+
+	var collectors []prometheus.Collector
+	if edgeNode != nil {
+		edgeNode.RegisterChecks(reg)
+		collectors = append(collectors, edgeNode.Collector())
+	}
+
+	observeServer := observe.New(observe.Options{
+		Namespace:  "agent",
+		Version:    version,
+		Addr:       cfg.Observability.Addr,
+		Token:      cfg.Observability.MetricsToken,
+		Interval:   cfg.Observability.Interval,
+		Registry:   reg,
+		Collectors: collectors,
+		LogLabel:   "agent readiness",
+	})
+
+	// Started BEFORE the command subscriptions below, and that order is
+	// load-bearing: Prober.Start runs the checks once synchronously, so by the
+	// time anything can ask cmd.health there is always a report to put in the
+	// answer. Starting it later would leave a window where the health command
+	// had to describe its own state without one.
+	observeServer.Start(ctx)
+
 	// Create command handlers (now with NATS client for health checks and version)
-	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager))
+	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager), observeServer)
 
 	// Subscribe to commands
 	logger.Info("Subscribing to commands...")
@@ -185,7 +234,8 @@ func New(configPath string, version string) (*Agent, error) {
 		scheduler: sched,
 		handlers:  handlers,
 		nebula:    nebulaManager,
-		edge:      edgeConfig(cfg, hubDomain),
+		edge:      edgeNode,
+		observe:   observeServer,
 		version:   version,
 		ctx:       ctx,    // ADDED: Store context
 		cancel:    cancel, // ADDED: Store cancel function
@@ -200,14 +250,16 @@ func (a *Agent) Run() error {
 	// The edge subsystems, on a box that hosts a NATS leaf or syncs KV buckets.
 	// Started like the Nebula manager and stopped by the same cancel: it owns no
 	// signal handling and no ticker of its own, because this function already
-	// has both.
+	// has both. Its readiness checks were registered in New and are already
+	// being probed — they report it as not connected until this comes up, which
+	// is exactly what is true.
 	//
 	// Best-effort, for the same reason the overlay is. A gateway whose local bus
 	// will not come up is a serious problem, and an agent that refused to start
 	// over it would be one you could not ask what went wrong.
-	if edgeEnabled(a.config) {
+	if a.edge != nil {
 		go func() {
-			if err := edge.Run(a.ctx, a.edge, a.version); err != nil {
+			if err := a.edge.Run(a.ctx); err != nil {
 				a.logger.Error("Edge subsystems stopped", zap.Error(err))
 			}
 		}()

@@ -1,7 +1,5 @@
 package edge
 
-import "time"
-
 // Config is what the edge subsystem needs, independent of how the agent's YAML
 // is shaped. The agent's own config package fills it — keeping this struct
 // separate is what let the whole package arrive from the platform repo without
@@ -50,19 +48,6 @@ type Config struct {
 	// edge → hub respectively. See sync.go.
 	Mirrors []Bucket
 	Relays  []Bucket
-
-	// ObserveAddr is the listen address for /ready and /metrics. Empty means the
-	// endpoints are not served — the readiness checks still run and still log,
-	// they just are not reachable over the network. Opening a port on an edge
-	// appliance should be a decision, not a default.
-	ObserveAddr string
-
-	// MetricsToken optionally protects /metrics. Empty means open, which is
-	// reasonable on an address bound to loopback or a management LAN.
-	MetricsToken string
-
-	// ReadinessInterval is how often the checks run.
-	ReadinessInterval time.Duration
 }
 
 // monitorURL is the local NATS server's monitoring endpoint: the `http:` line
