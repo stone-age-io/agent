@@ -259,12 +259,16 @@ type HeartbeatConfig struct {
 	Interval time.Duration `mapstructure:"interval"`
 }
 
-// SystemMetricsConfig configures metrics collection
+// SystemMetricsConfig configures metrics collection.
+//
+// There used to be `source` and `exporter_url` keys here, for reading the
+// figures from node_exporter or windows_exporter instead of gopsutil. Nothing
+// used them, and the exporter path was a second implementation of the same
+// handful of numbers. A config that still carries them loads, because viper
+// ignores keys it does not know, and gets the builtin collector.
 type SystemMetricsConfig struct {
-	Enabled     bool          `mapstructure:"enabled"`
-	Interval    time.Duration `mapstructure:"interval"`
-	Source      string        `mapstructure:"source"`       // "builtin" (default) or "exporter"
-	ExporterURL string        `mapstructure:"exporter_url"` // Only used when Source="exporter"
+	Enabled  bool          `mapstructure:"enabled"`
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 // ServiceCheckConfig configures service status monitoring
@@ -351,13 +355,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.tls.enabled", false)
 	v.SetDefault("nats.tls.insecure_skip_verify", false)
 
-	// Task defaults with platform-specific exporter URL
+	// Task defaults
 	v.SetDefault("tasks.heartbeat.enabled", true)
 	v.SetDefault("tasks.heartbeat.interval", "1m")
 	v.SetDefault("tasks.system_metrics.enabled", true)
 	v.SetDefault("tasks.system_metrics.interval", "5m")
-	v.SetDefault("tasks.system_metrics.source", "builtin") // Default to builtin (gopsutil)
-	v.SetDefault("tasks.system_metrics.exporter_url", defaults.ExporterURL)
 	v.SetDefault("tasks.service_check.enabled", true)
 	v.SetDefault("tasks.service_check.interval", "1m")
 	v.SetDefault("tasks.inventory.enabled", true)
@@ -574,21 +576,6 @@ func validate(cfg *Config) error {
 
 	if err := validateSyncConfig(cfg); err != nil {
 		return err
-	}
-
-	// Validate metrics source
-	if cfg.Tasks.SystemMetrics.Enabled {
-		source := strings.ToLower(cfg.Tasks.SystemMetrics.Source)
-		if source == "" {
-			source = "builtin" // Default
-		}
-		if source != "builtin" && source != "exporter" {
-			return fmt.Errorf("invalid system_metrics.source: %s (must be 'builtin' or 'exporter')", cfg.Tasks.SystemMetrics.Source)
-		}
-		// If exporter mode, URL is required
-		if source == "exporter" && cfg.Tasks.SystemMetrics.ExporterURL == "" {
-			return fmt.Errorf("exporter_url is required when system_metrics.source is 'exporter'")
-		}
 	}
 
 	// Validate heartbeat is more frequent than metrics (best practice)

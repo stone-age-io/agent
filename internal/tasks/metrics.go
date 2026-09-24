@@ -2,11 +2,7 @@ package tasks
 
 import (
 	"fmt"
-	"net"
-	"net/http"
 	"time"
-
-	dto "github.com/prometheus/client_model/go"
 
 	"github.com/stone-age-io/agent/internal/utils"
 )
@@ -14,7 +10,7 @@ import (
 // Maximum age for metrics cache before reset
 const maxMetricsCacheAge = 10 * time.Minute
 
-// SystemMetrics represents system metrics collected from various sources.
+// SystemMetrics represents the system metrics the builtin collector reads.
 // Code/Location are stamped by the scheduler before publishing so the
 // message is self-describing for any direct subscriber.
 type SystemMetrics struct {
@@ -31,10 +27,9 @@ type SystemMetrics struct {
 	// out of band to write a rule. DiskMetrics has carried total and percent
 	// since the beginning; this is memory catching up.
 	//
-	// Omitted rather than zeroed when the source does not report a total — an
-	// exporter missing MemTotal would otherwise publish 0 GB installed and
-	// 0% used, which reads as an idle machine rather than as an unanswered
-	// question. Same rule as the edge collector's server-derived series.
+	// Omitted rather than zeroed if no total was read: 0 GB installed and 0%
+	// used reads as an idle machine rather than as an unanswered question.
+	// Same rule as the edge collector's server-derived series.
 	MemoryTotalGB     float64 `json:"memory_total_gb,omitempty"`
 	MemoryUsedPercent float64 `json:"memory_used_percent,omitempty"`
 }
@@ -49,17 +44,16 @@ type DiskMetrics struct {
 	WriteBytesPerSec float64 `json:"write_bytes_per_sec"` // Write rate (requires previous measurement)
 }
 
-// bytesToGB is the one conversion both collectors use, rounded the same way as
-// every other figure in the payload.
+// bytesToGB converts bytes to GB, rounded the same way as every other figure
+// in the payload.
 func bytesToGB(b float64) float64 {
 	return utils.Round(b / 1024 / 1024 / 1024)
 }
 
-// deriveMemoryUsed fills MemoryUsedPercent from the two figures the collectors
-// actually read. Both collectors call it rather than each computing the same
-// division, so there is one definition of what "used" means: total minus
-// available, where available is the OS's own idea of what a new process could
-// get (MemAvailable on Linux, not MemFree).
+// deriveMemoryUsed fills MemoryUsedPercent from the two figures the collector
+// actually reads. "Used" means total minus available, where available is the
+// OS's own idea of what a new process could get (MemAvailable on Linux, not
+// MemFree).
 //
 // A zero or missing total leaves both derived fields alone, so they stay absent
 // from the payload instead of claiming 0%.
@@ -94,35 +88,8 @@ func CreateTelemetryError(err error) *TelemetryError {
 	}
 }
 
-// createHTTPClient creates an HTTP client with appropriate timeouts for metrics scraping
-// This client is created ONCE and reused for all scrapes for efficiency
-func createHTTPClient() *http.Client {
-	return &http.Client{
-		// Overall request timeout (connection + headers + body read)
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			// Time to establish TCP connection
-			DialContext: (&net.Dialer{
-				Timeout:       5 * time.Second,
-				KeepAlive:     30 * time.Second,
-				FallbackDelay: 300 * time.Millisecond,
-			}).DialContext,
-			// Time to complete TLS handshake (if HTTPS)
-			TLSHandshakeTimeout: 5 * time.Second,
-			// Time to receive response headers
-			ResponseHeaderTimeout: 10 * time.Second,
-			// ENABLE connection reuse for localhost scraping efficiency
-			DisableKeepAlives:   false,
-			MaxIdleConns:        10,
-			MaxIdleConnsPerHost: 2,
-			IdleConnTimeout:     90 * time.Second,
-		},
-	}
-}
-
 // validateMetrics performs sanity checks on metrics values
-// The collector parameter is used to check if it's a first scrape (rate metrics will be 0)
-func validateMetrics(m *SystemMetrics, collector MetricsCollector) error {
+func validateMetrics(m *SystemMetrics) error {
 	// For validation, we check if CPU is 0 which indicates first scrape
 	// Rate-based metrics (CPU, disk I/O) are 0 on first collection
 	isFirstScrape := m.CPUUsagePercent == 0
@@ -170,15 +137,4 @@ func validateMetrics(m *SystemMetrics, collector MetricsCollector) error {
 	}
 
 	return nil
-}
-
-// getLabelValue extracts a label value from a metric's label pairs
-// Used by the exporter collector for Prometheus metrics parsing
-func getLabelValue(labels []*dto.LabelPair, name string) string {
-	for _, label := range labels {
-		if label.GetName() == name {
-			return label.GetValue()
-		}
-	}
-	return ""
 }

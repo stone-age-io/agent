@@ -1,5 +1,3 @@
-//go:build !windows
-
 package tasks
 
 import (
@@ -13,18 +11,27 @@ import (
 	"go.uber.org/zap"
 )
 
-// TestIsPathAllowed tests the log path whitelist validation
-// This is CRITICAL for security - prevents unauthorized file access
-// Unix variant of the Windows test in logs_windows_test.go
+// TestIsPathAllowed tests the log path allowlist. It runs on every platform;
+// logs_windows_test.go adds only the path forms Windows alone has.
 //
-// Positive cases use real files in a temp directory because isPathAllowed
-// expands allowed patterns with filepath.Glob against the filesystem.
+// Every case uses real files in a temp directory, because isPathAllowed
+// expands the allowed patterns with filepath.Glob against the filesystem. A
+// case naming a file that does not exist is refused whatever the logic says,
+// which is how the old Windows copy of this test came to "pass" cases like
+// `C:\Logs\malicious.exe` without testing anything.
 func TestIsPathAllowed(t *testing.T) {
 	logsDir := t.TempDir()
 	appLog := filepath.Join(logsDir, "app.log")
-	if err := os.WriteFile(appLog, []byte("test\n"), 0o644); err != nil {
-		t.Fatalf("Failed to create test log file: %v", err)
+	sambaLog := filepath.Join(logsDir, "samba", "log.smbd")
+	for _, f := range []string{appLog, sambaLog, filepath.Join(logsDir, "a1.log")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("test\n"), 0o644); err != nil {
+			t.Fatalf("Failed to create test log file: %v", err)
+		}
 	}
+	a1Log := filepath.Join(logsDir, "a1.log")
 	wildcardPattern := filepath.Join(logsDir, "*.log")
 
 	tests := []struct {
@@ -80,20 +87,34 @@ func TestIsPathAllowed(t *testing.T) {
 			reason:          "traversal out of allowed directory must be blocked",
 		},
 
-		// Security: Suspicious file types (filter applies on all platforms)
+		// The allowlist is the whole check: nothing else second-guesses it
 		{
-			name:            "exe file",
-			requestedPath:   filepath.Join(logsDir, "malicious.exe"),
-			allowedPatterns: []string{filepath.Join(logsDir, "*")},
-			want:            false,
-			reason:          "executable files must be blocked",
+			name:            "allowlisted path containing a once-blocked word",
+			requestedPath:   sambaLog,
+			allowedPatterns: []string{filepath.Join(logsDir, "samba", "*")},
+			want:            true,
+			reason:          "a substring denylist refused anything containing \"sam\"",
 		},
 		{
-			name:            "dll file",
-			requestedPath:   filepath.Join(logsDir, "library.dll"),
-			allowedPatterns: []string{filepath.Join(logsDir, "*")},
+			name:            "question-mark pattern",
+			requestedPath:   a1Log,
+			allowedPatterns: []string{filepath.Join(logsDir, "a?.log")},
+			want:            true,
+			reason:          "a prefix check that only knew * refused every ? pattern",
+		},
+		{
+			name:            "character-class pattern",
+			requestedPath:   a1Log,
+			allowedPatterns: []string{filepath.Join(logsDir, "a[0-9].log")},
+			want:            true,
+			reason:          "a prefix check that only knew * refused every [...] pattern",
+		},
+		{
+			name:            "file outside the pattern in the same directory",
+			requestedPath:   a1Log,
+			allowedPatterns: []string{filepath.Join(logsDir, "app*.log")},
 			want:            false,
-			reason:          "DLL files must be blocked",
+			reason:          "only files the pattern names are readable",
 		},
 
 		// Invalid cases
@@ -152,10 +173,7 @@ func TestFetchLogLines(t *testing.T) {
 	}
 	wildcardPattern := filepath.Join(logsDir, "*.log")
 
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	t.Run("reads last N lines", func(t *testing.T) {
 		lines, err := executor.FetchLogLines(appLog, 5, []string{wildcardPattern})

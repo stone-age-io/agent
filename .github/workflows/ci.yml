@@ -50,3 +50,11 @@ jobs:
           done
           echo "==> linux/arm64"
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/agent
+
+      # darwin is not a release target. It is here because the *_stub.go files
+      # (the `!windows && !linux && !freebsd` build) compile nowhere else, and
+      # they had drifted: GetOSInfo and isServiceAllowed were missing, so the
+      # agent would not build on a Mac at all and nothing noticed. Vet covers
+      # the tests too.
+      - name: Vet the stub build
+        run: GOOS=darwin go vet ./...

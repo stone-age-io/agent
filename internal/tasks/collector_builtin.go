@@ -35,19 +35,6 @@ func NewBuiltinCollector(logger *zap.Logger) *BuiltinCollector {
 	}
 }
 
-func (c *BuiltinCollector) Name() string {
-	return "builtin (gopsutil)"
-}
-
-func (c *BuiltinCollector) ResetCache() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastTimestamp = time.Time{}
-	c.lastCPUTimes = cpu.TimesStat{}
-	c.hasCPUTimes = false
-	c.lastDiskIO = make(map[string]disk.IOCountersStat)
-}
-
 func (c *BuiltinCollector) Collect(ctx context.Context) (*SystemMetrics, error) {
 	c.resetCacheIfStale()
 

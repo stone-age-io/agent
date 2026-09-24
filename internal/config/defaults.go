@@ -9,7 +9,6 @@ type PlatformDefaults struct {
 	LogFile          string
 	ScriptsDirectory string
 	ConfigPath       string
-	ExporterURL      string
 
 	// NebulaCacheFile holds the last Nebula config known to have reached the
 	// mesh. It embeds the host private key, so it lives beside the agent's other
@@ -25,7 +24,6 @@ func GetPlatformDefaults() PlatformDefaults {
 			LogFile:          `C:\ProgramData\Agent\agent.log`,
 			ScriptsDirectory: `C:\ProgramData\Agent\Scripts`,
 			ConfigPath:       `C:\ProgramData\Agent\config.yaml`,
-			ExporterURL:      "http://localhost:9182/metrics", // windows_exporter
 			NebulaCacheFile:  `C:\ProgramData\Agent\nebula-cache.yaml`,
 		}
 	case "linux":
@@ -33,7 +31,6 @@ func GetPlatformDefaults() PlatformDefaults {
 			LogFile:          "/var/log/agent/agent.log",
 			ScriptsDirectory: "/opt/agent/scripts",
 			ConfigPath:       "/etc/agent/config.yaml",
-			ExporterURL:      "http://localhost:9100/metrics", // node_exporter
 			NebulaCacheFile:  "/var/lib/agent/nebula-cache.yaml",
 		}
 	case "freebsd":
@@ -41,7 +38,6 @@ func GetPlatformDefaults() PlatformDefaults {
 			LogFile:          "/var/log/agent/agent.log",
 			ScriptsDirectory: "/usr/local/etc/agent/scripts",
 			ConfigPath:       "/usr/local/etc/agent/config.yaml",
-			ExporterURL:      "http://localhost:9100/metrics", // node_exporter
 			NebulaCacheFile:  "/var/db/agent/nebula-cache.yaml",
 		}
 	default:
@@ -50,7 +46,6 @@ func GetPlatformDefaults() PlatformDefaults {
 			LogFile:          "/var/log/agent/agent.log",
 			ScriptsDirectory: "/opt/agent/scripts",
 			ConfigPath:       "/etc/agent/config.yaml",
-			ExporterURL:      "http://localhost:9100/metrics",
 			NebulaCacheFile:  "/var/lib/agent/nebula-cache.yaml",
 		}
 	}

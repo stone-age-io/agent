@@ -25,7 +25,30 @@ The agent's extensibility comes from **scripts**, not built-in features. This ke
 
 **Extension:** `.sh`
 **Location:** `/opt/agent/scripts/` (Linux), `/usr/local/etc/agent/scripts/` (FreeBSD)
-**Executor:** `/bin/bash`
+**Executor:** the script's own shebang line. The file must be executable (`chmod +x`).
+
+### How a script is requested and run
+
+Request a script by its **bare filename**, with no directory:
+
+```json
+{"command": "get-docker-status.sh"}
+```
+
+The agent looks for that name directly inside `commands.scripts_directory` and
+runs the file it finds. Scripts are started directly, never through a shell:
+on Linux and FreeBSD the kernel runs the file using its shebang, and on Windows
+the agent runs `powershell.exe -File <path>`. A script's `exit N` is the
+`exit_code` the agent reports.
+
+These requests are refused:
+
+- A full or relative path, even one that points into the scripts directory
+  (`/opt/agent/scripts/x.sh`, `sub/x.sh`, `..\x.ps1`)
+- A name that isn't a regular file directly inside the scripts directory
+
+Scripts take no arguments. That's deliberate: arguments are where injection
+lives. If you need a variant, write a second script.
 
 ---
 
@@ -455,13 +478,35 @@ nats request "agents.device-123.cmd.exec" '{
   "command": "Get-WindowsUpdates.ps1"
 }'
 
-# Expected response:
+# Expected response. Output that is valid JSON arrives as JSON, not as a
+# string; anything else arrives as a string.
 # {
 #   "status": "success",
-#   "output": "{\"status\":\"success\",\"update_count\":5,...}",
-#   "exit_code": 0
+#   "command": "Get-WindowsUpdates.ps1",
+#   "output": {"status": "success", "update_count": 5, ...},
+#   "exit_code": 0,
+#   "ts": "2026-09-24T10:00:00Z"
 # }
 ```
+
+A script that exits non-zero still returns everything it printed, stderr
+included, so you can see why it failed:
+
+```json
+{
+  "status": "error",
+  "command": "check-backup.sh",
+  "output": "checking /backup\nSTDERR:\nno such file: /backup/latest\n",
+  "exit_code": 2,
+  "error": "command exited with code 2",
+  "ts": "2026-09-24T10:00:00Z"
+}
+```
+
+`exit_code` is present exactly when the command ran. If it's absent, the
+command never started: it was refused, couldn't be found, or was killed by
+`commands.timeout`. A timed-out command still returns whatever it printed
+before it was killed.
 
 ---
 

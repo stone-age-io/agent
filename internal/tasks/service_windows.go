@@ -13,9 +13,8 @@ import (
 
 // ControlService manages Windows services using the Windows Service Control Manager API
 func (e *Executor) ControlService(name, action string, allowedServices []string) (string, error) {
-	// Validate service is in whitelist
-	if !isServiceAllowed(name, allowedServices) {
-		return "", fmt.Errorf("service not in allowed list: %s", name)
+	if err := checkServiceRequest(name, action, allowedServices); err != nil {
+		return "", err
 	}
 
 	e.logger.Info("Controlling Windows service",
@@ -84,8 +83,6 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 		if err != nil {
 			return "", fmt.Errorf("failed to start service after stop: %w", err)
 		}
-	default:
-		return "", fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
 	}
 
 	return fmt.Sprintf("Service %s %s successfully", name, action), nil
@@ -161,14 +158,4 @@ func mapWindowsServiceState(state svc.State) string {
 	default:
 		return ServiceStatusUnknown
 	}
-}
-
-// isServiceAllowed checks if a service is in the allowed list
-func isServiceAllowed(name string, allowedServices []string) bool {
-	for _, allowed := range allowedServices {
-		if name == allowed {
-			return true
-		}
-	}
-	return false
 }

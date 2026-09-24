@@ -43,13 +43,12 @@ type Scheduler struct {
 	config        *config.Config
 	version       string
 	subjectPrefix string
-	credsSyncer   CredsSyncer     // nil unless this agent gets its credentials from the platform
-	nebulaSyncer  NebulaSyncer    // nil unless the embedded overlay is enabled
-	ctx           context.Context // ADDED: Context for cancellation
+	credsSyncer   CredsSyncer  // nil unless this agent gets its credentials from the platform
+	nebulaSyncer  NebulaSyncer // nil unless the embedded overlay is enabled
+	ctx           context.Context
 }
 
 // New creates a new scheduler with configured tasks
-// MODIFIED: Now accepts context for cancellation
 // credsSyncer may be nil, in which case no credential sync task is scheduled.
 func New(
 	logger *zap.Logger,
@@ -77,7 +76,7 @@ func New(
 		version:       version,
 		subjectPrefix: cfg.SubjectPrefix,
 		credsSyncer:   credsSyncer,
-		ctx:           ctx, // ADDED: Store context
+		ctx:           ctx,
 	}
 
 	// Schedule tasks based on configuration
@@ -89,10 +88,9 @@ func New(
 }
 
 // wrapTaskWithRecovery wraps a task function with panic recovery AND context checking
-// MODIFIED: Now checks context before execution
 func (s *Scheduler) wrapTaskWithRecovery(taskName string, taskFunc func()) func() {
 	return func() {
-		// ADDED: Check if context is cancelled before executing
+		// Skip the task once shutdown has begun
 		select {
 		case <-s.ctx.Done():
 			s.logger.Debug("Skipping task execution due to shutdown",
@@ -131,14 +129,14 @@ func (s *Scheduler) scheduleTasks() error {
 
 		var baselineErr error
 		for attempt := 1; attempt <= maxRetries; attempt++ {
-			// ADDED: Check context before retry
+			// Stop retrying once shutdown has begun
 			select {
 			case <-s.ctx.Done():
 				return fmt.Errorf("shutdown during baseline establishment")
 			default:
 			}
 
-			_, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
+			_, err := s.executor.ScrapeMetrics()
 			if err == nil {
 				s.logger.Info("Metrics baseline established successfully")
 				baselineErr = nil
@@ -157,7 +155,7 @@ func (s *Scheduler) scheduleTasks() error {
 					zap.Int("attempt", attempt),
 					zap.Int("max", maxRetries))
 
-				// ADDED: Use context-aware sleep
+				// Sleep, but wake for shutdown
 				select {
 				case <-s.ctx.Done():
 					return fmt.Errorf("shutdown during baseline retry delay")
@@ -364,7 +362,7 @@ func (s *Scheduler) publishMetrics(code string) {
 
 	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, code)
 
-	metrics, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
+	metrics, err := s.executor.ScrapeMetrics()
 	if err != nil {
 		s.logger.Error("Failed to scrape metrics", zap.Error(err))
 

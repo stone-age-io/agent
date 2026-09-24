@@ -16,10 +16,7 @@ func TestNewExecutor(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Test with builtin source (default)
-	executor, err := NewExecutor(logger, timeout, ctx, "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(logger, timeout, ctx)
 
 	if executor == nil {
 		t.Fatal("NewExecutor() returned nil")
@@ -37,10 +34,6 @@ func TestNewExecutor(t *testing.T) {
 		t.Error("NewExecutor() metricsCollector is nil")
 	}
 
-	if executor.httpClient == nil {
-		t.Error("NewExecutor() httpClient is nil")
-	}
-
 	if executor.ctx != ctx {
 		t.Error("NewExecutor() ctx not set correctly")
 	}
@@ -55,56 +48,9 @@ func TestNewExecutor(t *testing.T) {
 	}
 }
 
-// TestNewExecutorWithExporterSource tests executor creation with exporter source
-func TestNewExecutorWithExporterSource(t *testing.T) {
-	ctx := context.Background()
-	logger := zap.NewNop()
-
-	// Test with exporter source
-	executor, err := NewExecutor(logger, time.Second, ctx, "exporter", "http://localhost:9182/metrics")
-	if err != nil {
-		t.Fatalf("NewExecutor() with exporter error = %v", err)
-	}
-
-	if executor.metricsCollector == nil {
-		t.Error("NewExecutor() metricsCollector is nil with exporter source")
-	}
-
-	// Verify collector name contains "exporter"
-	name := executor.metricsCollector.Name()
-	if name == "" {
-		t.Error("Collector name should not be empty")
-	}
-}
-
-// TestNewExecutorInvalidSource tests executor creation with invalid source
-func TestNewExecutorInvalidSource(t *testing.T) {
-	ctx := context.Background()
-	logger := zap.NewNop()
-
-	_, err := NewExecutor(logger, time.Second, ctx, "invalid", "")
-	if err == nil {
-		t.Error("NewExecutor() should fail with invalid source")
-	}
-}
-
-// TestNewExecutorExporterWithoutURL tests executor creation with exporter but no URL
-func TestNewExecutorExporterWithoutURL(t *testing.T) {
-	ctx := context.Background()
-	logger := zap.NewNop()
-
-	_, err := NewExecutor(logger, time.Second, ctx, "exporter", "")
-	if err == nil {
-		t.Error("NewExecutor() should fail with exporter source but no URL")
-	}
-}
-
 // TestRecordCommandSuccess tests success counter
 func TestRecordCommandSuccess(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -138,10 +84,7 @@ func TestRecordCommandSuccess(t *testing.T) {
 
 // TestRecordCommandError tests error counter and tracking
 func TestRecordCommandError(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state
 	metrics := executor.GetAgentMetrics()
@@ -174,7 +117,7 @@ func TestRecordCommandError(t *testing.T) {
 	}
 
 	// Parse timestamp
-	_, err = time.Parse(time.RFC3339, metrics.LastErrorTime)
+	_, err := time.Parse(time.RFC3339, metrics.LastErrorTime)
 	if err != nil {
 		t.Errorf("LastErrorTime parse error: %v", err)
 	}
@@ -197,10 +140,7 @@ func TestRecordCommandError(t *testing.T) {
 
 // TestGetAgentMetrics tests metrics retrieval
 func TestGetAgentMetrics(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Get initial metrics
 	metrics := executor.GetAgentMetrics()
@@ -237,10 +177,7 @@ func TestGetAgentMetrics(t *testing.T) {
 
 // TestUptimeCalculation tests that uptime increases over time
 func TestUptimeCalculation(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Get initial uptime
 	metrics1 := executor.GetAgentMetrics()
@@ -261,10 +198,7 @@ func TestUptimeCalculation(t *testing.T) {
 
 // TestConcurrentCommandRecording tests thread-safety of command recording
 func TestConcurrentCommandRecording(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Record commands concurrently
 	done := make(chan bool)
@@ -302,37 +236,9 @@ func TestConcurrentCommandRecording(t *testing.T) {
 	}
 }
 
-// TestHTTPClientInitialization tests that HTTP client is created and cached
-func TestHTTPClientInitialization(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
-
-	if executor.httpClient == nil {
-		t.Fatal("httpClient should be initialized, got nil")
-	}
-
-	// Verify it's the same instance on multiple accesses
-	client1 := executor.httpClient
-	client2 := executor.httpClient
-
-	if client1 != client2 {
-		t.Error("httpClient should be the same instance (cached)")
-	}
-
-	// Verify timeout is set (should be 30s from createHTTPClient)
-	if executor.httpClient.Timeout != 30*time.Second {
-		t.Errorf("httpClient.Timeout = %v, want 30s", executor.httpClient.Timeout)
-	}
-}
-
 // TestTaskStatsRecording tests task execution tracking
 func TestTaskStatsRecording(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Initial state - all timestamps should be zero
 	metrics := executor.GetTaskMetrics()

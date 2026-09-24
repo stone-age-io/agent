@@ -54,8 +54,7 @@ Understanding the design and components of the agent platform.
 │  │ - Services  │  │ - Services  │  │ - Services  │    │
 │  └─────────────┘  └─────────────┘  └─────────────┘    │
 │                                                          │
-│  * Metrics: Built-in (gopsutil) by default               │
-│    Optional: windows_exporter / node_exporter            │
+│  * Metrics: Built-in (gopsutil)                          │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -89,7 +88,7 @@ Understanding the design and components of the agent platform.
 **Purpose**: Lightweight executor on target systems
 
 **Responsibilities:**
-- Collect system metrics (built-in gopsutil or Prometheus exporters)
+- Collect system metrics (built-in gopsutil)
 - Execute whitelisted commands/scripts
 - Control system services
 - Report health and inventory
@@ -121,7 +120,7 @@ control that can disagree with the first.
 - **Language**: Go 1.26+ (Nebula sets the floor)
 - **Service Management**: kardianos/service (cross-platform)
 - **Messaging**: NATS Core + JetStream
-- **Metrics Collection**: gopsutil (default), Prometheus expfmt (optional)
+- **Metrics Collection**: gopsutil
 - **Exposition**: prometheus/client_golang (already linked by Nebula, so free)
 - **Embedded server**: nats-server, linked in whether or not it is configured —
   so a scanner flagging a nats-server CVE here is reporting code that does not
@@ -304,8 +303,7 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 │  Agent  │ Every 5 minutes
 └────┬────┘
      │ 1. Collect metrics via:
-     │    - Built-in (gopsutil) [default]
-     │    - Prometheus exporter (optional)
+     │    - Built-in (gopsutil)
      ▼
 ┌─────────┐
 │  Agent  │ 2. Publish to JetStream
@@ -382,7 +380,7 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
      ▼
 ┌─────────┐
 │  Agent  │ 6. Return via NATS
-└────┬────┘    {"status":"success","output":"{...}","exit_code":0}
+└────┬────┘    {"status":"success","output":{...},"exit_code":0}
      │
      ▼
 ┌──────────┐

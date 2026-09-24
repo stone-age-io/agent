@@ -8,6 +8,96 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+> **Security fix. Upgrade any agent with a `commands.scripts_directory`.**
+> Anyone able to publish to `cmd.exec` could run arbitrary commands on the
+> device, whatever the allowlist said, as long as one script existed in the
+> scripts directory.
+>
+> Script requests must now be a bare filename (`deploy.sh`, not
+> `/opt/agent/scripts/deploy.sh`). A request that used the full path is now
+> refused, where it used to work.
+
+### Security
+
+- **`cmd.exec` ran the caller's string instead of the script it approved.**
+  The script check reduced the request to its last path element and confirmed
+  a script by that name existed, then handed the *unreduced* request to
+  `bash -c` (or `powershell -Command`). So `{"command": "$(anything)/deploy.sh"}`
+  passed the check and ran `anything`. Both platforms were affected.
+
+  Script requests must now be a bare filename, and the agent builds the path
+  itself and starts that file directly, with no shell involved. Allowlisted
+  commands now run the operator's allowlist entry rather than the request.
+  They used to compare equal after whitespace normalization, which let a
+  newline in the request split one allowed line into two commands.
+
+### Fixed
+
+- **A failed `cmd.exec` returns its output and exit code.** A command that ran
+  and exited non-zero replied with only `"error": "command exited with code
+  1"`, and the stderr explaining why never left the box. The reply keeps
+  `status: "error"`, so nothing checking status changes, and now carries
+  `output` and `exit_code` as well. A timed-out command returns what it had
+  printed before it was killed.
+
+- **`commands.timeout` is a real bound.** When the timeout killed a shell, a
+  child still holding the output pipe (a `sleep`, say) kept the reply waiting
+  until that child finished. A script that exited while leaving a background
+  process behind held the reply for as long as that process lived. Output is
+  now collected for at most one second after the command exits or is killed.
+
+- **A timeout kills everything the command started.** It used to kill only
+  the shell or `powershell.exe`, so a child it had started (a `sleep`, a
+  long-running check) kept running after the reply had gone out. The command
+  now runs in its own process group on Linux and FreeBSD, and the timeout
+  kills the group. On Windows it runs `taskkill /T`. Only a timeout or agent
+  shutdown does this: a command that exits normally and leaves a daemon
+  running (a script that starts a service, say) is left alone.
+
+- **Allowlisted commands work on a stock FreeBSD.** They ran through
+  `/bin/bash`, which FreeBSD's base system doesn't have, so every entry in
+  `allowed_commands` failed with "no such file" unless someone had installed
+  bash and linked it there by hand. FreeBSD now uses its own `/bin/sh`. Linux
+  still uses `/bin/bash`. If you linked bash into `/bin` to make this work and
+  your FreeBSD allowlist uses bash-only syntax, rewrite those entries for `sh`.
+
+- **`cmd.logs` reads what `allowed_log_paths` allows.** A substring denylist
+  in front of the allowlist refused any path containing `sam`, `system32`,
+  `.exe`, `.dll`, `.sys` or `..`, whatever the operator had allowed. That
+  meant `/var/log/samba/*`, any home directory containing "sam", and
+  `app..log` could never be read. A check behind the allowlist only
+  understood `*`, so every pattern using `?` or `[...]` matched nothing. Both
+  are gone. Neither refused anything the allowlist would have let through:
+  the request must still exactly equal a file an allowed pattern names.
+
+  If you allowlisted a broad pattern and relied on the denylist to carve
+  pieces out of it, narrow the pattern.
+
+### Removed
+
+- **Exporter metrics mode.** `tasks.system_metrics.source: "exporter"` and
+  `exporter_url` read CPU, memory and disk figures by scraping node_exporter
+  or windows_exporter instead of using the builtin gopsutil collector. Nothing
+  used it, and it was a second implementation of the same figures, with
+  per-platform metric-name tables to keep correct. The builtin collector is
+  now the only one. A config that still carries either key loads unchanged
+  (they are ignored) and gets builtin metrics, in the same payload shape. If
+  you want node_exporter's series, run it and have Prometheus scrape it
+  directly.
+
+### Changed
+
+- **`cmd.exec`'s `exit_code` is present exactly when the command ran**, 0
+  included. It used to be dropped on success and never sent on failure.
+  Absent now means the command never started (refused, not found, or timed
+  out).
+
+- **Windows scripts run with `-File` instead of `-Command`.** A script's own
+  `exit N` is now the exit code `cmd.exec` reports. Under `-Command` it
+  collapsed to 0 or 1.
+
 ## [0.3.0] - 2026-09-20
 
 > **`cmd.health` reports `degraded` in situations where it used to report

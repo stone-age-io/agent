@@ -885,6 +885,42 @@ commands:
 	}
 }
 
+// A config written for exporter mode still loads after its removal. The keys
+// are ignored rather than rejected: nothing used the mode, the builtin
+// collector publishes the same payload, and refusing to start would take an
+// agent offline over a setting whose replacement needs nothing from anyone.
+func TestLoadIgnoresRemovedExporterKeys(t *testing.T) {
+	yaml := `
+code: "server-01"
+nats:
+  urls: ["nats://localhost:4222"]
+  auth:
+    type: "none"
+tasks:
+  system_metrics:
+    enabled: true
+    interval: "5m"
+    source: "exporter"
+    exporter_url: "http://localhost:9100/metrics"
+  service_check:
+    enabled: false
+commands:
+  scripts_directory: ""
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Tasks.SystemMetrics.Enabled {
+		t.Error("system metrics should stay enabled")
+	}
+}
+
 // TestLoadStoneAgeAuth covers the hyphenated `stone-age` config key end to end —
 // through viper and mapstructure, not just validate() — plus the derived session
 // file path and the https requirement.
@@ -971,7 +1007,7 @@ func TestValidatePlatformAuth(t *testing.T) {
 			},
 			Tasks: TasksConfig{
 				Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
-				SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
+				SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute},
 			},
 			Commands: CommandsConfig{Timeout: 30 * time.Second},
 			Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},
@@ -1078,7 +1114,7 @@ func TestValidatePlatformAuthPasswordOptionalOnceBootstrapped(t *testing.T) {
 		},
 		Tasks: TasksConfig{
 			Heartbeat:     HeartbeatConfig{Enabled: true, Interval: time.Minute},
-			SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute, Source: "builtin"},
+			SystemMetrics: SystemMetricsConfig{Enabled: true, Interval: 5 * time.Minute},
 		},
 		Commands: CommandsConfig{Timeout: 30 * time.Second},
 		Logging:  LoggingConfig{Level: "info", MaxSizeMB: 100, MaxBackups: 3},

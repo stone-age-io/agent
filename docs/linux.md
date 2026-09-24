@@ -87,8 +87,9 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    source: "builtin"  # "builtin" (default) or "exporter"
-    # exporter_url: "http://localhost:9100/metrics"  # Only for exporter mode
+    # Built-in (gopsutil). You can still run node_exporter for Prometheus to
+    # scrape directly; the agent does not read it. Its port, 9100, is also the
+    # default observability.addr, so move one of them.
   
   service_check:
     enabled: true
@@ -247,73 +248,6 @@ nats sub "agents.linux-server-01.>"
 
 ---
 
-## Optional: Install node_exporter
-
-By default, the agent uses built-in metrics collection. If you prefer to use Prometheus node_exporter for additional metrics, follow these steps:
-
-### Download and Install Binary
-
-```bash
-# Download latest release
-cd /tmp
-wget https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
-
-# Extract
-tar xvfz node_exporter-1.7.0.linux-amd64.tar.gz
-
-# Install binary
-sudo mv node_exporter-1.7.0.linux-amd64/node_exporter /usr/local/bin/
-sudo chmod +x /usr/local/bin/node_exporter
-
-# Create systemd service
-sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<'EOF'
-[Unit]
-Description=Prometheus Node Exporter
-Documentation=https://github.com/prometheus/node_exporter
-After=network-online.target
-
-[Service]
-Type=simple
-User=node_exporter
-Group=node_exporter
-ExecStart=/usr/local/bin/node_exporter \
-    --collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)' \
-    --collector.netclass.ignored-devices='^(veth.*)$'
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Create user
-sudo useradd --no-create-home --shell /bin/false node_exporter
-
-# Enable and start service
-sudo systemctl daemon-reload
-sudo systemctl enable node_exporter
-sudo systemctl start node_exporter
-
-# Verify it's running
-systemctl status node_exporter
-curl -s http://localhost:9100/metrics | head -20
-```
-
-### Configure Agent for Exporter Mode
-
-Update your config.yaml:
-
-```yaml
-tasks:
-  system_metrics:
-    enabled: true
-    interval: "5m"
-    source: "exporter"
-    exporter_url: "http://localhost:9100/metrics"
-```
-
----
-
 ## Configuration Options
 
 ### Monitored Services
@@ -361,7 +295,9 @@ commands:
     - "/var/log/syslog"
 ```
 
-Supports glob patterns for flexibility.
+Patterns use Go's `filepath.Glob`: `*` and `?` match within one path element
+and `[...]` matches a character class. There is no recursive `**`. The
+allowlist is the only check. If a path matches a pattern, it can be read.
 
 ---
 
@@ -497,18 +433,6 @@ sudo journalctl -u agent -n 50 --no-pager
 sudo journalctl -u agent | grep metrics
 ```
 
-**If using exporter mode, verify node_exporter:**
-```bash
-# Verify node_exporter is running
-systemctl status node_exporter
-
-# Test metrics endpoint
-curl http://localhost:9100/metrics | head -20
-
-# Verify exporter URL in config
-grep exporter_url /etc/agent/config.yaml
-```
-
 ### Service Control Not Working
 
 **Check allowed services:**
@@ -554,24 +478,6 @@ sudo systemctl start agent
 sudo journalctl -u agent | grep "Starting agent version"
 ```
 
-### Upgrade node_exporter (If Using Exporter Mode)
-
-```bash
-# Stop service
-sudo systemctl stop node_exporter
-
-# Download new version
-cd /tmp
-wget https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz
-tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz
-
-# Replace binary
-sudo mv node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/
-
-# Start service
-sudo systemctl start node_exporter
-```
-
 ---
 
 ## Uninstallation
@@ -593,24 +499,6 @@ sudo rm /usr/local/bin/agent
 sudo rm -rf /etc/agent
 sudo rm -rf /opt/agent
 sudo rm -rf /var/log/agent
-```
-
-### Remove node_exporter (Optional)
-
-```bash
-# Stop and disable
-sudo systemctl stop node_exporter
-sudo systemctl disable node_exporter
-
-# Remove files
-sudo rm /usr/local/bin/node_exporter
-sudo rm /etc/systemd/system/node_exporter.service
-
-# Reload systemd
-sudo systemctl daemon-reload
-
-# Remove user (if created)
-sudo userdel node_exporter
 ```
 
 ---
@@ -646,7 +534,7 @@ sudo userdel node_exporter
      max_backups: 3
    ```
 
-5. **Regular Updates**: Keep agent and node_exporter updated
+5. **Regular Updates**: Keep the agent updated
 
 ---
 

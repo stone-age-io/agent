@@ -34,8 +34,8 @@ type Agent struct {
 	edge      *edge.Edge      // nil unless this box has a leaf to look after
 	observe   *observe.Server // always built: every agent answers for itself
 	version   string
-	ctx       context.Context    // ADDED: Root context for clean shutdown
-	cancel    context.CancelFunc // ADDED: Cancel function for shutdown
+	ctx       context.Context // root context, cancelled on shutdown
+	cancel    context.CancelFunc
 }
 
 // New creates a new agent instance
@@ -142,24 +142,13 @@ func New(configPath string, version string) (*Agent, error) {
 	// Create root context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create task executor with command timeout, context, and metrics source config
-	executor, err := tasks.NewExecutor(
-		logger,
-		cfg.Commands.Timeout,
-		ctx,
-		cfg.Tasks.SystemMetrics.Source,
-		cfg.Tasks.SystemMetrics.ExporterURL,
-	)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create executor: %w", err)
-	}
+	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout, ctx)
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")
 	natsClient, err := natsclient.NewClient(&cfg.NATS, logger)
 	if err != nil {
-		cancel() // ADDED: Cancel context on error
+		cancel()
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
@@ -213,7 +202,7 @@ func New(configPath string, version string) (*Agent, error) {
 	// Subscribe to commands
 	logger.Info("Subscribing to commands...")
 	if err := handlers.SubscribeAll(natsClient); err != nil {
-		cancel() // ADDED: Cancel context on error
+		cancel()
 		natsClient.Close()
 		return nil, fmt.Errorf("failed to subscribe to commands: %w", err)
 	}
@@ -222,7 +211,7 @@ func New(configPath string, version string) (*Agent, error) {
 	logger.Info("Starting scheduler...")
 	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, nebulaSyncer(nebulaManager), ctx)
 	if err != nil {
-		cancel() // ADDED: Cancel context on error
+		cancel()
 		natsClient.Close()
 		return nil, fmt.Errorf("failed to create scheduler: %w", err)
 	}
@@ -237,8 +226,8 @@ func New(configPath string, version string) (*Agent, error) {
 		edge:      edgeNode,
 		observe:   observeServer,
 		version:   version,
-		ctx:       ctx,    // ADDED: Store context
-		cancel:    cancel, // ADDED: Store cancel function
+		ctx:       ctx,
+		cancel:    cancel,
 	}, nil
 }
 
@@ -306,7 +295,7 @@ func (a *Agent) Run() error {
 func (a *Agent) Shutdown() error {
 	a.logger.Info("Shutting down agent gracefully")
 
-	// ADDED: Cancel context to signal all operations to stop
+	// Cancel the root context to signal all operations to stop
 	a.cancel()
 
 	// Stop accepting new scheduled tasks
@@ -314,7 +303,6 @@ func (a *Agent) Shutdown() error {
 		a.logger.Error("Error shutting down scheduler", zap.Error(err))
 	}
 
-	// MODIFIED: Use context for drain timeout
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), a.config.NATS.DrainTimeout)
 	defer drainCancel()
 

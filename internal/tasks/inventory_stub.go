@@ -35,3 +35,9 @@ func (e *Executor) CollectInventory(version string) (*Inventory, error) {
 
 	return inv, fmt.Errorf("full inventory collection not supported on platform: %s", runtime.GOOS)
 }
+
+// GetOSInfo is a stub for unsupported platforms. The health command falls
+// back to runtime.GOOS on the error.
+func GetOSInfo() (*OSInfo, error) {
+	return nil, fmt.Errorf("OS info not supported on platform: %s", runtime.GOOS)
+}

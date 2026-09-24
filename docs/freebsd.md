@@ -86,8 +86,9 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    source: "builtin"  # "builtin" (default) or "exporter"
-    # exporter_url: "http://localhost:9100/metrics"  # Only for exporter mode
+    # Built-in (gopsutil). You can still run node_exporter for Prometheus to
+    # scrape directly; the agent does not read it. Its port, 9100, is also the
+    # default observability.addr, so move one of them.
   
   service_check:
     enabled: true
@@ -247,42 +248,6 @@ nats sub "agents.freebsd-server-01.>"
 
 ---
 
-## Optional: Install node_exporter
-
-By default, the agent uses built-in metrics collection. If you prefer to use Prometheus node_exporter for additional metrics, follow these steps:
-
-### Install from Packages (Recommended)
-
-```bash
-# Install via pkg
-sudo pkg install node_exporter
-
-# Enable in rc.conf
-sudo sysrc node_exporter_enable="YES"
-
-# Start service
-sudo service node_exporter start
-
-# Verify it's running
-service node_exporter status
-fetch -qo - http://localhost:9100/metrics | head -20
-```
-
-### Configure Agent for Exporter Mode
-
-Update your config.yaml:
-
-```yaml
-tasks:
-  system_metrics:
-    enabled: true
-    interval: "5m"
-    source: "exporter"
-    exporter_url: "http://localhost:9100/metrics"
-```
-
----
-
 ## Configuration Options
 
 ### Monitored Services
@@ -320,6 +285,11 @@ commands:
 
 **Security note**: Only exact matches are allowed. Be specific!
 
+Allowlisted commands run through FreeBSD's `/bin/sh`, so write them in `sh`
+syntax. Bash isn't part of the base system, and the agent doesn't need it.
+Scripts are different: each script runs with whatever interpreter its own
+`#!` line names.
+
 ### Log File Paths
 
 Configure which log files can be retrieved:
@@ -332,7 +302,9 @@ commands:
     - "/var/log/messages"
 ```
 
-Supports glob patterns for flexibility.
+Patterns use Go's `filepath.Glob`: `*` and `?` match within one path element
+and `[...]` matches a character class. There is no recursive `**`. The
+allowlist is the only check. If a path matches a pattern, it can be read.
 
 ---
 
@@ -490,18 +462,6 @@ sudo tail -50 /var/log/agent/agent.log
 sudo grep metrics /var/log/agent/agent.log
 ```
 
-**If using exporter mode, verify node_exporter:**
-```bash
-# Verify node_exporter is running
-service node_exporter status
-
-# Test metrics endpoint
-fetch -qo - http://localhost:9100/metrics | head -20
-
-# Verify exporter URL in config
-grep exporter_url /usr/local/etc/agent/config.yaml
-```
-
 ### Service Control Not Working
 
 **Check allowed services:**
@@ -547,21 +507,6 @@ sudo service agent start
 sudo tail -20 /var/log/agent/agent.log | grep version
 ```
 
-### Upgrade node_exporter (If Using Exporter Mode)
-
-```bash
-# Using pkg
-sudo pkg upgrade node_exporter
-
-# Or manually
-cd /tmp
-fetch https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.freebsd-amd64.tar.gz
-tar xvfz node_exporter-1.8.0.freebsd-amd64.tar.gz
-sudo service node_exporter stop
-sudo mv node_exporter-1.8.0.freebsd-amd64/node_exporter /usr/local/bin/
-sudo service node_exporter start
-```
-
 ---
 
 ## Uninstallation
@@ -583,21 +528,6 @@ sudo rm /usr/local/bin/agent
 sudo rm -rf /usr/local/etc/agent
 sudo rm -rf /var/log/agent
 sudo rm /usr/local/etc/rc.d/agent
-```
-
-### Remove node_exporter (Optional)
-
-```bash
-# Stop and disable
-sudo service node_exporter stop
-sudo sysrc node_exporter_enable="NO"
-
-# Remove via pkg
-sudo pkg delete node_exporter
-
-# Or remove manually
-sudo rm /usr/local/bin/node_exporter
-sudo rm /usr/local/etc/rc.d/node_exporter
 ```
 
 ---
@@ -667,7 +597,7 @@ commands:
    # devices connect in to the nats-server it hosts (4222 by default).
    ```
 
-4. **Updates**: Keep FreeBSD, agent, and node_exporter updated
+4. **Updates**: Keep FreeBSD and the agent updated
    ```bash
    sudo freebsd-update fetch install
    sudo pkg upgrade

@@ -4,20 +4,24 @@ package tasks
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/windows"
 )
 
-// TestIsCommandAllowed tests command whitelist validation
+// TestAllowedCommand tests command allowlist validation
 // This is CRITICAL for security - prevents arbitrary command execution
-func TestIsCommandAllowed(t *testing.T) {
+func TestAllowedCommand(t *testing.T) {
 	tests := []struct {
 		name            string
 		command         string
 		allowedCommands []string
-		scriptsDir      string
 		want            bool
 		reason          string
 	}{
@@ -29,9 +33,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-Process",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "exact command match should be allowed",
+			want:   true,
+			reason: "exact command match should be allowed",
 		},
 		{
 			name:    "exact match with parameters",
@@ -39,9 +42,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU -Descending | Select-Object -First 5",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "exact command with parameters should be allowed",
+			want:   true,
+			reason: "exact command with parameters should be allowed",
 		},
 		{
 			name:    "match from multiple allowed",
@@ -51,9 +53,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-NetIPAddress",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "should match one of multiple allowed commands",
+			want:   true,
+			reason: "should match one of multiple allowed commands",
 		},
 
 		// Whitespace normalization
@@ -63,9 +64,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "extra whitespace should be normalized",
+			want:   true,
+			reason: "extra whitespace should be normalized",
 		},
 		{
 			name:    "leading/trailing spaces",
@@ -73,9 +73,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "leading and trailing spaces should be trimmed",
+			want:   true,
+			reason: "leading and trailing spaces should be trimmed",
 		},
 		{
 			name:    "tabs converted to spaces",
@@ -83,9 +82,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "tabs should be normalized to spaces",
+			want:   true,
+			reason: "tabs should be normalized to spaces",
 		},
 
 		// Invalid cases - security critical
@@ -96,9 +94,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-Process",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command not in whitelist must be rejected",
+			want:   false,
+			reason: "command not in whitelist must be rejected",
 		},
 		{
 			name:    "partial match",
@@ -106,9 +103,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "partial match must be rejected - exact match required",
+			want:   false,
+			reason: "partial match must be rejected - exact match required",
 		},
 		{
 			name:    "extra parameters",
@@ -116,9 +112,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "additional parameters must be rejected",
+			want:   false,
+			reason: "additional parameters must be rejected",
 		},
 		{
 			name:    "prefix match attempt",
@@ -126,9 +121,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command chaining attempt must be rejected",
+			want:   false,
+			reason: "command chaining attempt must be rejected",
 		},
 		{
 			name:    "similar but different command",
@@ -136,9 +130,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "similar command name must be rejected",
+			want:   false,
+			reason: "similar command name must be rejected",
 		},
 		{
 			name:    "case difference",
@@ -146,15 +139,13 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "case differences must be rejected - exact match required",
+			want:   false,
+			reason: "case differences must be rejected - exact match required",
 		},
 		{
 			name:            "empty allowed list",
 			command:         "Get-Process",
 			allowedCommands: []string{},
-			scriptsDir:      "",
 			want:            false,
 			reason:          "empty whitelist means nothing allowed",
 		},
@@ -164,9 +155,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command injection attempt must be rejected",
+			want:   false,
+			reason: "command injection attempt must be rejected",
 		},
 		{
 			name:    "pipe to dangerous command",
@@ -174,17 +164,16 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "piping to non-whitelisted command must be rejected",
+			want:   false,
+			reason: "piping to non-whitelisted command must be rejected",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isCommandAllowed(tt.command, tt.allowedCommands, tt.scriptsDir)
+			_, got := allowedCommand(tt.command, tt.allowedCommands)
 			if got != tt.want {
-				t.Errorf("isCommandAllowed() = %v, want %v: %s", got, tt.want, tt.reason)
+				t.Errorf("allowedCommand() = %v, want %v: %s", got, tt.want, tt.reason)
 			}
 		})
 	}
@@ -260,10 +249,7 @@ func TestExecuteCommand(t *testing.T) {
 	// Actual PowerShell execution tests would require Windows and are integration tests
 
 	// Create executor with builtin metrics source for tests
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string
@@ -321,4 +307,83 @@ func TestExecuteCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExecuteCommandScripts is the Windows side of the unix test of the same
+// name: the refusal only counts if nothing ran.
+func TestExecuteCommandScripts(t *testing.T) {
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deploy.ps1"), []byte("Write-Output ok\r\nexit 3\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("script runs and its exit code survives", func(t *testing.T) {
+		// -File passes the script's own exit code through; -Command did not.
+		out, code, _ := executor.ExecuteCommand("deploy.ps1", nil, dir, 30*time.Second)
+		if code != 3 || !strings.Contains(out, "ok") {
+			t.Fatalf("got (%q, %d), want output containing \"ok\" and exit code 3", out, code)
+		}
+	})
+
+	t.Run("injection before a real script name is refused and does not run", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), "pwned")
+		_, _, err := executor.ExecuteCommand("$(New-Item -Path '"+marker+"')\\deploy.ps1", nil, dir, 30*time.Second)
+		if err == nil || !strings.Contains(err.Error(), "not in allowed list") {
+			t.Fatalf("err = %v, want a refusal", err)
+		}
+		if _, statErr := os.Stat(marker); statErr == nil {
+			t.Fatal("the injected command ran")
+		}
+	})
+}
+
+// TestTimeoutKillsTheProcessTree: the timeout kills what powershell.exe
+// started, not only powershell.exe. The child is a ping, started with
+// Start-Process so it is a separate process, and it writes its pid to a file
+// because partial stdout from PowerShell may still be buffered when the kill
+// lands.
+func TestTimeoutKillsTheProcessTree(t *testing.T) {
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	cmd := "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru -NoNewWindow; " +
+		"Set-Content -Path '" + pidFile + "' -Value $p.Id; Wait-Process -Id $p.Id"
+
+	_, code, err := executor.ExecuteCommand(cmd, []string{cmd}, "", 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "timeout") || code != -1 {
+		t.Fatalf("got (%d, %v), want a timeout with exit code -1", code, err)
+	}
+
+	raw, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("the command never wrote its child's pid: %v", readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if convErr != nil {
+		t.Fatalf("pid file = %q", raw)
+	}
+
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if !processAlive(pid) {
+			return
+		}
+	}
+	t.Errorf("child %d survived the timeout", pid)
+}
+
+// processAlive asks Windows directly: a process that has exited reports an
+// exit code other than STILL_ACTIVE (259) even while a handle keeps it listed.
+func processAlive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return false
+	}
+	return code == 259
 }
