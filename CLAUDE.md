@@ -122,7 +122,7 @@ agent/
 │       └── timeutil.go        # NowRFC3339 timestamp helper for wire payloads
 ├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md and
 │                              # edge-sync-design.md, design records not guides)
-├── Makefile                   # Build automation
+├── makefile                   # Build automation (lowercase; `make` finds it)
 └── go.mod                     # Go 1.26+ required (Nebula sets the floor)
 ```
 
