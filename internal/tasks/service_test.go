@@ -192,3 +192,13 @@ func TestControlService(t *testing.T) {
 		})
 	}
 }
+
+// The status action shares the control actions' allowlist, and is refused
+// before anything asks the service manager.
+func TestQueryServiceRefusesUnlistedService(t *testing.T) {
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+	_, err := executor.QueryService("sshd", []string{"nginx"})
+	if err == nil || !strings.Contains(err.Error(), "not in allowed list") {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+}

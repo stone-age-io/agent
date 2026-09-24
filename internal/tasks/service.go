@@ -12,7 +12,9 @@ const serviceCommandTimeout = 30 * time.Second
 
 // checkServiceRequest is the cmd.service gate: the service must be allowlisted
 // and the action one of start, stop or restart. Every platform calls it before
-// touching its service manager.
+// touching its service manager. The status action never gets here -- the
+// handler sends it to QueryService -- but the error names it, because the
+// caller is choosing from all four.
 //
 // Before, Windows checked the action only after connecting to the Service
 // Control Manager, which refuses a non-admin connection. So from an ordinary
@@ -28,7 +30,25 @@ func checkServiceRequest(name, action string, allowedServices []string) error {
 	case "start", "stop", "restart":
 		return nil
 	}
-	return fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
+	return fmt.Errorf("invalid action: %s (must be start, stop, restart or status)", action)
+}
+
+// QueryService answers cmd.service's status action for one service. It uses
+// the same allowlist as the control actions, and reads the status through
+// GetServiceStatuses -- the call the service_check telemetry makes -- so the
+// command and the telemetry cannot describe the same service differently.
+//
+// A service that does not exist is not an error: it answers NotInstalled,
+// exactly as it would in telemetry.
+func (e *Executor) QueryService(name string, allowedServices []string) (*ServiceStatus, error) {
+	if !isServiceAllowed(name, allowedServices) {
+		return nil, fmt.Errorf("service not in allowed list: %s", name)
+	}
+	statuses, err := e.GetServiceStatuses([]string{name})
+	if err != nil {
+		return nil, err
+	}
+	return &statuses[0], nil
 }
 
 // isServiceAllowed checks if a service is in the allowed list

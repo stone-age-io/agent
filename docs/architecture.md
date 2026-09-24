@@ -345,7 +345,7 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 │  Agent  │ 6. Validate whitelist
 └────┬────┘    7. Execute: systemctl restart nginx
      │ 8. Return response
-     ▼         {"status":"success","output":"..."}
+     ▼         {"status":"success","result":"..."}
 ┌─────────┐
 │  NATS   │ 9. Reply back
 └────┬────┘
@@ -355,6 +355,20 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
 │Dashboard │ 10. Display result to user
 └──────────┘
 ```
+
+`cmd.service` also takes `"action":"status"`, which reads one service's state
+without changing it. It uses the same `allowed_services` gate as the other
+actions, and the same lookup as the `service_check` telemetry, so the two
+always agree:
+
+```json
+{"status":"success","service_name":"nginx","action":"status",
+ "result":"Service nginx is Running","service_status":"Running","ts":"..."}
+```
+
+`service_status` uses the telemetry's values: `Running`, `Stopped`, `Starting`,
+`Stopping`, `Error`, `Unknown` or `NotInstalled`. A service that doesn't exist
+answers `NotInstalled` rather than an error.
 
 ### 3. Script Execution (Command)
 

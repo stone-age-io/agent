@@ -8,6 +8,17 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+### Added
+
+- **`cmd.service` takes a `status` action.** It reads one service's state
+  without changing it, where before the only way to see a service was to wait
+  for the next `service_check` telemetry. The reply carries `service_status`
+  in the telemetry's words (`Running`, `Stopped`, `NotInstalled`, ...), and
+  the lookup is the same one the telemetry makes. It uses the same
+  `allowed_services` gate as start, stop and restart.
+
 ## [0.3.1] - 2026-09-24
 
 > **Security fix. Upgrade any agent with a `commands.scripts_directory`.**
