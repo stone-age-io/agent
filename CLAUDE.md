@@ -541,7 +541,13 @@ commands:
 
 - All commands/services must be whitelisted in config
 - Log path access restricted to allowed patterns with path traversal protection
-- Scripts must be in configured scripts_directory with .ps1/.sh extension
+- Scripts must be in configured scripts_directory with .ps1/.sh extension, and are
+  requested by **bare filename only**. **The caller's string never reaches a shell**:
+  a script is started as a file (shebang / `powershell -File`), and an allowlisted
+  command runs the operator's allowlist entry, not the request. The gate is one
+  copy in `internal/tasks/exec.go`; the platform files only say how to start a
+  process. It was once duplicated per platform, and both copies approved
+  `$(anything)/deploy.sh` and then ran it through `bash -c` -- do not split it again
 - No WMI or external command execution for inventory (uses native APIs)
 - Command execution uses context with timeout
 - Secrets on disk (.creds, platform session, Nebula config cache) are written 0600

@@ -25,7 +25,30 @@ The agent's extensibility comes from **scripts**, not built-in features. This ke
 
 **Extension:** `.sh`
 **Location:** `/opt/agent/scripts/` (Linux), `/usr/local/etc/agent/scripts/` (FreeBSD)
-**Executor:** `/bin/bash`
+**Executor:** the script's own shebang line. The file must be executable (`chmod +x`).
+
+### How a script is requested and run
+
+Request a script by its **bare filename**, with no directory:
+
+```json
+{"command": "get-docker-status.sh"}
+```
+
+The agent looks for that name directly inside `commands.scripts_directory` and
+runs the file it finds. Scripts are started directly, never through a shell:
+on Linux and FreeBSD the kernel runs the file using its shebang, and on Windows
+the agent runs `powershell.exe -File <path>`. A script's `exit N` is the
+`exit_code` the agent reports.
+
+These requests are refused:
+
+- A full or relative path, even one that points into the scripts directory
+  (`/opt/agent/scripts/x.sh`, `sub/x.sh`, `..\x.ps1`)
+- A name that isn't a regular file directly inside the scripts directory
+
+Scripts take no arguments. That's deliberate: arguments are where injection
+lives. If you need a variant, write a second script.
 
 ---
 

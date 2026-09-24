@@ -8,6 +8,37 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+> **Security fix. Upgrade any agent with a `commands.scripts_directory`.**
+> Anyone able to publish to `cmd.exec` could run arbitrary commands on the
+> device, whatever the allowlist said, as long as one script existed in the
+> scripts directory.
+>
+> Script requests must now be a bare filename (`deploy.sh`, not
+> `/opt/agent/scripts/deploy.sh`). A request that used the full path is now
+> refused, where it used to work.
+
+### Security
+
+- **`cmd.exec` ran the caller's string instead of the script it approved.**
+  The script check reduced the request to its last path element and confirmed
+  a script by that name existed, then handed the *unreduced* request to
+  `bash -c` (or `powershell -Command`). So `{"command": "$(anything)/deploy.sh"}`
+  passed the check and ran `anything`. Both platforms were affected.
+
+  Script requests must now be a bare filename, and the agent builds the path
+  itself and starts that file directly, with no shell involved. Allowlisted
+  commands now run the operator's allowlist entry rather than the request.
+  They used to compare equal after whitespace normalization, which let a
+  newline in the request split one allowed line into two commands.
+
+### Changed
+
+- **Windows scripts run with `-File` instead of `-Command`.** A script's own
+  `exit N` is now the exit code `cmd.exec` reports. Under `-Command` it
+  collapsed to 0 or 1.
+
 ## [0.3.0] - 2026-09-20
 
 > **`cmd.health` reports `degraded` in situations where it used to report

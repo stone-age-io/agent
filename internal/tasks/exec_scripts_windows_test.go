@@ -4,20 +4,22 @@ package tasks
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
 
-// TestIsCommandAllowed tests command whitelist validation
+// TestAllowedCommand tests command allowlist validation
 // This is CRITICAL for security - prevents arbitrary command execution
-func TestIsCommandAllowed(t *testing.T) {
+func TestAllowedCommand(t *testing.T) {
 	tests := []struct {
 		name            string
 		command         string
 		allowedCommands []string
-		scriptsDir      string
 		want            bool
 		reason          string
 	}{
@@ -29,9 +31,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-Process",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "exact command match should be allowed",
+			want:   true,
+			reason: "exact command match should be allowed",
 		},
 		{
 			name:    "exact match with parameters",
@@ -39,9 +40,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU -Descending | Select-Object -First 5",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "exact command with parameters should be allowed",
+			want:   true,
+			reason: "exact command with parameters should be allowed",
 		},
 		{
 			name:    "match from multiple allowed",
@@ -51,9 +51,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-NetIPAddress",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "should match one of multiple allowed commands",
+			want:   true,
+			reason: "should match one of multiple allowed commands",
 		},
 
 		// Whitespace normalization
@@ -63,9 +62,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "extra whitespace should be normalized",
+			want:   true,
+			reason: "extra whitespace should be normalized",
 		},
 		{
 			name:    "leading/trailing spaces",
@@ -73,9 +71,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "leading and trailing spaces should be trimmed",
+			want:   true,
+			reason: "leading and trailing spaces should be trimmed",
 		},
 		{
 			name:    "tabs converted to spaces",
@@ -83,9 +80,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process | Sort-Object CPU",
 			},
-			scriptsDir: "",
-			want:       true,
-			reason:     "tabs should be normalized to spaces",
+			want:   true,
+			reason: "tabs should be normalized to spaces",
 		},
 
 		// Invalid cases - security critical
@@ -96,9 +92,8 @@ func TestIsCommandAllowed(t *testing.T) {
 				"Get-Process",
 				"Get-Service",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command not in whitelist must be rejected",
+			want:   false,
+			reason: "command not in whitelist must be rejected",
 		},
 		{
 			name:    "partial match",
@@ -106,9 +101,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "partial match must be rejected - exact match required",
+			want:   false,
+			reason: "partial match must be rejected - exact match required",
 		},
 		{
 			name:    "extra parameters",
@@ -116,9 +110,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "additional parameters must be rejected",
+			want:   false,
+			reason: "additional parameters must be rejected",
 		},
 		{
 			name:    "prefix match attempt",
@@ -126,9 +119,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command chaining attempt must be rejected",
+			want:   false,
+			reason: "command chaining attempt must be rejected",
 		},
 		{
 			name:    "similar but different command",
@@ -136,9 +128,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "similar command name must be rejected",
+			want:   false,
+			reason: "similar command name must be rejected",
 		},
 		{
 			name:    "case difference",
@@ -146,15 +137,13 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "case differences must be rejected - exact match required",
+			want:   false,
+			reason: "case differences must be rejected - exact match required",
 		},
 		{
 			name:            "empty allowed list",
 			command:         "Get-Process",
 			allowedCommands: []string{},
-			scriptsDir:      "",
 			want:            false,
 			reason:          "empty whitelist means nothing allowed",
 		},
@@ -164,9 +153,8 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "command injection attempt must be rejected",
+			want:   false,
+			reason: "command injection attempt must be rejected",
 		},
 		{
 			name:    "pipe to dangerous command",
@@ -174,17 +162,16 @@ func TestIsCommandAllowed(t *testing.T) {
 			allowedCommands: []string{
 				"Get-Process",
 			},
-			scriptsDir: "",
-			want:       false,
-			reason:     "piping to non-whitelisted command must be rejected",
+			want:   false,
+			reason: "piping to non-whitelisted command must be rejected",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isCommandAllowed(tt.command, tt.allowedCommands, tt.scriptsDir)
+			_, got := allowedCommand(tt.command, tt.allowedCommands)
 			if got != tt.want {
-				t.Errorf("isCommandAllowed() = %v, want %v: %s", got, tt.want, tt.reason)
+				t.Errorf("allowedCommand() = %v, want %v: %s", got, tt.want, tt.reason)
 			}
 		})
 	}
@@ -321,4 +308,37 @@ func TestExecuteCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExecuteCommandScripts is the Windows side of the unix test of the same
+// name: the refusal only counts if nothing ran.
+func TestExecuteCommandScripts(t *testing.T) {
+	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deploy.ps1"), []byte("Write-Output ok\r\nexit 3\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("script runs and its exit code survives", func(t *testing.T) {
+		// -File passes the script's own exit code through; -Command did not.
+		out, code, _ := executor.ExecuteCommand("deploy.ps1", nil, dir, 30*time.Second)
+		if code != 3 || !strings.Contains(out, "ok") {
+			t.Fatalf("got (%q, %d), want output containing \"ok\" and exit code 3", out, code)
+		}
+	})
+
+	t.Run("injection before a real script name is refused and does not run", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), "pwned")
+		_, _, err := executor.ExecuteCommand("$(New-Item -Path '"+marker+"')\\deploy.ps1", nil, dir, 30*time.Second)
+		if err == nil || !strings.Contains(err.Error(), "not in allowed list") {
+			t.Fatalf("err = %v, want a refusal", err)
+		}
+		if _, statErr := os.Stat(marker); statErr == nil {
+			t.Fatal("the injected command ran")
+		}
+	})
 }

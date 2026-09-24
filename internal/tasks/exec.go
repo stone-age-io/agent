@@ -1,12 +1,151 @@
 package tasks
 
-// Shared helpers for the platform-specific command execution implementations
-// (exec_unix.go, exec_windows.go).
+// The cmd.exec gate, shared by every platform. The platform files
+// (exec_unix.go, exec_windows.go) say only how to run a process: which shell
+// runs an allowlisted command line, and how a script file is started.
+//
+// The gate lives here, once, because it used to be copied into both platform
+// files, and the copies shared a hole: a request like `$(anything)/deploy.sh`
+// was allowed because a deploy.sh existed in the scripts directory, and then
+// the raw request string went to `bash -c`. See ExecuteCommand for the two
+// rules that close it.
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 )
+
+// ExecuteCommand runs a request that names a script in scriptsDir or an entry
+// in allowedCommands, and nothing else.
+//
+// THE CALLER'S STRING NEVER REACHES A SHELL. A script request must be a bare
+// filename; the agent builds the path itself and starts that file directly,
+// with no shell parsing anything. An allowlisted command runs the operator's
+// allowlist ENTRY, not the request, so a request that differs from it only in
+// whitespace -- a newline that would split the line into two commands and
+// drop a trailing flag, say -- runs exactly what the operator wrote.
+//
+// Scripts are checked first, so a request naming one is never looked up in the
+// allowlist and never handed to a shell.
+func (e *Executor) ExecuteCommand(command string, allowedCommands []string, scriptsDir string, timeout time.Duration) (string, int, error) {
+	var output string
+	var exitCode int
+	var err error
+
+	if path, ok := scriptPath(command, scriptsDir); ok {
+		e.logger.Info("Executing script",
+			zap.String("command", command),
+			zap.String("path", path),
+			zap.Duration("timeout", timeout))
+		output, exitCode, err = runScript(e.ctx, path, timeout)
+	} else if entry, ok := allowedCommand(command, allowedCommands); ok {
+		e.logger.Info("Executing allowlisted command",
+			zap.String("command", entry),
+			zap.Duration("timeout", timeout))
+		output, exitCode, err = runShell(e.ctx, entry, timeout)
+	} else {
+		return "", -1, fmt.Errorf("command not in allowed list or scripts directory")
+	}
+
+	if err != nil {
+		e.logger.Error("Command execution failed",
+			zap.String("command", command),
+			zap.Error(err),
+			zap.Int("exit_code", exitCode))
+		return output, exitCode, err
+	}
+
+	e.logger.Info("Command executed successfully",
+		zap.String("command", command),
+		zap.Int("exit_code", exitCode))
+	return output, exitCode, nil
+}
+
+// scriptPath returns the file to run for a script request, and whether the
+// request names one: a bare filename with the platform's script extension, of
+// a regular file directly inside scriptsDir.
+//
+// Bare means bare. Anything filepath.Base would shorten -- a separator, a
+// drive letter, a `..` -- is refused rather than reduced to its last element,
+// because reducing it is exactly how the old check came to approve a string
+// it then did not run.
+func scriptPath(command, scriptsDir string) (string, bool) {
+	if scriptsDir == "" || filepath.Ext(command) != scriptExt {
+		return "", false
+	}
+	if command != filepath.Base(command) {
+		return "", false
+	}
+
+	path := filepath.Join(scriptsDir, command)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	return path, true
+}
+
+// allowedCommand returns the allowlist entry a request names, compared with
+// whitespace normalized. It returns the entry rather than a yes/no so that
+// the entry is what runs; see ExecuteCommand.
+func allowedCommand(command string, allowedCommands []string) (string, bool) {
+	normalized := normalizeWhitespace(command)
+	for _, allowed := range allowedCommands {
+		if normalized == normalizeWhitespace(allowed) {
+			return allowed, true
+		}
+	}
+	return "", false
+}
+
+// runProcess runs name with args under timeout, returning the combined output
+// and the exit code. A non-zero exit is an error that still carries the
+// output; a process that never ran reports exit code -1.
+func runProcess(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, name, args...)
+
+	// Capture stdout and stderr (capped to avoid unbounded memory use)
+	var stdout, stderr limitedBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	if cmdCtx.Err() == context.DeadlineExceeded {
+		return "", -1, fmt.Errorf("command execution timeout (%v)", timeout)
+	}
+	if cmdCtx.Err() == context.Canceled {
+		return "", -1, fmt.Errorf("command execution cancelled")
+	}
+
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			// Never started: not found, not executable
+			return "", -1, fmt.Errorf("failed to execute command: %w", err)
+		}
+		exitCode = exitErr.ExitCode()
+	}
+
+	output := combineOutput(&stdout, &stderr)
+	if exitCode != 0 {
+		return output, exitCode, fmt.Errorf("command exited with code %d", exitCode)
+	}
+	return output, exitCode, nil
+}
 
 // maxCommandOutputBytes caps captured stdout/stderr so a runaway command
 // cannot exhaust agent memory. Output beyond the cap is discarded.
