@@ -8,7 +8,7 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
-## [Unreleased]
+## [0.3.2] - 2026-09-24
 
 ### Added
 
@@ -478,7 +478,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/stone-age-io/agent/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/stone-age-io/agent/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/stone-age-io/agent/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/stone-age-io/agent/compare/v0.2.0...v0.2.1
