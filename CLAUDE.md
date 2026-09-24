@@ -429,7 +429,8 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 
 ### Commands (Core NATS Request/Reply)
 - `{prefix}.{code}.cmd.ping` - Connectivity check
-- `{prefix}.{code}.cmd.service` - Service control (start/stop/restart)
+- `{prefix}.{code}.cmd.service` - Service control (start/stop/restart) and `status`, which reads
+  one service through the same `GetServiceStatuses` call the service_check telemetry makes
 - `{prefix}.{code}.cmd.logs` - Log file retrieval
 - `{prefix}.{code}.cmd.exec` - Custom command execution
 - `{prefix}.{code}.cmd.health` - Agent health check (agent version, the `nebula` block when the overlay is enabled, the three command allowlists, and `checks`: the same readiness report `/ready` serves)

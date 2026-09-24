@@ -190,7 +190,7 @@ type pingResponse struct {
 }
 
 type serviceControlRequest struct {
-	Action      string `json:"action"`
+	Action      string `json:"action"` // start, stop, restart or status
 	ServiceName string `json:"service_name"`
 }
 
@@ -199,8 +199,14 @@ type serviceControlResponse struct {
 	ServiceName string `json:"service_name,omitempty"`
 	Action      string `json:"action,omitempty"`
 	Result      string `json:"result,omitempty"`
-	Error       string `json:"error,omitempty"`
-	TS          string `json:"ts"`
+
+	// ServiceStatus answers the status action, in the service_check
+	// telemetry's words (Running, Stopped, NotInstalled, ...). Absent for the
+	// control actions.
+	ServiceStatus string `json:"service_status,omitempty"`
+
+	Error string `json:"error,omitempty"`
+	TS    string `json:"ts"`
 }
 
 type logFetchRequest struct {
@@ -534,8 +540,18 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 		zap.String("action", req.Action),
 		zap.String("service", req.ServiceName))
 
-	// Execute service control
-	result, err := h.taskExecutor.ControlService(req.ServiceName, req.Action, h.config.Commands.AllowedServices)
+	var result, serviceStatus string
+	var err error
+	if req.Action == "status" {
+		var status *tasks.ServiceStatus
+		status, err = h.taskExecutor.QueryService(req.ServiceName, h.config.Commands.AllowedServices)
+		if err == nil {
+			serviceStatus = status.Status
+			result = fmt.Sprintf("Service %s is %s", req.ServiceName, status.Status)
+		}
+	} else {
+		result, err = h.taskExecutor.ControlService(req.ServiceName, req.Action, h.config.Commands.AllowedServices)
+	}
 	if err != nil {
 		h.logger.Error("Service control failed",
 			zap.Error(err),
@@ -563,11 +579,12 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 
 	// Success response
 	response := serviceControlResponse{
-		Status:      "success",
-		ServiceName: req.ServiceName,
-		Action:      req.Action,
-		Result:      result,
-		TS:          utils.NowRFC3339(),
+		Status:        "success",
+		ServiceName:   req.ServiceName,
+		Action:        req.Action,
+		Result:        result,
+		ServiceStatus: serviceStatus,
+		TS:            utils.NowRFC3339(),
 	}
 
 	responseBytes, err := json.Marshal(response)
