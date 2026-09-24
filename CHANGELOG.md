@@ -60,6 +60,18 @@ that period, and this file starts where the versioned releases do.
   If you allowlisted a broad pattern and relied on the denylist to carve
   pieces out of it, narrow the pattern.
 
+### Removed
+
+- **Exporter metrics mode.** `tasks.system_metrics.source: "exporter"` and
+  `exporter_url` read CPU, memory and disk figures by scraping node_exporter
+  or windows_exporter instead of using the builtin gopsutil collector. Nothing
+  used it, and it was a second implementation of the same figures, with
+  per-platform metric-name tables to keep correct. The builtin collector is
+  now the only one. A config that still carries either key loads unchanged
+  (they are ignored) and gets builtin metrics, in the same payload shape. If
+  you want node_exporter's series, run it and have Prometheus scrape it
+  directly.
+
 ### Changed
 
 - **`cmd.exec`'s `exit_code` is present exactly when the command ran**, 0

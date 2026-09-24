@@ -173,10 +173,7 @@ func TestFetchLogLines(t *testing.T) {
 	}
 	wildcardPattern := filepath.Join(logsDir, "*.log")
 
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	t.Run("reads last N lines", func(t *testing.T) {
 		lines, err := executor.FetchLogLines(appLog, 5, []string{wildcardPattern})

@@ -10,7 +10,7 @@ import (
 
 // TestCreateHeartbeat tests heartbeat message creation
 func TestCreateHeartbeat(t *testing.T) {
-	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	hb := executor.CreateHeartbeat("server-01", "hq")
 
@@ -43,7 +43,7 @@ func TestCreateHeartbeat(t *testing.T) {
 
 // TestCreateHeartbeatEmptyLocation tests that an unset location is carried as-is
 func TestCreateHeartbeatEmptyLocation(t *testing.T) {
-	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	hb := executor.CreateHeartbeat("server-01", "")
 
@@ -57,7 +57,7 @@ func TestCreateHeartbeatEmptyLocation(t *testing.T) {
 
 // TestCreateHeartbeatFormat tests that heartbeat uses correct time format
 func TestCreateHeartbeatFormat(t *testing.T) {
-	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	hb := executor.CreateHeartbeat("server-01", "hq")
 
@@ -76,7 +76,7 @@ func TestCreateHeartbeatFormat(t *testing.T) {
 
 // TestCreateHeartbeatConsistency tests that multiple heartbeats have consistent format
 func TestCreateHeartbeatConsistency(t *testing.T) {
-	executor, _ := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	// Create multiple heartbeats
 	hb1 := executor.CreateHeartbeat("server-01", "hq")

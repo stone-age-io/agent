@@ -87,8 +87,6 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"  # Every 5 minutes
-    source: "builtin"  # "builtin" (gopsutil, default) or "exporter" (scrape windows_exporter)
-    # exporter_url: "http://localhost:9182/metrics"  # Only used when source: "exporter"
   
   # Service Check - Monitor Windows services
   service_check:

@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"context"
-	"net/http"
 	"runtime"
 	"sync"
 	"time"
@@ -15,9 +14,8 @@ import (
 type Executor struct {
 	logger           *zap.Logger
 	commandTimeout   time.Duration
-	httpClient       *http.Client // Cached HTTP client for metrics scraping (created once, reused)
 	stats            *ExecutorStats
-	metricsCollector MetricsCollector // Metrics collector (builtin or exporter)
+	metricsCollector *BuiltinCollector
 	taskStats        *TaskStats
 	ctx              context.Context // Context for cancellation and timeouts
 }
@@ -83,26 +81,15 @@ type TaskHealthMetrics struct {
 }
 
 // NewExecutor creates a new task executor
-// source: "builtin" (default) or "exporter"
-// exporterURL: only used when source="exporter"
-func NewExecutor(logger *zap.Logger, commandTimeout time.Duration, ctx context.Context, source, exporterURL string) (*Executor, error) {
-	httpClient := createHTTPClient()
-
-	// Create metrics collector based on source
-	collector, err := NewMetricsCollector(source, exporterURL, logger, httpClient)
-	if err != nil {
-		return nil, err
-	}
-
+func NewExecutor(logger *zap.Logger, commandTimeout time.Duration, ctx context.Context) *Executor {
 	return &Executor{
 		logger:           logger,
 		commandTimeout:   commandTimeout,
-		httpClient:       httpClient,
 		stats:            &ExecutorStats{startTime: time.Now()},
-		metricsCollector: collector,
+		metricsCollector: NewBuiltinCollector(logger),
 		taskStats:        &TaskStats{},
 		ctx:              ctx,
-	}, nil
+	}
 }
 
 // GetAgentMetrics returns current agent performance metrics
@@ -219,10 +206,8 @@ func (e *Executor) RecordCommandError(err error) {
 	e.stats.lastErrorTime = time.Now()
 }
 
-// ScrapeMetrics collects system metrics using the configured collector
-// The exporterURL parameter is kept for backward compatibility but is ignored
-// when using the builtin collector (the collector was configured at creation time)
-func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
+// ScrapeMetrics collects and validates system metrics
+func (e *Executor) ScrapeMetrics() (*SystemMetrics, error) {
 	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
 	defer cancel()
 
@@ -232,7 +217,7 @@ func (e *Executor) ScrapeMetrics(exporterURL string) (*SystemMetrics, error) {
 	}
 
 	// Validate metrics
-	if err := validateMetrics(metrics, e.metricsCollector); err != nil {
+	if err := validateMetrics(metrics); err != nil {
 		return nil, err
 	}
 

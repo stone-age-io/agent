@@ -82,8 +82,7 @@ func registerAgentChecks(
 		if rate > 0.5 {
 			return health.Warn(
 				fmt.Sprintf("%d of %d metrics collections failed", m.MetricsFailures, m.MetricsCount),
-				"With tasks.system_metrics.source: exporter, check that the exporter at "+
-					cfg.Tasks.SystemMetrics.ExporterURL+" is running and exposes the expected metric names.",
+				"The agent log has each collection error.",
 			)
 		}
 		return health.OK(fmt.Sprintf("%d collected, %d failed", m.MetricsCount, m.MetricsFailures))

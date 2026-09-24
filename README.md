@@ -35,13 +35,13 @@ to reach the leaf server it hosts.
 
 ## Platform Support
 
-| Platform | Service Manager | Metrics Source | Status |
-|----------|----------------|----------------|--------|
-| **Windows Server 2016+** | Windows Service | Built-in (default) or [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
-| **Windows 10/11** | Windows Service | Built-in (default) or [windows_exporter](https://github.com/prometheus-community/windows_exporter) | ✅ Stable |
-| **Ubuntu 22.04+** | systemd | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
-| **Debian 11+** | systemd | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
-| **FreeBSD 13+** | rc.d | Built-in (default) or [node_exporter](https://github.com/prometheus/node_exporter) | ✅ Stable |
+| Platform | Service Manager | Status |
+|----------|----------------|--------|
+| **Windows Server 2016+** | Windows Service | ✅ Stable |
+| **Windows 10/11** | Windows Service | ✅ Stable |
+| **Ubuntu 22.04+** | systemd | ✅ Stable |
+| **Debian 11+** | systemd | ✅ Stable |
+| **FreeBSD 13+** | rc.d | ✅ Stable |
 
 ---
 
@@ -115,8 +115,6 @@ cd "C:\Program Files\Agent"
 Start-Service agent
 ```
 
-> **Note**: By default, the agent uses built-in metrics collection. Optionally install [windows_exporter](https://github.com/prometheus-community/windows_exporter) for additional metrics and set `source: "exporter"` in config.
-
 **[Detailed Windows Guide →](docs/windows.md)**
 
 </details>
@@ -143,8 +141,6 @@ sudo /usr/local/bin/agent -service install
 # 4. Start service
 sudo systemctl start agent
 ```
-
-> **Note**: By default, the agent uses built-in metrics collection. Optionally install [node_exporter](https://github.com/prometheus/node_exporter) for additional metrics and set `source: "exporter"` in config.
 
 **[Detailed Linux Guide →](docs/linux.md)**
 
@@ -173,8 +169,6 @@ sudo /usr/local/bin/agent -service install
 sudo service agent start
 ```
 
-> **Note**: By default, the agent uses built-in metrics collection. Optionally install [node_exporter](https://github.com/prometheus/node_exporter) (`pkg install node_exporter`) for additional metrics and set `source: "exporter"` in config.
-
 **[Detailed FreeBSD Guide →](docs/freebsd.md)**
 
 </details>
@@ -195,7 +189,7 @@ sudo service agent start
          │
     ┌────▼─────┐
     │  Agent   │      Edge (Windows/Linux/FreeBSD)
-    └──────────┘      - Built-in metrics (gopsutil) or exporter
+    └──────────┘      - Built-in metrics (gopsutil)
                       - Command execution
                       - Service control
 ```
@@ -258,8 +252,6 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    source: "builtin"  # "builtin" (default) or "exporter"
-    # exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
 
   service_check:
     enabled: true

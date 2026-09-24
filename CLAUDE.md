@@ -110,11 +110,8 @@ agent/
 │   ├── tasks/                 # Task implementations
 │   │   ├── executor.go        # Task executor with stats tracking
 │   │   ├── heartbeat.go       # Heartbeat message creation
-│   │   ├── collector.go       # MetricsCollector interface
-│   │   ├── collector_builtin.go   # gopsutil-based metrics (default)
-│   │   ├── collector_exporter.go  # Prometheus exporter scraping (optional)
+│   │   ├── collector_builtin.go   # gopsutil-based metrics (the only collector)
 │   │   ├── metrics.go         # Metrics types and validation
-│   │   ├── metrics_names.go   # Platform-specific metric names (exporter mode)
 │   │   ├── service.go         # Service status constants
 │   │   ├── service_*.go       # Platform-specific service control
 │   │   ├── inventory_*.go     # Platform-specific inventory collection
@@ -152,7 +149,7 @@ agent/
      them made the other two ask "is some other section's type field set to a
      particular string" instead of "is the block present"
    - Requires https for the platform URL unless `allow_insecure_url` is set
-   - Platform-specific defaults for paths and exporter URLs
+   - Platform-specific defaults for paths
 
 3. **Platform** (`internal/platform/`): credential lifecycle for auth type `platform`
    - The agent is a Thing: authenticates as itself against the `things` auth collection;
@@ -216,8 +213,13 @@ agent/
 
 7. **Executor** (`internal/tasks/executor.go`):
    - Central task execution with stats tracking
-   - Configurable metrics collection via MetricsCollector interface
-   - Supports builtin (gopsutil) or exporter (Prometheus) sources
+   - System metrics come from gopsutil, and only from gopsutil. There was an
+     exporter mode that scraped node_exporter/windows_exporter instead: a second
+     implementation of the same handful of numbers, with per-platform metric-name
+     tables, that nothing used. It was removed, and with it the collector interface
+     and factory that existed to choose between the two. Do not bring back an
+     interface for one implementation. Anyone who wants node_exporter's richer
+     series runs it and has Prometheus scrape it directly
    - Command success/error recording
 
 8. **Edge** (`internal/edge/`): what an agent does when the box it runs on is also
@@ -409,7 +411,7 @@ Use build tags for platform-specific code:
 **Key platform differences:**
 - Windows: PowerShell execution, Windows Service SCM
 - Linux/FreeBSD: Bash execution, systemd/rc.d
-- Metrics: Builtin (gopsutil) by default; optional windows_exporter (port 9182) or node_exporter (port 9100)
+- Metrics: gopsutil on every platform
 
 ## NATS Subjects
 
@@ -528,8 +530,6 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"               # Minimum 30s
-    source: "builtin"            # "builtin" (default) or "exporter"
-    exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
 commands:
   scripts_directory: "/path/to/scripts"
   allowed_services: ["nginx"]
@@ -587,7 +587,7 @@ Key dependencies (from go.mod):
   (v1.11 needs Go 1.26) and roughly half the binary size; pinned to the same
   version `pb-nebula` uses, so the library generating the configs and the one
   reading them cannot disagree
-- `github.com/prometheus/common/expfmt` - Prometheus metrics parsing (exporter mode)
+- `github.com/prometheus/common/expfmt` - Parses the agent's own `/metrics` output in tests
 - `golang.org/x/sys` - Windows syscalls (registry, service control)
 - `gopkg.in/natefinch/lumberjack.v2` - Log rotation
 
@@ -608,4 +608,3 @@ Key dependencies (from go.mod):
 ### Adding platform support
 1. Create `*_<platform>.go` files with build tags
 2. Update `GetPlatformDefaults()` in `internal/config/defaults.go`
-3. Update `GetMetricNames()` in `internal/tasks/metrics_names.go`

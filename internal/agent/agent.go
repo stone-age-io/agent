@@ -142,18 +142,7 @@ func New(configPath string, version string) (*Agent, error) {
 	// Create root context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create task executor with command timeout, context, and metrics source config
-	executor, err := tasks.NewExecutor(
-		logger,
-		cfg.Commands.Timeout,
-		ctx,
-		cfg.Tasks.SystemMetrics.Source,
-		cfg.Tasks.SystemMetrics.ExporterURL,
-	)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create executor: %w", err)
-	}
+	executor := tasks.NewExecutor(logger, cfg.Commands.Timeout, ctx)
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")

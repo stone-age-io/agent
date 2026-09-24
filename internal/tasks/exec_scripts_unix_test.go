@@ -16,10 +16,7 @@ import (
 // TestExecuteCommandScripts runs real processes: the refusal is only worth
 // something if nothing ran, so the injection case checks for its side effect.
 func TestExecuteCommandScripts(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "deploy.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {

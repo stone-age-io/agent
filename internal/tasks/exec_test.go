@@ -244,10 +244,7 @@ func TestExecuteCommand(t *testing.T) {
 	// Actual PowerShell execution tests would require Windows and are integration tests
 
 	// Create executor with builtin metrics source for tests
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string

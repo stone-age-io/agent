@@ -96,8 +96,8 @@ tasks:
   system_metrics:
     enabled: true
     interval: "5m"
-    source: "builtin"  # "builtin" (default) or "exporter"
-    # exporter_url: "http://localhost:9182/metrics"  # Only for exporter mode
+    # Built-in (gopsutil). You can still run windows_exporter for Prometheus to
+    # scrape directly; the agent does not read it.
   
   service_check:
     enabled: true
@@ -251,47 +251,6 @@ nats request "agents.windows-server-01.cmd.health" '{}'
 
 # Subscribe to telemetry
 nats sub "agents.windows-server-01.>"
-```
-
----
-
-## Optional: Install windows_exporter
-
-By default, the agent uses built-in metrics collection. If you prefer to use Prometheus windows_exporter for additional metrics, follow these steps:
-
-### Install windows_exporter
-
-```powershell
-# Run as Administrator
-
-# Download latest release
-$exporterVersion = "0.25.1"
-$downloadUrl = "https://github.com/prometheus-community/windows_exporter/releases/download/v$exporterVersion/windows_exporter-$exporterVersion-amd64.msi"
-$installerPath = "$env:TEMP\windows_exporter.msi"
-
-Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
-
-# Install MSI (installs as Windows service)
-Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet" -Wait
-
-# Verify service is running
-Get-Service windows_exporter
-
-# Test metrics endpoint
-Invoke-WebRequest -Uri "http://localhost:9182/metrics" -UseBasicParsing | Select-Object -ExpandProperty Content | Select-Object -First 20
-```
-
-### Configure Agent for Exporter Mode
-
-Update your config.yaml:
-
-```yaml
-tasks:
-  system_metrics:
-    enabled: true
-    interval: "5m"
-    source: "exporter"
-    exporter_url: "http://localhost:9182/metrics"
 ```
 
 ---
@@ -521,18 +480,6 @@ Get-EventLog -LogName Application -Source agent -Newest 50
 Select-String -Path "C:\ProgramData\Agent\agent.log" -Pattern "metrics"
 ```
 
-**If using exporter mode, verify windows_exporter:**
-```powershell
-# Verify service is running
-Get-Service windows_exporter
-
-# Test metrics endpoint
-Invoke-WebRequest -Uri "http://localhost:9182/metrics" -UseBasicParsing
-
-# Verify exporter URL in config
-Select-String -Path "C:\ProgramData\Agent\config.yaml" -Pattern "exporter_url"
-```
-
 ### Service Control Not Working
 
 **Check allowed services:**
@@ -585,25 +532,6 @@ Start-Service agent
 Get-Content "C:\ProgramData\Agent\agent.log" -Tail 20 | Select-String "version"
 ```
 
-### Upgrade windows_exporter (If Using Exporter Mode)
-
-```powershell
-# Stop service
-Stop-Service windows_exporter
-
-# Download new MSI
-$exporterVersion = "0.26.0"
-$downloadUrl = "https://github.com/prometheus-community/windows_exporter/releases/download/v$exporterVersion/windows_exporter-$exporterVersion-amd64.msi"
-$installerPath = "$env:TEMP\windows_exporter.msi"
-Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
-
-# Install (will upgrade existing)
-Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet" -Wait
-
-# Start service
-Start-Service windows_exporter
-```
-
 ---
 
 ## Uninstallation
@@ -620,17 +548,6 @@ Stop-Service agent
 # Remove files
 Remove-Item "C:\Program Files\Agent" -Recurse -Force
 Remove-Item "C:\ProgramData\Agent" -Recurse -Force
-```
-
-### Remove windows_exporter (Optional)
-
-```powershell
-# Stop service
-Stop-Service windows_exporter
-
-# Uninstall via Programs and Features
-# Or using MSI uninstall:
-Start-Process msiexec.exe -ArgumentList "/x windows_exporter /quiet" -Wait
 ```
 
 ---

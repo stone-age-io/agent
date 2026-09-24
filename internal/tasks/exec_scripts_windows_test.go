@@ -247,10 +247,7 @@ func TestExecuteCommand(t *testing.T) {
 	// Actual PowerShell execution tests would require Windows and are integration tests
 
 	// Create executor with builtin metrics source for tests
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	tests := []struct {
 		name            string
@@ -313,10 +310,7 @@ func TestExecuteCommand(t *testing.T) {
 // TestExecuteCommandScripts is the Windows side of the unix test of the same
 // name: the refusal only counts if nothing ran.
 func TestExecuteCommandScripts(t *testing.T) {
-	executor, err := NewExecutor(zap.NewNop(), 0, context.Background(), "builtin", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "deploy.ps1"), []byte("Write-Output ok\r\nexit 3\r\n"), 0o644); err != nil {

@@ -138,7 +138,7 @@ func (s *Scheduler) scheduleTasks() error {
 			default:
 			}
 
-			_, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
+			_, err := s.executor.ScrapeMetrics()
 			if err == nil {
 				s.logger.Info("Metrics baseline established successfully")
 				baselineErr = nil
@@ -364,7 +364,7 @@ func (s *Scheduler) publishMetrics(code string) {
 
 	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, code)
 
-	metrics, err := s.executor.ScrapeMetrics(s.config.Tasks.SystemMetrics.ExporterURL)
+	metrics, err := s.executor.ScrapeMetrics()
 	if err != nil {
 		s.logger.Error("Failed to scrape metrics", zap.Error(err))
 

@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -68,129 +67,8 @@ func TestBuiltinCollector_Collect(t *testing.T) {
 	}
 }
 
-// TestBuiltinCollector_Name tests the collector name
-func TestBuiltinCollector_Name(t *testing.T) {
-	logger := zap.NewNop()
-	collector := NewBuiltinCollector(logger)
-
-	name := collector.Name()
-	if !strings.Contains(name, "builtin") {
-		t.Errorf("Name() = %s, expected to contain 'builtin'", name)
-	}
-}
-
-// TestBuiltinCollector_ResetCache tests cache reset
-func TestBuiltinCollector_ResetCache(t *testing.T) {
-	logger := zap.NewNop()
-	collector := NewBuiltinCollector(logger)
-
-	ctx := context.Background()
-
-	// Collect to establish baseline
-	_, err := collector.Collect(ctx)
-	if err != nil {
-		t.Fatalf("First collect failed: %v", err)
-	}
-
-	// Reset cache
-	collector.ResetCache()
-
-	// After reset, CPU should be 0 again (baseline re-established)
-	metrics, err := collector.Collect(ctx)
-	if err != nil {
-		t.Fatalf("Collect after reset failed: %v", err)
-	}
-
-	if metrics.CPUUsagePercent != 0 {
-		t.Logf("Note: CPU after reset = %.2f (expected 0 for new baseline)", metrics.CPUUsagePercent)
-	}
-}
-
-// TestExporterCollector_Name tests the exporter collector name
-func TestExporterCollector_Name(t *testing.T) {
-	logger := zap.NewNop()
-	collector := NewExporterCollector("http://localhost:9182/metrics", logger, nil)
-
-	name := collector.Name()
-	if !strings.Contains(name, "exporter") {
-		t.Errorf("Name() = %s, expected to contain 'exporter'", name)
-	}
-	if !strings.Contains(name, "localhost:9182") {
-		t.Errorf("Name() = %s, expected to contain URL", name)
-	}
-}
-
-// TestCollectorFactory tests the collector factory function
-func TestCollectorFactory(t *testing.T) {
-	logger := zap.NewNop()
-
-	tests := []struct {
-		name        string
-		source      string
-		exporterURL string
-		expectType  string
-		expectError bool
-	}{
-		{
-			name:       "default is builtin",
-			source:     "",
-			expectType: "builtin",
-		},
-		{
-			name:       "explicit builtin",
-			source:     "builtin",
-			expectType: "builtin",
-		},
-		{
-			name:        "exporter with URL",
-			source:      "exporter",
-			exporterURL: "http://localhost:9182/metrics",
-			expectType:  "exporter",
-		},
-		{
-			name:        "exporter without URL fails",
-			source:      "exporter",
-			expectError: true,
-		},
-		{
-			name:        "invalid source fails",
-			source:      "invalid",
-			expectError: true,
-		},
-		{
-			name:       "case insensitive",
-			source:     "BUILTIN",
-			expectType: "builtin",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			collector, err := NewMetricsCollector(tt.source, tt.exporterURL, logger, nil)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-
-			if !strings.Contains(collector.Name(), tt.expectType) {
-				t.Errorf("Name() = %s, expected to contain %s", collector.Name(), tt.expectType)
-			}
-		})
-	}
-}
-
 // TestValidateMetrics tests the metrics validation function
 func TestValidateMetrics(t *testing.T) {
-	logger := zap.NewNop()
-	collector := NewBuiltinCollector(logger)
-
 	tests := []struct {
 		name        string
 		metrics     *SystemMetrics
@@ -244,10 +122,9 @@ func TestValidateMetrics(t *testing.T) {
 			expectError: true,
 		},
 		{
-			// An exporter that reports available memory but no total leaves
-			// both derived fields at zero, which is omitted rather than
-			// published. That has to stay valid, or a node_exporter without
-			// MemTotal would fail the whole scrape instead of losing one field.
+			// No total leaves both derived fields at zero, which is omitted
+			// rather than published. That has to stay valid, or a missing
+			// total would fail the whole scrape instead of losing one field.
 			name: "memory with no total is valid",
 			metrics: &SystemMetrics{
 				CPUUsagePercent: 10.0,
@@ -278,7 +155,7 @@ func TestValidateMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMetrics(tt.metrics, collector)
+			err := validateMetrics(tt.metrics)
 			if tt.expectError && err == nil {
 				t.Error("Expected error, got nil")
 			}
@@ -289,13 +166,10 @@ func TestValidateMetrics(t *testing.T) {
 	}
 }
 
-// TestDeriveMemoryUsed covers the one piece of arithmetic both collectors share.
+// TestDeriveMemoryUsed covers the "used" arithmetic.
 //
-// The "free exceeds total" case is not hypothetical: the two figures come from
-// different metric families in exporter mode and are scraped at slightly
-// different moments, so a transient inversion is possible — and a negative
-// percentage would fail validation and drop the whole scrape rather than the
-// one field.
+// The "free exceeds total" case is defensive: a negative percentage would fail
+// validation and drop the whole scrape rather than the one field.
 func TestDeriveMemoryUsed(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -316,7 +190,7 @@ func TestDeriveMemoryUsed(t *testing.T) {
 			if m.MemoryUsedPercent != tt.wantUsed {
 				t.Errorf("MemoryUsedPercent = %.2f, want %.2f", m.MemoryUsedPercent, tt.wantUsed)
 			}
-			if err := validateMetrics(m, NewBuiltinCollector(zap.NewNop())); err != nil {
+			if err := validateMetrics(m); err != nil {
 				t.Errorf("derived metrics failed validation: %v", err)
 			}
 		})
