@@ -378,7 +378,6 @@ func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subsc
 
 // Drain gracefully closes the connection by draining all subscriptions
 // and waiting for in-flight messages to complete
-// MODIFIED: Now accepts context for cancellation
 func (c *Client) Drain(ctx context.Context) error {
 	c.logger.Info("Draining NATS connection")
 	c.closing.Store(true)
