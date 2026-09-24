@@ -107,14 +107,25 @@ func allowedCommand(command string, allowedCommands []string) (string, bool) {
 	return "", false
 }
 
+// pipeWaitDelay bounds how long runProcess waits for output after the process
+// it started has exited or been killed. Something the process left behind --
+// a `sleep` bash was waiting on, a daemon a script started without
+// redirecting it -- inherits stdout and holds the pipe open, and without a
+// bound Run waits for it to close. That made the timeout a suggestion: a
+// killed shell still waited out its child, and a script that exited while
+// leaving a daemon behind held the handler for as long as the daemon lived.
+const pipeWaitDelay = time.Second
+
 // runProcess runs name with args under timeout, returning the combined output
 // and the exit code. A non-zero exit is an error that still carries the
-// output; a process that never ran reports exit code -1.
+// output. A process that never ran, or was killed by the timeout, reports
+// exit code -1 -- the timeout with whatever it had printed so far.
 func runProcess(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, name, args...)
+	cmd.WaitDelay = pipeWaitDelay
 
 	// Capture stdout and stderr (capped to avoid unbounded memory use)
 	var stdout, stderr limitedBuffer
@@ -124,10 +135,16 @@ func runProcess(ctx context.Context, timeout time.Duration, name string, args ..
 	err := cmd.Run()
 
 	if cmdCtx.Err() == context.DeadlineExceeded {
-		return "", -1, fmt.Errorf("command execution timeout (%v)", timeout)
+		return combineOutput(&stdout, &stderr), -1, fmt.Errorf("command execution timeout (%v)", timeout)
 	}
 	if cmdCtx.Err() == context.Canceled {
-		return "", -1, fmt.Errorf("command execution cancelled")
+		return combineOutput(&stdout, &stderr), -1, fmt.Errorf("command execution cancelled")
+	}
+
+	// The process exited 0 and something it left behind still held the pipe
+	// when pipeWaitDelay ran out. The command succeeded; report it that way.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
 	}
 
 	exitCode := 0

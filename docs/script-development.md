@@ -478,13 +478,35 @@ nats request "agents.device-123.cmd.exec" '{
   "command": "Get-WindowsUpdates.ps1"
 }'
 
-# Expected response:
+# Expected response. Output that is valid JSON arrives as JSON, not as a
+# string; anything else arrives as a string.
 # {
 #   "status": "success",
-#   "output": "{\"status\":\"success\",\"update_count\":5,...}",
-#   "exit_code": 0
+#   "command": "Get-WindowsUpdates.ps1",
+#   "output": {"status": "success", "update_count": 5, ...},
+#   "exit_code": 0,
+#   "ts": "2026-09-24T10:00:00Z"
 # }
 ```
+
+A script that exits non-zero still returns everything it printed, stderr
+included, so you can see why it failed:
+
+```json
+{
+  "status": "error",
+  "command": "check-backup.sh",
+  "output": "checking /backup\nSTDERR:\nno such file: /backup/latest\n",
+  "exit_code": 2,
+  "error": "command exited with code 2",
+  "ts": "2026-09-24T10:00:00Z"
+}
+```
+
+`exit_code` is present exactly when the command ran. If it's absent, the
+command never started: it was refused, couldn't be found, or was killed by
+`commands.timeout`. A timed-out command still returns whatever it printed
+before it was killed.
 
 ---
 

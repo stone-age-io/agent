@@ -33,7 +33,27 @@ that period, and this file starts where the versioned releases do.
   They used to compare equal after whitespace normalization, which let a
   newline in the request split one allowed line into two commands.
 
+### Fixed
+
+- **A failed `cmd.exec` returns its output and exit code.** A command that ran
+  and exited non-zero replied with only `"error": "command exited with code
+  1"`, and the stderr explaining why never left the box. The reply keeps
+  `status: "error"`, so nothing checking status changes, and now carries
+  `output` and `exit_code` as well. A timed-out command returns what it had
+  printed before it was killed.
+
+- **`commands.timeout` is a real bound.** When the timeout killed a shell, a
+  child still holding the output pipe (a `sleep`, say) kept the reply waiting
+  until that child finished. A script that exited while leaving a background
+  process behind held the reply for as long as that process lived. Output is
+  now collected for at most one second after the command exits or is killed.
+
 ### Changed
+
+- **`cmd.exec`'s `exit_code` is present exactly when the command ran**, 0
+  included. It used to be dropped on success and never sent on failure.
+  Absent now means the command never started (refused, not found, or timed
+  out).
 
 - **Windows scripts run with `-File` instead of `-Command`.** A script's own
   `exit N` is now the exit code `cmd.exec` reports. Under `-Command` it

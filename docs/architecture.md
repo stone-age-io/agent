@@ -382,7 +382,7 @@ renewed by every sync. See **[Platform Credentials](credentials.md)**.
      ▼
 ┌─────────┐
 │  Agent  │ 6. Return via NATS
-└────┬────┘    {"status":"success","output":"{...}","exit_code":0}
+└────┬────┘    {"status":"success","output":{...},"exit_code":0}
      │
      ▼
 ┌──────────┐

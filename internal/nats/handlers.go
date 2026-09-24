@@ -221,13 +221,18 @@ type customExecRequest struct {
 	Command string `json:"command"`
 }
 
+// customExecResponse is built by execResponse, for every outcome.
 type customExecResponse struct {
-	Status   string          `json:"status"`
-	Command  string          `json:"command,omitempty"`
-	Output   json.RawMessage `json:"output,omitempty"`
-	ExitCode int             `json:"exit_code,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	TS       string          `json:"ts"`
+	Status  string          `json:"status"`
+	Command string          `json:"command,omitempty"`
+	Output  json.RawMessage `json:"output,omitempty"`
+
+	// ExitCode is present exactly when the command ran, 0 included. Absent
+	// means it never started: refused, not found, or killed by the timeout.
+	ExitCode *int `json:"exit_code,omitempty"`
+
+	Error string `json:"error,omitempty"`
+	TS    string `json:"ts"`
 }
 
 // Enhanced health response structures
@@ -666,72 +671,59 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		h.config.Commands.Timeout,
 	)
 	if err != nil {
-		h.logger.Error("Command execution failed",
-			zap.Error(err),
-			zap.String("command", req.Command))
-
 		h.taskExecutor.RecordCommandError(err)
-
-		response := customExecResponse{
-			Status: "error",
-			Error:  err.Error(),
-			TS:     utils.NowRFC3339(),
-		}
-		responseBytes, err := json.Marshal(response)
-		if err != nil {
-			h.logger.Error("Failed to marshal exec error response", zap.Error(err))
-			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-			return
-		}
-		msg.Respond(responseBytes)
-		return
-	}
-
-	h.taskExecutor.RecordCommandSuccess()
-
-	// Prepare output for response
-	// IMPROVED: Always try to parse as JSON first, regardless of first character
-	// This prevents false positives like "[ERROR] message" being treated as JSON
-	var outputData json.RawMessage
-	trimmedOutput := strings.TrimSpace(output)
-
-	// Try to parse as JSON
-	var testJSON interface{}
-	if len(trimmedOutput) > 0 && json.Unmarshal([]byte(trimmedOutput), &testJSON) == nil {
-		// Valid JSON - include as-is (will be parsed object in response)
-		outputData = json.RawMessage(trimmedOutput)
-		h.logger.Debug("Command output is valid JSON, including as parsed object")
 	} else {
-		// Not valid JSON (or empty) - encode as string
-		jsonStr, err := json.Marshal(output)
-		if err != nil {
-			h.logger.Error("Failed to marshal command output", zap.Error(err))
-			jsonStr = []byte(`"output marshal error"`)
-		}
-		outputData = json.RawMessage(jsonStr)
-		h.logger.Debug("Command output is plain text, encoding as JSON string")
+		h.taskExecutor.RecordCommandSuccess()
 	}
 
-	// Success response
-	response := customExecResponse{
-		Status:   "success",
-		Command:  req.Command,
-		Output:   outputData,
-		ExitCode: exitCode,
-		TS:       utils.NowRFC3339(),
-	}
-
-	responseBytes, err := json.Marshal(response)
+	responseBytes, err := json.Marshal(execResponse(req.Command, output, exitCode, err))
 	if err != nil {
 		h.logger.Error("Failed to marshal exec response", zap.Error(err))
 		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
 		return
 	}
 	msg.Respond(responseBytes)
+}
 
-	h.logger.Info("Command execution succeeded",
-		zap.String("command", req.Command),
-		zap.Int("exit_code", exitCode))
+// execResponse is the cmd.exec reply for every outcome, as the executor
+// reported it.
+//
+// A command that ran and exited non-zero is still "error" -- anything checking
+// status keeps working -- but it carries its output and exit code as well.
+// That reply used to say only "command exited with code 1", so a failing
+// script's stderr, the one thing the operator needed, never left the box.
+//
+// exitCode is -1 when the command never ran; see customExecResponse.ExitCode.
+// Output is included whenever the command ran or left partial output behind
+// (a timeout), so an empty success still answers "output": "".
+func execResponse(command, output string, exitCode int, err error) customExecResponse {
+	resp := customExecResponse{
+		Status:  "success",
+		Command: command,
+		TS:      utils.NowRFC3339(),
+	}
+	if err != nil {
+		resp.Status = "error"
+		resp.Error = err.Error()
+	}
+	if exitCode >= 0 {
+		resp.ExitCode = &exitCode
+	}
+	if exitCode >= 0 || output != "" {
+		resp.Output = encodeOutput(output)
+	}
+	return resp
+}
+
+// encodeOutput embeds output that is valid JSON as JSON, so a script that
+// prints an object arrives as an object, and anything else as a string.
+func encodeOutput(output string) json.RawMessage {
+	trimmed := strings.TrimSpace(output)
+	if trimmed != "" && json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	encoded, _ := json.Marshal(output) // a string always marshals
+	return encoded
 }
 
 // handleHealth returns enhanced agent health information
