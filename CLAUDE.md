@@ -540,7 +540,11 @@ commands:
 ## Security Notes
 
 - All commands/services must be whitelisted in config
-- Log path access restricted to allowed patterns with path traversal protection
+- Log path access: the cleaned, absolute request must EQUAL a `filepath.Glob` match of
+  an allowed pattern, and that is the whole check -- it already rules out traversal.
+  Do not add a denylist in front of it: the last one ("sam", "system32", "..") refused
+  `/var/log/samba/*` and protected nothing, and a `*`-only prefix check behind it broke
+  every `?` and `[...]` pattern. Log path tests must use real files (glob reads the disk)
 - Scripts must be in configured scripts_directory with .ps1/.sh extension, and are
   requested by **bare filename only**. **The caller's string never reaches a shell**:
   a script is started as a file (shebang / `powershell -File`), and an allowlisted

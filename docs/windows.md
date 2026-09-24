@@ -125,7 +125,7 @@ commands:
     - "Get-Disk | Select-Object Number, FriendlyName, Size, HealthStatus"
   
   allowed_log_paths:
-    - "C:\\inetpub\\logs\\LogFiles\\**\\*.log"
+    - "C:\\inetpub\\logs\\LogFiles\\*\\*.log"
     - "C:\\Logs\\*.log"
   
   timeout: "30s"
@@ -338,12 +338,18 @@ Configure which log files can be retrieved:
 ```yaml
 commands:
   allowed_log_paths:
-    - "C:\\inetpub\\logs\\LogFiles\\**\\*.log"
+    - "C:\\inetpub\\logs\\LogFiles\\*\\*.log"
     - "C:\\Logs\\*.log"
-    - "C:\\Windows\\System32\\winevt\\Logs\\Application.evtx"
 ```
 
-Supports glob patterns (`**` for recursive, `*` for wildcard).
+Patterns use Go's `filepath.Glob`: `*` and `?` match within one path element
+and `[...]` matches a character class. There is no recursive `**`: each `*`
+matches exactly one directory level, so `LogFiles\*\*.log` reads the IIS
+site folders one level down. The allowlist is the only check. If a path matches
+a pattern, it can be read.
+
+Event logs (`.evtx`) are binary and can't be tailed by line. Read them with
+`Get-WinEvent` in a script instead.
 
 ---
 

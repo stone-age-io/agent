@@ -48,6 +48,18 @@ that period, and this file starts where the versioned releases do.
   process behind held the reply for as long as that process lived. Output is
   now collected for at most one second after the command exits or is killed.
 
+- **`cmd.logs` reads what `allowed_log_paths` allows.** A substring denylist
+  in front of the allowlist refused any path containing `sam`, `system32`,
+  `.exe`, `.dll`, `.sys` or `..`, whatever the operator had allowed. That
+  meant `/var/log/samba/*`, any home directory containing "sam", and
+  `app..log` could never be read. A check behind the allowlist only
+  understood `*`, so every pattern using `?` or `[...]` matched nothing. Both
+  are gone. Neither refused anything the allowlist would have let through:
+  the request must still exactly equal a file an allowed pattern names.
+
+  If you allowlisted a broad pattern and relied on the denylist to carve
+  pieces out of it, narrow the pattern.
+
 ### Changed
 
 - **`cmd.exec`'s `exit_code` is present exactly when the command ran**, 0

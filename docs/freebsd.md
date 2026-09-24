@@ -332,7 +332,9 @@ commands:
     - "/var/log/messages"
 ```
 
-Supports glob patterns for flexibility.
+Patterns use Go's `filepath.Glob`: `*` and `?` match within one path element
+and `[...]` matches a character class. There is no recursive `**`. The
+allowlist is the only check. If a path matches a pattern, it can be read.
 
 ---
 
