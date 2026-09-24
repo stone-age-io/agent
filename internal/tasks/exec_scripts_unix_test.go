@@ -13,6 +13,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// The shell allowlisted commands run through must exist on the platform
+// running the test. /bin/bash does not on a stock FreeBSD, which is how every
+// allowlisted command there came to fail unnoticed.
+func TestUnixShellExists(t *testing.T) {
+	if _, err := os.Stat(unixShell()); err != nil {
+		t.Fatalf("allowlisted commands would run through %s: %v", unixShell(), err)
+	}
+}
+
 // TestExecuteCommandScripts runs real processes: the refusal is only worth
 // something if nothing ran, so the injection case checks for its side effect.
 func TestExecuteCommandScripts(t *testing.T) {

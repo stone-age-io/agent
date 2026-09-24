@@ -48,6 +48,13 @@ that period, and this file starts where the versioned releases do.
   process behind held the reply for as long as that process lived. Output is
   now collected for at most one second after the command exits or is killed.
 
+- **Allowlisted commands work on a stock FreeBSD.** They ran through
+  `/bin/bash`, which FreeBSD's base system doesn't have, so every entry in
+  `allowed_commands` failed with "no such file" unless someone had installed
+  bash and linked it there by hand. FreeBSD now uses its own `/bin/sh`. Linux
+  still uses `/bin/bash`. If you linked bash into `/bin` to make this work and
+  your FreeBSD allowlist uses bash-only syntax, rewrite those entries for `sh`.
+
 - **`cmd.logs` reads what `allowed_log_paths` allows.** A substring denylist
   in front of the allowlist refused any path containing `sam`, `system32`,
   `.exe`, `.dll`, `.sys` or `..`, whatever the operator had allowed. That

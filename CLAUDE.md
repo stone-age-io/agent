@@ -410,7 +410,9 @@ Use build tags for platform-specific code:
 
 **Key platform differences:**
 - Windows: PowerShell execution, Windows Service SCM
-- Linux/FreeBSD: Bash execution, systemd/rc.d
+- Linux: allowlisted commands run through `/bin/bash`, services through systemd
+- FreeBSD: allowlisted commands run through `/bin/sh` -- the base system has no bash --
+  services through rc.d
 - Metrics: gopsutil on every platform
 
 ## NATS Subjects

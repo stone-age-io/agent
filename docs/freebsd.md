@@ -285,6 +285,11 @@ commands:
 
 **Security note**: Only exact matches are allowed. Be specific!
 
+Allowlisted commands run through FreeBSD's `/bin/sh`, so write them in `sh`
+syntax. Bash isn't part of the base system, and the agent doesn't need it.
+Scripts are different: each script runs with whatever interpreter its own
+`#!` line names.
+
 ### Log File Paths
 
 Configure which log files can be retrieved:
