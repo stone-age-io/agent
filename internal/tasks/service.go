@@ -1,11 +1,45 @@
 package tasks
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // serviceCommandTimeout bounds external service-control commands (systemctl,
 // rc.d) so a hung service manager cannot block the NATS command handler
 // indefinitely. Matches the 30s wait used by the Windows SCM implementation.
 const serviceCommandTimeout = 30 * time.Second
+
+// checkServiceRequest is the cmd.service gate: the service must be allowlisted
+// and the action one of start, stop or restart. Every platform calls it before
+// touching its service manager.
+//
+// Before, Windows checked the action only after connecting to the Service
+// Control Manager, which refuses a non-admin connection. So from an ordinary
+// shell a bogus action came back as "Access is denied" rather than "invalid
+// action", and the answer depended on who ran the agent rather than on what was
+// asked. One copy here, like the cmd.exec gate, so the platforms cannot drift
+// apart again.
+func checkServiceRequest(name, action string, allowedServices []string) error {
+	if !isServiceAllowed(name, allowedServices) {
+		return fmt.Errorf("service not in allowed list: %s", name)
+	}
+	switch action {
+	case "start", "stop", "restart":
+		return nil
+	}
+	return fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
+}
+
+// isServiceAllowed checks if a service is in the allowed list
+func isServiceAllowed(name string, allowedServices []string) bool {
+	for _, allowed := range allowedServices {
+		if name == allowed {
+			return true
+		}
+	}
+	return false
+}
 
 // ServiceStatus represents the status of a system service
 // This structure is shared across all platforms (Windows, Linux, FreeBSD)

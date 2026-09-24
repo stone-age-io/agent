@@ -14,22 +14,13 @@ import (
 
 // ControlService manages rc.d services on FreeBSD
 func (e *Executor) ControlService(name, action string, allowedServices []string) (string, error) {
-	// Validate service is in whitelist
-	if !isServiceAllowed(name, allowedServices) {
-		return "", fmt.Errorf("service not in allowed list: %s", name)
+	if err := checkServiceRequest(name, action, allowedServices); err != nil {
+		return "", err
 	}
 
 	e.logger.Info("Controlling rc.d service",
 		zap.String("service", name),
 		zap.String("action", action))
-
-	// Validate action
-	switch action {
-	case "start", "stop", "restart":
-		// Valid actions
-	default:
-		return "", fmt.Errorf("invalid action: %s (must be start, stop, or restart)", action)
-	}
 
 	// Execute service command
 	ctx, cancel := context.WithTimeout(context.Background(), serviceCommandTimeout)
@@ -115,14 +106,4 @@ func (e *Executor) getServiceStatus(name string) (*ServiceStatus, error) {
 		Name:   name,
 		Status: status,
 	}, nil
-}
-
-// isServiceAllowed checks if a service is in the allowed list
-func isServiceAllowed(name string, allowedServices []string) bool {
-	for _, allowed := range allowedServices {
-		if name == allowed {
-			return true
-		}
-	}
-	return false
 }

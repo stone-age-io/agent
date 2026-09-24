@@ -6,6 +6,9 @@ import "fmt"
 
 // ControlService is a stub for unsupported platforms
 func (e *Executor) ControlService(name, action string, allowedServices []string) (string, error) {
+	if err := checkServiceRequest(name, action, allowedServices); err != nil {
+		return "", err
+	}
 	return "", fmt.Errorf("service control not supported on this platform")
 }
 
