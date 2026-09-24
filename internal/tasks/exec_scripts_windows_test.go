@@ -6,11 +6,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/windows"
 )
 
 // TestAllowedCommand tests command allowlist validation
@@ -335,4 +337,53 @@ func TestExecuteCommandScripts(t *testing.T) {
 			t.Fatal("the injected command ran")
 		}
 	})
+}
+
+// TestTimeoutKillsTheProcessTree: the timeout kills what powershell.exe
+// started, not only powershell.exe. The child is a ping, started with
+// Start-Process so it is a separate process, and it writes its pid to a file
+// because partial stdout from PowerShell may still be buffered when the kill
+// lands.
+func TestTimeoutKillsTheProcessTree(t *testing.T) {
+	executor := NewExecutor(zap.NewNop(), 0, context.Background())
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	cmd := "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru -NoNewWindow; " +
+		"Set-Content -Path '" + pidFile + "' -Value $p.Id; Wait-Process -Id $p.Id"
+
+	_, code, err := executor.ExecuteCommand(cmd, []string{cmd}, "", 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "timeout") || code != -1 {
+		t.Fatalf("got (%d, %v), want a timeout with exit code -1", code, err)
+	}
+
+	raw, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("the command never wrote its child's pid: %v", readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if convErr != nil {
+		t.Fatalf("pid file = %q", raw)
+	}
+
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if !processAlive(pid) {
+			return
+		}
+	}
+	t.Errorf("child %d survived the timeout", pid)
+}
+
+// processAlive asks Windows directly: a process that has exited reports an
+// exit code other than STILL_ACTIVE (259) even while a handle keeps it listed.
+func processAlive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return false
+	}
+	return code == 259
 }

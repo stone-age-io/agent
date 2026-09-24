@@ -126,6 +126,7 @@ func runProcess(ctx context.Context, timeout time.Duration, name string, args ..
 
 	cmd := exec.CommandContext(cmdCtx, name, args...)
 	cmd.WaitDelay = pipeWaitDelay
+	killTreeOnCancel(cmd)
 
 	// Capture stdout and stderr (capped to avoid unbounded memory use)
 	var stdout, stderr limitedBuffer

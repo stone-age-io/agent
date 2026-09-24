@@ -6,7 +6,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -64,10 +66,12 @@ func TestExecuteCommandScripts(t *testing.T) {
 		}
 	})
 
-	t.Run("timeout returns what was printed, and returns on time", func(t *testing.T) {
-		// `sleep` is a child of bash, not bash itself, so it outlives the kill
-		// and holds the output pipe: this took the full 5s before WaitDelay.
-		cmd := "echo started; sleep 5; echo done"
+	t.Run("timeout returns what was printed, on time, and kills the children", func(t *testing.T) {
+		// `sleep` is a child of bash, not bash itself. Killing only bash left
+		// it running and holding the output pipe: the reply took the full
+		// sleep, and after WaitDelay the sleep still outlived the reply.
+		pidFile := filepath.Join(t.TempDir(), "child.pid")
+		cmd := "echo started; sleep 30 & echo $! > " + pidFile + "; wait"
 		start := time.Now()
 		out, code, err := executor.ExecuteCommand(cmd, []string{cmd}, "", 500*time.Millisecond)
 		if elapsed := time.Since(start); elapsed > 3*time.Second {
@@ -79,18 +83,32 @@ func TestExecuteCommandScripts(t *testing.T) {
 		if !strings.Contains(out, "started") {
 			t.Errorf("output = %q, want the partial output", out)
 		}
+		if pid := readPID(t, pidFile); !eventuallyDead(pid) {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("child %d survived the timeout", pid)
+		}
 	})
 
-	t.Run("a process left behind does not hold the reply", func(t *testing.T) {
+	t.Run("a process left behind does not hold the reply, and is left alone", func(t *testing.T) {
 		// The shell exits at once; the backgrounded sleep keeps stdout open.
-		cmd := "sleep 5 & echo launched"
+		// Nothing timed out, so nothing is killed: this is the shape of a
+		// script that starts a daemon.
+		cmd := "sleep 30 & echo $!"
 		start := time.Now()
 		out, code, err := executor.ExecuteCommand(cmd, []string{cmd}, "", 30*time.Second)
 		if elapsed := time.Since(start); elapsed > 3*time.Second {
 			t.Errorf("took %v; the reply waited for the background process", elapsed)
 		}
-		if err != nil || code != 0 || strings.TrimSpace(out) != "launched" {
-			t.Fatalf("got (%q, %d, %v), want (\"launched\", 0, nil)", out, code, err)
+		if err != nil || code != 0 {
+			t.Fatalf("got (%q, %d, %v), want success", out, code, err)
+		}
+		pid, convErr := strconv.Atoi(strings.TrimSpace(out))
+		if convErr != nil {
+			t.Fatalf("output = %q, want the background pid", out)
+		}
+		defer syscall.Kill(pid, syscall.SIGKILL)
+		if syscall.Kill(pid, 0) != nil {
+			t.Error("the background process was killed; only a timeout should do that")
 		}
 	})
 
@@ -102,4 +120,27 @@ func TestExecuteCommandScripts(t *testing.T) {
 			t.Fatalf("got (%q, %d, %v), want (\"one two\", 0, nil)", out, code, err)
 		}
 	})
+}
+
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the command never wrote its child's pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("pid file = %q", raw)
+	}
+	return pid
+}
+
+// eventuallyDead polls, because a killed child is reaped by init, not by us.
+func eventuallyDead(pid int) bool {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if syscall.Kill(pid, 0) != nil {
+			return true
+		}
+	}
+	return false
 }

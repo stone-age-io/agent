@@ -48,6 +48,14 @@ that period, and this file starts where the versioned releases do.
   process behind held the reply for as long as that process lived. Output is
   now collected for at most one second after the command exits or is killed.
 
+- **A timeout kills everything the command started.** It used to kill only
+  the shell or `powershell.exe`, so a child it had started (a `sleep`, a
+  long-running check) kept running after the reply had gone out. The command
+  now runs in its own process group on Linux and FreeBSD, and the timeout
+  kills the group. On Windows it runs `taskkill /T`. Only a timeout or agent
+  shutdown does this: a command that exits normally and leaves a daemon
+  running (a script that starts a service, say) is left alone.
+
 - **Allowlisted commands work on a stock FreeBSD.** They ran through
   `/bin/bash`, which FreeBSD's base system doesn't have, so every entry in
   `allowed_commands` failed with "no such file" unless someone had installed

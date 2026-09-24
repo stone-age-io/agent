@@ -4,7 +4,11 @@ package tasks
 
 import (
 	"context"
+	"errors"
+	"os"
+	"os/exec"
 	"runtime"
+	"syscall"
 	"time"
 )
 
@@ -31,4 +35,22 @@ func runShell(ctx context.Context, command string, timeout time.Duration) (strin
 // must be executable, and no shell parses the path.
 func runScript(ctx context.Context, path string, timeout time.Duration) (string, int, error) {
 	return runProcess(ctx, timeout, path)
+}
+
+// killTreeOnCancel makes a timeout (or shutdown) kill everything the command
+// started, not just the process runProcess started. The command gets its own
+// process group, and cancelling kills the group.
+//
+// Only cancellation does this. A command that exits on its own and leaves a
+// daemon behind -- a script that starts a service -- is left alone, and a
+// well-behaved daemon has moved to its own session by then anyway.
+func killTreeOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 }
