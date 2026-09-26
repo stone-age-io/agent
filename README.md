@@ -80,7 +80,8 @@ to reach the leaf server it hosts.
 
 None of these is a mode you switch on. There is no `edge.enabled` key and no
 gateway flag on the platform either -- a "gateway" is just an agent with more of
-these keys set, and a Thing whose type says so. See
+these keys set, running as an ordinary Thing. Not even its `thing_type` marks it;
+"gateway" is at most a naming convention a tenant picks. See
 **[Leaf Nodes](docs/leaf-node.md)**.
 
 ---

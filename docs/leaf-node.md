@@ -12,8 +12,9 @@ Nothing. There is no gateway mode, no `edge.enabled` key, and no separate kind o
 record on the platform.
 
 A gateway is a **Thing** whose agent happens to have more capabilities turned on.
-Its `thing_type` on the platform already says it is a gateway; a second marker in
-the config would be a second thing to get wrong, and `edge.enabled: false` beside
+Nothing on the platform marks it: `thing_types` has no gateway field, and
+"gateway" is at most a naming convention a tenant picks. A marker in the config
+would only be a thing to get wrong, and `edge.enabled: false` beside
 `sync.twin: true` has no correct behaviour. So the agent decides for itself: if
 either `nats.server_config` or a `sync:` declaration is set, the edge goroutine
 has work to do.
@@ -343,7 +344,7 @@ a clean bill of health.
 
 ## 6. Deploy flow
 
-1. In the console, create the site's **Thing** (its `thing_type` says gateway).
+1. In the console, create the site's **Thing** (any type; nothing marks it as a gateway).
    Copy the login password from the success dialog.
 2. Install the agent and write `/etc/agent/config.yaml`:
 
@@ -390,8 +391,8 @@ real consumer appears, build that consumer's read path rather than a general
 mirror.
 
 **The `leaf_nodes` collection.** With the mirror gone, a leaf node was a Thing
-with a `domain` column and one server-provisioned NATS user. `thing_types` already
-says whether a device is a gateway, and the `domain` column was a second copy of
+with a `domain` column and one server-provisioned NATS user. Nothing needed to mark
+a device as a gateway at all, and the `domain` column was a second copy of
 the code that could disagree with it.
 
 **The `leaf_status` heartbeat.** The agent used to write a liveness beat into a

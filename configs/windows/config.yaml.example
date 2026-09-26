@@ -101,13 +101,21 @@ tasks:
     enabled: true
     interval: "24h"  # Daily (also runs on startup)
 
-# Digital-twin sync (optional, off by default)
+# KV sync (optional, off by default)
 #
-# Relays this site's reported state up to the hub and mirrors desired state
-# down. Off by default because it moves data-plane traffic -- an upgrade must
-# not silently start doing it. Requires the platform block.
-twin:
-  enabled: false
+# Relays declared buckets up to the hub and mirrors declared buckets down.
+# Off by default because it moves data-plane traffic -- an upgrade must not
+# silently start doing it. Requires the platform block. `twin: true` is a
+# preset for the two digital-twin buckets. (The old `twin.enabled` key is
+# refused by name.)
+# sync:
+#   twin: true                 # preset: the two digital-twin buckets
+#   mirrors:                   # hub -> edge, maintained by the server
+#     - bucket: "recipes"
+#       keys: "line-a.>"       # optional; CANNOT be changed after creation
+#   relays:                    # edge -> hub, pumped by the agent
+#     - bucket: "events"
+#       keys: "site.S01.>"     # optional. A bucket belongs to ONE list.
 
 # Readiness and metrics on this box (optional)
 #
