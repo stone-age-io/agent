@@ -6,7 +6,7 @@ require (
 	github.com/go-co-op/gocron/v2 v2.18.0
 	github.com/kardianos/service v1.3.0
 	github.com/nats-io/jwt/v2 v2.8.2
-	github.com/nats-io/nats-server/v2 v2.14.7
+	github.com/nats-io/nats-server/v2 v2.15.0
 	github.com/nats-io/nats.go v1.54.0
 	github.com/nats-io/nkeys v0.4.16
 	github.com/prometheus/client_golang v1.23.2

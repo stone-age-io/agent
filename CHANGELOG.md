@@ -45,6 +45,13 @@ that period, and this file starts where the versioned releases do.
 
 - nats.go v1.51.0 → v1.54.0. Among other fixes, a micro endpoint no longer
   over-matches a longer subject.
+- **The embedded nats-server is v2.15.0** (was v2.14.7). This is the server a
+  gateway hosts with `nats.server_config`. Two changes reach a site: a mirror
+  now recovers by itself when its source stream is recreated, and a stream
+  now allows at most 1000 consumers unless `max_consumers` or the server's
+  `jetstream.limits.default_max_consumers` says otherwise. A site's watchers
+  and relays use a small fraction of that. See the
+  [2.15 upgrade guide](https://docs.nats.io/release-notes/upgrade-to-2.15).
 
 ## [0.3.2] - 2026-09-24
 
