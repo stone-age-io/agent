@@ -60,6 +60,7 @@ to reach the leaf server it hosts.
 - **Telemetry Publishing**: JetStream for durable metrics, service status, and inventory
 - **Heartbeats**: Core NATS liveness beacons (last-write-wins, no replay)
 - **Command Handling**: Core NATS request/reply
+- **Service Discovery**: the commands are a NATS micro service named `stone-agent`, so `nats micro ls stone-agent` lists every agent in the account, and `info` and `stats` give each one's code, location, OS, version and per-command request and error counts. See [Service Discovery](docs/architecture.md#service-discovery)
 - **Multi-Tenant**: NATS account isolation
 - **TLS Support**: Encrypted communication
 

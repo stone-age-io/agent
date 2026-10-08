@@ -183,7 +183,11 @@ control that can disagree with the first.
    agents.<code>.cmd.<command>
    agents.<code>.telemetry.<type>
    agents.<code>.heartbeat
+   $SRV.<PING|INFO|STATS>[.stone-agent[.<id>]]
    ```
+   The `$SRV` subjects are service discovery; see
+   [Service Discovery](#service-discovery). Despite the `$`, they are ordinary
+   subjects in the agent's own account.
 
 **Technology:**
 - **NATS Server**: Core + JetStream
@@ -413,6 +417,25 @@ answers `NotInstalled` rather than an error.
 - Account isolation (tenant cannot access another tenant's subjects)
 - Subject-based permissions
 
+**What an agent's NATS credential needs.** With the default `subject_prefix`
+of `agents`:
+
+| Direction | Subjects | For |
+|---|---|---|
+| Subscribe | `agents.<code>.cmd.>` | commands |
+| Subscribe | `$SRV.>` | service discovery |
+| Subscribe | `_INBOX.>` | answers to its own requests: JetStream publish acks and the `jetstream` check |
+| Publish | `agents.<code>.heartbeat`, `agents.<code>.telemetry.>` | heartbeats and telemetry |
+| Publish | `$JS.API.INFO` | the `jetstream` check |
+| Publish | `_INBOX.>`, or a response permission | replies to commands and to `$SRV` requests |
+
+A gateway needs more, because its mirrors and relays use the JetStream API and
+write KV; see [Leaf Nodes](leaf-node.md). Since pb-nats v0.3.0 an empty allow
+list on the platform grants **nothing**, so every row above has to be on the
+agent's NATS role. A subject that is missing does not stop the agent: the server
+refuses it, the agent logs it, and the `nats_permissions` check warns until the
+credential is fixed.
+
 **Platform Credentials (platform auth):**
 - Credentials fetched over HTTPS; a plain http:// platform URL is refused unless explicitly allowed for development
 - Password read from an environment variable (never in config files), and optional once the agent holds a session token
@@ -557,6 +580,7 @@ nats request "agents.device-123.cmd.health" '{}'
       {"name": "jetstream", "state": "ok", "detail": "available"},
       {"name": "nats", "state": "ok", "detail": "connected"},
       {"name": "nats_local", "state": "ok", "detail": "connected"},
+      {"name": "nats_permissions", "state": "ok", "detail": "no subject refused since connecting"},
       {"name": "nebula", "state": "skipped", "detail": "the overlay is not enabled"},
       {"name": "platform_sync", "state": "ok", "detail": "last sync 4m12s ago"},
       {"name": "sync", "state": "ok", "detail": "2 bucket(s) syncing"},
@@ -593,7 +617,8 @@ caller was already permitted to do.
 - `healthy`: every check reported `ok`
 - `degraded`: some check reported `warn` — it works and someone should look at
   it (an islanded site, a bucket that will not sync, a rolled-back overlay,
-  JetStream unusable, a majority of metrics scrapes failing)
+  JetStream unusable, a majority of metrics scrapes failing, a subject the
+  server refused)
 - `unhealthy`: some check reported `fail` — currently NATS being disconnected,
   and on a gateway the local leaf being unreachable
 
@@ -601,6 +626,50 @@ A warning does **not** make the agent unready: `/ready` still answers 200. The
 two endpoints answer different questions — "may I route traffic here" and "is
 anything wrong" — and collapsing them is how a green tick comes to mean
 nothing.
+
+### Service Discovery
+
+The commands are the endpoints of a [NATS micro
+service](https://docs.nats.io/using-nats/developer/services) named
+`stone-agent`. Every agent registers under that one name, so one request finds
+all of them:
+
+```bash
+nats micro ls stone-agent          # every agent: its instance id and version
+nats micro info stone-agent <id>   # one agent: code, location and OS, endpoints, counts
+nats micro stats stone-agent       # requests, errors and timings, per command, per agent
+```
+
+Under the hood these are requests to `$SRV.PING`, `$SRV.INFO` and `$SRV.STATS`,
+optionally narrowed to `.stone-agent` or `.stone-agent.<id>`. Every agent
+answers, and the caller collects the replies until a timeout. They are ordinary
+subjects in the account, so discovery never crosses into another tenant. A
+browser in the console can ask them with the user's own credential, which is
+the point: it cannot scrape `/metrics` on a box's loopback.
+
+What it does and does not tell you:
+
+- **It is not a health check.** Discovery answers on its own subscriptions, so
+  an agent whose command handler is stuck still answers `PING`. Use
+  `cmd.health`, and the error counts in `STATS`.
+- **The instance id lasts as long as the process.** It changes when the agent
+  restarts, not when it reconnects.
+- **Two agents with the same code show up as two instances** with the same
+  `code` in their metadata. Both still act on a command addressed to that code,
+  exactly as before; discovery is just the first thing that can show it.
+- **The reply bodies did not change.** An error reply also carries
+  `Nats-Service-Error` and `Nats-Service-Error-Code` headers: `400` when the
+  agent refused the request itself (unparseable, unknown action, a feature
+  this agent does not have), `500` when the work failed. Those are what
+  `STATS` counts.
+- **The version is the build version without its leading `v`.** A build that
+  is not stamped with a semver version (`dev`, from `make build` or
+  `go build`) reports `0.0.0-dev`, because micro refuses anything else.
+  `cmd.health` carries the stamp exactly as built.
+- **Discovery takes nine subscriptions** (three verbs, each at three levels).
+  Leave room for them in a role's `max_subscriptions`.
+- A credential without `$SRV.>` keeps the agent out of discovery and changes
+  nothing else; the `nats_permissions` check reports it.
 
 ---
 

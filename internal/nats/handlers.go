@@ -3,11 +3,12 @@ package nats
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
 
-	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/micro"
 	"github.com/stone-age-io/agent/internal/config"
 	"github.com/stone-age-io/agent/internal/health"
 	"github.com/stone-age-io/agent/internal/nebula"
@@ -83,103 +84,124 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 	}
 }
 
-// handleWithRecovery wraps a command handler with panic recovery
-// This prevents a panic in one command handler from crashing the entire agent
-func (h *CommandHandlers) handleWithRecovery(name string, handler nats.MsgHandler) nats.MsgHandler {
-	return func(msg *nats.Msg) {
+// ServiceName is the NATS micro service every agent registers as. It is a
+// constant, not config, because sharing it is the point: one request to
+// $SRV.PING.stone-agent is answered by every agent in the account. The prefix
+// keeps another vendor's "agent" out of that list.
+const ServiceName = "stone-agent"
+
+// Error codes for the Nats-Service-Error-Code header. Two, deliberately: 400 when
+// the handler refused the request itself (unparseable, an unknown action, a
+// feature this agent does not have), 500 for an error from whatever did the
+// work. Telling those two apart is worth a header; finer codes would need error
+// types threaded through the executor, and nothing reads them.
+const (
+	codeBadRequest = "400"
+	codeInternal   = "500"
+)
+
+// Register makes the command subjects the endpoints of one NATS micro service.
+//
+// The subjects do not change -- the group is {prefix}.{code}.cmd and each
+// endpoint is the old suffix -- and neither do the reply bodies, so nothing that
+// already calls the agent can tell. What it adds comes from the library:
+// $SRV.PING, $SRV.INFO and $SRV.STATS, which list every agent in the account,
+// their code, location and OS, and per-command request and error counts. The
+// console cannot scrape /metrics on a box's loopback, but it can ask those.
+//
+// The queue group is OFF, which keeps the wire behaviour exactly as it was:
+// plain subscriptions. Two agents misconfigured with the same code both act on
+// a command, as before -- but $SRV.PING now shows both, where nothing did.
+//
+// Discovery subscribes to nine $SRV subjects. A credential without them is
+// refused once and carries on: commands still answer, the agent is just absent
+// from discovery, and the nats_permissions check says so.
+//
+// Every command is registered whether or not this agent can carry it out, so
+// that rotate_creds and nebula answer with a reason instead of timing out on an
+// agent that is not platform-managed or has no overlay.
+func (h *CommandHandlers) Register() error {
+	svc, err := micro.AddService(h.natsClient.conn, micro.Config{
+		Name:        ServiceName,
+		Version:     serviceVersion(h.version),
+		Description: "Stone Age agent commands",
+		Metadata: map[string]string{
+			"code":     h.code,
+			"location": h.config.Location,
+			"os":       runtime.GOOS,
+		},
+		QueueGroupDisabled: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register the %s service: %w", ServiceName, err)
+	}
+
+	commands := svc.AddGroup(fmt.Sprintf("%s.%s.cmd", h.subjectPrefix, h.code))
+	for _, e := range []struct {
+		name    string
+		handler micro.HandlerFunc
+	}{
+		{"ping", h.handlePing},
+		{"service", h.handleServiceControl},
+		{"logs", h.handleLogFetch},
+		{"exec", h.handleCustomExec},
+		{"health", h.handleHealth},
+		{"rotate_creds", h.handleRotateCreds},
+		{"nebula", h.handleNebula},
+	} {
+		if err := commands.AddEndpoint(e.name, h.handleWithRecovery(e.name, e.handler)); err != nil {
+			return fmt.Errorf("failed to add the %s command: %w", e.name, err)
+		}
+	}
+
+	info := svc.Info()
+	h.logger.Info("Registered command service",
+		zap.String("service", info.Name),
+		zap.String("version", info.Version),
+		zap.String("id", info.ID),
+		zap.String("subjects", fmt.Sprintf("%s.%s.cmd.>", h.subjectPrefix, h.code)))
+	return nil
+}
+
+// semverPattern is the regular expression semver.org publishes, which is also
+// the one micro validates a service version against.
+var semverPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
+
+// serviceVersion is the build version in the form micro accepts.
+//
+// AddService refuses a version that is not semver, and the agent is not always
+// built with one: a plain `go build` and `make build` both stamp "dev". Without
+// this, every unreleased build would fail to start. A leading "v" is dropped,
+// since a tag written as v0.3.2 is semver once it goes; anything still not
+// semver after that reports as 0.0.0-dev. cmd.health carries the stamp exactly
+// as it was built.
+func serviceVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if semverPattern.MatchString(v) {
+		return v
+	}
+	return "0.0.0-dev"
+}
+
+// handleWithRecovery wraps a command handler with panic recovery, so a panic in
+// one command answers that command with an error instead of crashing the agent.
+// micro does not recover a handler's panics itself.
+func (h *CommandHandlers) handleWithRecovery(name string, handler micro.HandlerFunc) micro.HandlerFunc {
+	return func(req micro.Request) {
 		defer func() {
 			if r := recover(); r != nil {
-				// Log the panic with stack trace
 				h.logger.Error("Panic recovered in command handler",
 					zap.String("handler", name),
-					zap.String("subject", msg.Subject),
+					zap.String("subject", req.Subject()),
 					zap.Any("panic", r),
 					zap.String("stack", string(debug.Stack())))
 
-				// Send error response to caller
-				response := errorResponse{
-					Status: "error",
-					Error:  fmt.Sprintf("Internal error: handler panicked: %v", r),
-					TS:     utils.NowRFC3339(),
-				}
-				responseBytes, err := json.Marshal(response)
-				if err != nil {
-					h.logger.Error("Failed to marshal panic response", zap.Error(err))
-					msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-					return
-				}
-				msg.Respond(responseBytes)
+				h.respondError(req, codeInternal, fmt.Sprintf("Internal error: handler panicked: %v", r))
 			}
 		}()
 
-		// Execute the actual handler
-		handler(msg)
+		handler(req)
 	}
-}
-
-// SubscribeAll subscribes to all command subjects for this device
-func (h *CommandHandlers) SubscribeAll(client *Client) error {
-	// Subscribe to ping command with recovery
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.ping", h.subjectPrefix, h.code),
-		h.handleWithRecovery("ping", h.handlePing),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to service control command with recovery
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.service", h.subjectPrefix, h.code),
-		h.handleWithRecovery("service", h.handleServiceControl),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to log fetch command with recovery
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.logs", h.subjectPrefix, h.code),
-		h.handleWithRecovery("logs", h.handleLogFetch),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to custom exec command with recovery
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.exec", h.subjectPrefix, h.code),
-		h.handleWithRecovery("exec", h.handleCustomExec),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to health check command with recovery
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.health", h.subjectPrefix, h.code),
-		h.handleWithRecovery("health", h.handleHealth),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to credential rotation command with recovery.
-	// Subscribed unconditionally so an agent that is not platform-managed answers
-	// with a reason instead of timing out.
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.rotate_creds", h.subjectPrefix, h.code),
-		h.handleWithRecovery("rotate_creds", h.handleRotateCreds),
-	); err != nil {
-		return err
-	}
-
-	// Subscribe to the Nebula overlay command with recovery. Subscribed
-	// unconditionally, for the same reason as rotate_creds: an agent without the
-	// overlay enabled answers with a reason instead of timing out.
-	if _, err := client.Subscribe(
-		fmt.Sprintf("%s.%s.cmd.nebula", h.subjectPrefix, h.code),
-		h.handleWithRecovery("nebula", h.handleNebula),
-	); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // Response structures
@@ -343,21 +365,13 @@ type errorResponse struct {
 }
 
 // handlePing responds to ping commands
-func (h *CommandHandlers) handlePing(msg *nats.Msg) {
+func (h *CommandHandlers) handlePing(msg micro.Request) {
 	h.logger.Debug("Received ping command")
 
-	response := pingResponse{
+	h.reply(msg, pingResponse{
 		Status: "pong",
 		TS:     utils.NowRFC3339(),
-	}
-
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal ping response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
+	})
 
 	h.logger.Debug("Sent pong response")
 }
@@ -368,13 +382,13 @@ func (h *CommandHandlers) handlePing(msg *nats.Msg) {
 // The reply is sent and flushed BEFORE the reconnect: ForceReconnect drops the
 // connection this reply is travelling on, so reversing the order would cost the
 // caller their answer.
-func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
+func (h *CommandHandlers) handleRotateCreds(msg micro.Request) {
 	h.logger.Info("Received credential rotation command")
 
 	if h.credsRotator == nil {
 		h.logger.Warn("Credential rotation requested but this agent is not platform-managed",
 			zap.String("auth_type", h.config.NATS.Auth.Type))
-		h.respondError(msg, "credential rotation requires stone-age auth (this agent uses "+h.config.NATS.Auth.Type+")")
+		h.respondError(msg, codeBadRequest, "credential rotation requires stone-age auth (this agent uses "+h.config.NATS.Auth.Type+")")
 		return
 	}
 
@@ -382,7 +396,7 @@ func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
 	if err != nil {
 		h.logger.Error("Credential rotation failed", zap.Error(err))
 		h.taskExecutor.RecordCommandError(err)
-		h.respondRotateCreds(msg, rotateCredsResponse{
+		h.fail(msg, codeInternal, err.Error(), rotateCredsResponse{
 			Status: "error",
 			Error:  err.Error(),
 			TS:     utils.NowRFC3339(),
@@ -392,7 +406,7 @@ func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
 
 	h.taskExecutor.RecordCommandSuccess()
 
-	h.respondRotateCreds(msg, rotateCredsResponse{
+	h.reply(msg, rotateCredsResponse{
 		Status:  "success",
 		Changed: changed,
 		TS:      utils.NowRFC3339(),
@@ -428,41 +442,34 @@ func (h *CommandHandlers) handleRotateCreds(msg *nats.Msg) {
 //
 // There is no status action — cmd.health already carries the same block, and a
 // second way to ask one question is a second thing to keep in step.
-func (h *CommandHandlers) handleNebula(msg *nats.Msg) {
+func (h *CommandHandlers) handleNebula(msg micro.Request) {
 	var req nebulaRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
+	if err := json.Unmarshal(msg.Data(), &req); err != nil {
 		h.logger.Error("Failed to parse nebula request", zap.Error(err))
-		h.respondError(msg, "Invalid request format")
+		h.respondError(msg, codeBadRequest, "Invalid request format")
 		h.taskExecutor.RecordCommandError(err)
 		return
 	}
 
 	if h.nebulaCtl == nil {
-		h.respondError(msg, "nebula is not enabled on this agent (set nebula.enabled: true)")
+		h.respondError(msg, codeBadRequest, "nebula is not enabled on this agent (set nebula.enabled: true)")
 		return
 	}
 
 	switch req.Action {
 	case "sync", "restart":
 	default:
-		h.respondError(msg, `action must be "sync" or "restart"`)
+		h.respondError(msg, codeBadRequest, `action must be "sync" or "restart"`)
 		return
 	}
 
 	h.logger.Info("Accepted nebula command", zap.String("action", req.Action))
 
-	response := nebulaResponse{
+	h.reply(msg, nebulaResponse{
 		Status: "accepted",
 		Action: req.Action,
 		TS:     utils.NowRFC3339(),
-	}
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal nebula response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
+	})
 
 	// Get the acceptance onto the wire before touching the overlay it may be
 	// riding on.
@@ -512,26 +519,76 @@ func (h *CommandHandlers) runNebulaAction(action string) {
 	}
 }
 
-// respondRotateCreds marshals and sends a rotation response
-func (h *CommandHandlers) respondRotateCreds(msg *nats.Msg, response rotateCredsResponse) {
-	responseBytes, err := json.Marshal(response)
+// marshalFailure is the reply when a reply cannot be marshalled. Every response
+// type here is plain strings and numbers, so this should never be sent.
+var marshalFailure = []byte(`{"status":"error","error":"internal marshal failure"}`)
+
+// reply sends v as a successful command reply.
+func (h *CommandHandlers) reply(req micro.Request, v any) {
+	body, err := json.Marshal(v)
 	if err != nil {
-		h.logger.Error("Failed to marshal rotate_creds response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		h.logger.Error("Failed to marshal command reply", zap.String("subject", req.Subject()), zap.Error(err))
+		h.send(req, req.Error(codeInternal, "internal marshal failure", marshalFailure))
 		return
 	}
-	msg.Respond(responseBytes)
+	h.send(req, req.Respond(body))
+}
+
+// fail sends v as an error reply: the JSON body a caller has always received,
+// plus the Nats-Service-Error and Nats-Service-Error-Code headers.
+//
+// EVERY REPLY WHOSE STATUS IS "error" GOES THROUGH HERE, and that is the rule
+// to check in review. micro counts an error in $SRV.STATS only when the reply is
+// sent with req.Error, so an error body sent through reply() would be a failure
+// the service's own stats call a success.
+func (h *CommandHandlers) fail(req micro.Request, code, description string, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		h.logger.Error("Failed to marshal command error reply", zap.String("subject", req.Subject()), zap.Error(err))
+		code, description, body = codeInternal, "internal marshal failure", marshalFailure
+	}
+	h.send(req, req.Error(code, headerLine(description), body))
+}
+
+// respondError sends the generic error reply, for failures with nothing to say
+// beyond the message.
+func (h *CommandHandlers) respondError(req micro.Request, code, errorMsg string) {
+	h.fail(req, code, errorMsg, errorResponse{
+		Status: "error",
+		Error:  errorMsg,
+		TS:     utils.NowRFC3339(),
+	})
+}
+
+// send logs a reply that could not be sent. The usual cause is a publish with
+// no reply subject -- nobody is waiting -- so it is not worth more than debug.
+func (h *CommandHandlers) send(req micro.Request, err error) {
+	if err != nil {
+		h.logger.Debug("Command reply not sent", zap.String("subject", req.Subject()), zap.Error(err))
+	}
+}
+
+// headerLine makes an error message fit a header. A header value cannot span
+// lines, and micro refuses an empty description; the whole message is in the
+// JSON body either way.
+func headerLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "error"
+	}
+	return line
 }
 
 // handleServiceControl processes service start/stop/restart commands
-func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
+func (h *CommandHandlers) handleServiceControl(msg micro.Request) {
 	h.logger.Debug("Received service control command")
 
 	// Parse request
 	var req serviceControlRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
+	if err := json.Unmarshal(msg.Data(), &req); err != nil {
 		h.logger.Error("Failed to parse service control request", zap.Error(err))
-		h.respondError(msg, "Invalid request format")
+		h.respondError(msg, codeBadRequest, "Invalid request format")
 		h.taskExecutor.RecordCommandError(err)
 		return
 	}
@@ -560,40 +617,24 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 
 		h.taskExecutor.RecordCommandError(err)
 
-		response := serviceControlResponse{
+		h.fail(msg, codeInternal, err.Error(), serviceControlResponse{
 			Status: "error",
 			Error:  err.Error(),
 			TS:     utils.NowRFC3339(),
-		}
-		responseBytes, err := json.Marshal(response)
-		if err != nil {
-			h.logger.Error("Failed to marshal service control error response", zap.Error(err))
-			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-			return
-		}
-		msg.Respond(responseBytes)
+		})
 		return
 	}
 
 	h.taskExecutor.RecordCommandSuccess()
 
-	// Success response
-	response := serviceControlResponse{
+	h.reply(msg, serviceControlResponse{
 		Status:        "success",
 		ServiceName:   req.ServiceName,
 		Action:        req.Action,
 		Result:        result,
 		ServiceStatus: serviceStatus,
 		TS:            utils.NowRFC3339(),
-	}
-
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal service control response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
+	})
 
 	h.logger.Info("Service control succeeded",
 		zap.String("service", req.ServiceName),
@@ -601,14 +642,14 @@ func (h *CommandHandlers) handleServiceControl(msg *nats.Msg) {
 }
 
 // handleLogFetch retrieves log file contents
-func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
+func (h *CommandHandlers) handleLogFetch(msg micro.Request) {
 	h.logger.Debug("Received log fetch command")
 
 	// Parse request
 	var req logFetchRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
+	if err := json.Unmarshal(msg.Data(), &req); err != nil {
 		h.logger.Error("Failed to parse log fetch request", zap.Error(err))
-		h.respondError(msg, "Invalid request format")
+		h.respondError(msg, codeBadRequest, "Invalid request format")
 		h.taskExecutor.RecordCommandError(err)
 		return
 	}
@@ -626,39 +667,23 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 
 		h.taskExecutor.RecordCommandError(err)
 
-		response := logFetchResponse{
+		h.fail(msg, codeInternal, err.Error(), logFetchResponse{
 			Status: "error",
 			Error:  err.Error(),
 			TS:     utils.NowRFC3339(),
-		}
-		responseBytes, err := json.Marshal(response)
-		if err != nil {
-			h.logger.Error("Failed to marshal log fetch error response", zap.Error(err))
-			msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-			return
-		}
-		msg.Respond(responseBytes)
+		})
 		return
 	}
 
 	h.taskExecutor.RecordCommandSuccess()
 
-	// Success response
-	response := logFetchResponse{
+	h.reply(msg, logFetchResponse{
 		Status:     "success",
 		LogPath:    req.LogPath,
 		Lines:      lines,
 		TotalLines: len(lines),
 		TS:         utils.NowRFC3339(),
-	}
-
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal log fetch response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
+	})
 
 	h.logger.Info("Log fetch succeeded",
 		zap.String("path", req.LogPath),
@@ -666,14 +691,14 @@ func (h *CommandHandlers) handleLogFetch(msg *nats.Msg) {
 }
 
 // handleCustomExec executes whitelisted PowerShell commands or scripts
-func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
+func (h *CommandHandlers) handleCustomExec(msg micro.Request) {
 	h.logger.Debug("Received custom exec command")
 
 	// Parse request
 	var req customExecRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
+	if err := json.Unmarshal(msg.Data(), &req); err != nil {
 		h.logger.Error("Failed to parse exec request", zap.Error(err))
-		h.respondError(msg, "Invalid request format")
+		h.respondError(msg, codeBadRequest, "Invalid request format")
 		h.taskExecutor.RecordCommandError(err)
 		return
 	}
@@ -687,19 +712,15 @@ func (h *CommandHandlers) handleCustomExec(msg *nats.Msg) {
 		h.config.Commands.ScriptsDirectory,
 		h.config.Commands.Timeout,
 	)
+	response := execResponse(req.Command, output, exitCode, err)
 	if err != nil {
 		h.taskExecutor.RecordCommandError(err)
-	} else {
-		h.taskExecutor.RecordCommandSuccess()
-	}
-
-	responseBytes, err := json.Marshal(execResponse(req.Command, output, exitCode, err))
-	if err != nil {
-		h.logger.Error("Failed to marshal exec response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
+		h.fail(msg, codeInternal, err.Error(), response)
 		return
 	}
-	msg.Respond(responseBytes)
+
+	h.taskExecutor.RecordCommandSuccess()
+	h.reply(msg, response)
 }
 
 // execResponse is the cmd.exec reply for every outcome, as the executor
@@ -744,7 +765,7 @@ func encodeOutput(output string) json.RawMessage {
 }
 
 // handleHealth returns enhanced agent health information
-func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
+func (h *CommandHandlers) handleHealth(msg micro.Request) {
 	h.logger.Debug("Received health check command")
 
 	// Get agent metrics
@@ -776,7 +797,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 
 	status := determineHealthStatus(report)
 
-	response := healthResponse{
+	h.reply(msg, healthResponse{
 		Status: status,
 		TS:     utils.NowRFC3339(),
 		Agent:  agentMetrics,
@@ -786,15 +807,7 @@ func (h *CommandHandlers) handleHealth(msg *nats.Msg) {
 		OS:     osInfo,
 		Nebula: nebulaHealth,
 		Checks: report,
-	}
-
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal health response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
+	})
 
 	h.logger.Debug("Sent health response",
 		zap.String("status", status),
@@ -922,20 +935,4 @@ func determineHealthStatus(rep *health.Report) string {
 		// Every check skipped. Not a clean bill of health: nothing was examined.
 		return "degraded"
 	}
-}
-
-// respondError sends a generic error response
-func (h *CommandHandlers) respondError(msg *nats.Msg, errorMsg string) {
-	response := errorResponse{
-		Status: "error",
-		Error:  errorMsg,
-		TS:     utils.NowRFC3339(),
-	}
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		h.logger.Error("Failed to marshal error response", zap.Error(err))
-		msg.Respond([]byte(`{"status":"error","error":"internal marshal failure"}`))
-		return
-	}
-	msg.Respond(responseBytes)
 }

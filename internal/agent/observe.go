@@ -66,6 +66,30 @@ func registerAgentChecks(
 		return health.OK("available")
 	})
 
+	// A subject the server refused. The server says so once and the connection
+	// carries on, so what the refused subject was for -- a telemetry stream,
+	// a command, the agent's place in service discovery -- simply does not
+	// happen, and until this check the only trace was one log line.
+	//
+	// Warn, not fail, for the jetstream check's reason: the agent is still
+	// connected and still answering. It clears on reconnect; nats.go re-sends
+	// every subscription then, so a refusal that still applies comes back.
+	reg.Register("nats_permissions", func(ctx context.Context) health.Result {
+		if !natsClient.IsConnected() {
+			return health.Skip("not connected, so nothing can have been refused")
+		}
+		if r := natsClient.LastRefusal(); r != nil {
+			return health.Warn(
+				fmt.Sprintf("the server refused a subject at %s: %s", r.At.UTC().Format(time.RFC3339), r.Message),
+				"Grant the subject in this agent's NATS permissions (on the platform, its NATS role). A "+
+					"platform-managed agent adopts the reissued credential on its next sync, or at once with "+
+					"cmd.rotate_creds. A refused $SRV subject only hides the agent from service discovery; "+
+					"commands still work.",
+			)
+		}
+		return health.OK("no subject refused since connecting")
+	})
+
 	// The scrape failure rate, which used to be a branch inside cmd.health's
 	// status function. It is a check now so that one registry decides what
 	// "degraded" means, instead of the NATS command and the /ready endpoint each

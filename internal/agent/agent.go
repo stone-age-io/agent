@@ -199,12 +199,12 @@ func New(configPath string, version string) (*Agent, error) {
 	// Create command handlers (now with NATS client for health checks and version)
 	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager), observeServer)
 
-	// Subscribe to commands
-	logger.Info("Subscribing to commands...")
-	if err := handlers.SubscribeAll(natsClient); err != nil {
+	// Register the commands as a NATS micro service
+	logger.Info("Registering command service...")
+	if err := handlers.Register(); err != nil {
 		cancel()
 		natsClient.Close()
-		return nil, fmt.Errorf("failed to subscribe to commands: %w", err)
+		return nil, fmt.Errorf("failed to register command service: %w", err)
 	}
 
 	// Create and start scheduler
