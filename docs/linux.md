@@ -242,6 +242,10 @@ nats request "agents.linux-server-01.cmd.ping" '{}'
 # Check health
 nats request "agents.linux-server-01.cmd.health" '{}'
 
+# Find it by service discovery: every agent in the account answers
+# (needs $SRV.> on the agent's NATS role; see docs/architecture.md)
+nats micro ls stone-agent
+
 # Subscribe to telemetry
 nats sub "agents.linux-server-01.>"
 ```

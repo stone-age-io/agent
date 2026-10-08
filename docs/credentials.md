@@ -228,5 +228,8 @@ The thing exists but its `nats_user` relation is empty. Only an owner or admin c
 ### "platform did not confirm the rotation"
 The rotation route answered without `rotated: true`. Check the platform logs; the identity may be revoked (setting `regenerate` on a revoked identity re-enables it, which is deliberately an owner/admin action).
 
+### "Permissions Violation for Subscription to ..." (or "for Publish to ...") in the log
+The agent connected, and the server refused one subject its credential does not allow. The agent keeps running and everything else keeps working; the `nats_permissions` check reports `warn` (`cmd.health` says `degraded`, `/ready` stays 200) and quotes the subject. Add it to the thing's NATS role on the platform -- [docs/architecture.md](architecture.md#1-authentication--authorization) lists what an agent needs. The agent adopts the reissued credential on its next sync, or at once with `cmd.rotate_creds`. A refused `$SRV` subject only keeps the agent out of service discovery.
+
 ### Credential sync warnings in the log
 Sync failures are warnings, not fatal errors: the credential on disk is usually still valid and the next run retries. Persistent failures mean the platform is unreachable or the session has lapsed with no password available.

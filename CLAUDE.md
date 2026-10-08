@@ -614,6 +614,8 @@ go test -v -run TestName ./internal/tasks/...
 
 Key dependencies (from go.mod):
 - `github.com/nats-io/nats.go` - NATS client, and its `micro` package for the command service
+- `github.com/nats-io/nats-server/v2` - The embedded server a gateway hosts (`internal/natsd`),
+  and the real server the tests stand up rather than a mock
 - `github.com/go-co-op/gocron/v2` - Task scheduling
 - `github.com/kardianos/service` - Cross-platform service management
 - `github.com/spf13/viper` - Configuration

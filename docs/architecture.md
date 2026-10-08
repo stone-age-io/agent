@@ -668,6 +668,11 @@ What it does and does not tell you:
   `cmd.health` carries the stamp exactly as built.
 - **Discovery takes nine subscriptions** (three verbs, each at three levels).
   Leave room for them in a role's `max_subscriptions`.
+- **Behind a leaf node, two credentials must allow `$SRV.>`**: the agent's own,
+  and the one the leaf uses for its uplink to the hub. A request from the hub
+  crosses the leaf connection only as far as that connection's permissions
+  let it. On a gateway whose agent hosts the leaf, both are the same Thing's
+  credential.
 - A credential without `$SRV.>` keeps the agent out of discovery and changes
   nothing else; the `nats_permissions` check reports it.
 
@@ -776,8 +781,11 @@ Route messages based on content:
 
 **Not Planned:**
 - Built-in metric analysis (use external tools)
-- Persistent local storage (stateless by design)
-- HTTP endpoints (NATS-only philosophy)
+- A local store of telemetry: what the agent keeps on disk is its own state
+  (credentials, the platform session, the last Nebula config that worked) and,
+  on a gateway, the leaf's JetStream
+- A management API over HTTP: the agent is instructed only over its own NATS
+  connection. `/ready` and `/metrics` are read-only
 - Rich UI in agent (separation of concerns)
 
 ---
