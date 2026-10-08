@@ -8,6 +8,51 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+> **Upgrading.** Add `$SRV.>` to the subscribe list of each agent's NATS role.
+> Without it nothing breaks -- commands answer exactly as before -- but the agent
+> is missing from service discovery, and the new `nats_permissions` check reports
+> `degraded` in `cmd.health` (`/ready` stays 200) until the role is updated.
+> The same check will also surface any subject the agent's role was already
+> refusing, which until now left no trace beyond a crash (see Fixed).
+
+### Fixed
+
+- **A subject the server refused crashed the agent.** The NATS error callback
+  read the subscription's subject without checking it, and nats.go calls it with
+  no subscription for a permissions violation and for an authorization error on
+  reconnect. The panic happened on a goroutine nothing recovers, so the process
+  died. Present since the first release. An agent whose role did not allow one of
+  its own subjects -- its command subtree, say -- could not stay up.
+
+### Added
+
+- **Service discovery.** The commands are now the endpoints of a NATS micro
+  service named `stone-agent`, so `nats micro ls stone-agent` lists every agent
+  in the account, and `nats micro info` / `nats micro stats` give each one's
+  code, location, OS and version, and request, error and timing counts per
+  command. The console can ask the same questions with the logged-in user's own
+  credential, where it cannot reach `/metrics` on a box's loopback. The command
+  subjects and reply bodies are unchanged. See `docs/architecture.md`.
+- **Error replies carry `Nats-Service-Error` and `Nats-Service-Error-Code`
+  headers** beside the unchanged JSON body: `400` when the agent refused the
+  request itself, `500` when the work failed.
+- **A `nats_permissions` readiness check.** It warns with the server's own
+  message when the server has refused a subject since the agent last connected.
+
+### Changed
+
+- nats.go v1.51.0 → v1.54.0. Among other fixes, a micro endpoint no longer
+  over-matches a longer subject.
+- **The embedded nats-server is v2.15.0** (was v2.14.7). This is the server a
+  gateway hosts with `nats.server_config`. Two changes reach a site: a mirror
+  now recovers by itself when its source stream is recreated, and a stream
+  now allows at most 1000 consumers unless `max_consumers` or the server's
+  `jetstream.limits.default_max_consumers` says otherwise. A site's watchers
+  and relays use a small fraction of that. See the
+  [2.15 upgrade guide](https://docs.nats.io/release-notes/upgrade-to-2.15).
+
 ## [0.3.2] - 2026-09-24
 
 ### Added

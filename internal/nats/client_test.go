@@ -1,10 +1,13 @@
 package nats
 
 import (
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stone-age-io/agent/internal/config"
 	"go.uber.org/zap"
 )
@@ -70,6 +73,30 @@ func TestNewClientFailsOnBadAuthType(t *testing.T) {
 	if err == nil {
 		client.Close()
 		t.Fatal("NewClient() returned no error for an invalid auth type")
+	}
+}
+
+// nats.go hands the error callback a nil subscription for a permissions
+// violation and for an authorization error on reconnect, on a goroutine
+// nothing recovers. The handler must survive both. A refusal is also kept for
+// the nats_permissions check; an error that is not a refusal is only logged.
+func TestAsyncErrorWithNoSubscription(t *testing.T) {
+	client, err := NewClient(unreachableConfig(t), zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient() error: %v", err)
+	}
+	defer client.Close()
+
+	client.handleAsyncError(nil, nil, nats.ErrAuthorization)
+	if r := client.LastRefusal(); r != nil {
+		t.Errorf("an authorization error was kept as a refusal: %q", r.Message)
+	}
+
+	refused := fmt.Errorf("%w: Permissions Violation for Subscription to \"$SRV.PING\"", nats.ErrPermissionViolation)
+	client.handleAsyncError(nil, nil, refused)
+	r := client.LastRefusal()
+	if r == nil || !strings.Contains(r.Message, `"$SRV.PING"`) {
+		t.Errorf("LastRefusal() = %+v, want the $SRV.PING refusal", r)
 	}
 }
 

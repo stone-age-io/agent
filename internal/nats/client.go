@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -33,6 +34,17 @@ type Client struct {
 	closing  atomic.Bool
 	lostOnce sync.Once
 	lost     chan struct{}
+
+	// refusal is the last subject the server refused since the client last
+	// connected, or nil. See handleAsyncError.
+	refusal atomic.Pointer[Refusal]
+}
+
+// Refusal is a permissions violation the server reported on this connection:
+// a publish or subscribe its credential does not allow.
+type Refusal struct {
+	Message string    // the server's own words, naming the subject
+	At      time.Time // when the agent heard about it
 }
 
 // NewClient creates a new NATS client with the specified configuration
@@ -73,7 +85,14 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 				logger.Info("NATS disconnected")
 			}
 		}),
+		// Both handlers clear the last refusal. A new connection starts with a
+		// clean slate, and the slate is honest: nats.go re-sends every
+		// subscription on reconnect, so a refusal that still applies is
+		// reported again. It cannot overtake the clear, either -- nats.go queues
+		// this callback while holding the connection lock, and a refusal is
+		// processed under the same lock.
 		nats.ConnectHandler(func(nc *nats.Conn) {
+			c.refusal.Store(nil)
 			logger.Info("Connected to NATS",
 				zap.String("url", nc.ConnectedUrl()),
 				zap.String("server_id", nc.ConnectedServerId()),
@@ -81,6 +100,7 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 			go c.checkJetStream(nc)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
+			c.refusal.Store(nil)
 			logger.Info("NATS reconnected", zap.String("url", nc.ConnectedUrl()))
 			go c.checkJetStream(nc)
 		}),
@@ -107,11 +127,7 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 			logger.Error("NATS connection closed permanently, agent will exit for restart")
 			c.lostOnce.Do(func() { close(c.lost) })
 		}),
-		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
-			logger.Error("NATS error",
-				zap.Error(err),
-				zap.String("subject", sub.Subject))
-		}),
+		nats.ErrorHandler(c.handleAsyncError),
 	}
 
 	// Configure TLS if enabled
@@ -214,6 +230,38 @@ func (c *Client) checkJetStream(nc *nats.Conn) {
 
 	c.jsAvailable.Store(true)
 	c.logger.Info("JetStream validated", zap.String("url", nc.ConnectedUrl()))
+}
+
+// handleAsyncError is nats.go's error callback: errors it hears about outside
+// any call the agent made.
+//
+// SUB IS NIL FOR THE ERRORS THAT MATTER MOST. nats.go reports a permissions
+// violation, and an authorization error on reconnect, with no subscription
+// attached (processTransientError and processAuthError both pass nil), and the
+// goroutine it calls this from has no recover. This handler read sub.Subject
+// unguarded from the first commit, so a subject the server refused did not
+// produce a log line -- it killed the process.
+//
+// A permissions violation is also kept, for the nats_permissions check. The
+// server says exactly once that it refused a subscription and the connection
+// otherwise carries on, so without this the only trace of, say, an agent hidden
+// from service discovery is one log line.
+func (c *Client) handleAsyncError(_ *nats.Conn, sub *nats.Subscription, err error) {
+	if errors.Is(err, nats.ErrPermissionViolation) {
+		c.refusal.Store(&Refusal{Message: err.Error(), At: time.Now()})
+	}
+
+	fields := []zap.Field{zap.Error(err)}
+	if sub != nil {
+		fields = append(fields, zap.String("subject", sub.Subject))
+	}
+	c.logger.Error("NATS error", fields...)
+}
+
+// LastRefusal returns the last subject the server refused since the client
+// last connected, or nil if it has refused none.
+func (c *Client) LastRefusal() *Refusal {
+	return c.refusal.Load()
 }
 
 // IsJetStreamAvailable reports whether the last JetStream check succeeded. It is
@@ -359,21 +407,6 @@ func (c *Client) PublishTelemetrySync(subject string, data []byte, timeout time.
 	case <-time.After(timeout):
 		return fmt.Errorf("publish timeout after %v", timeout)
 	}
-}
-
-// Subscribe creates a subscription to the specified subject
-// This is used for command handlers with Core NATS request/reply
-func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, error) {
-	sub, err := c.conn.Subscribe(subject, handler)
-	if err != nil {
-		c.logger.Error("Failed to subscribe",
-			zap.String("subject", subject),
-			zap.Error(err))
-		return nil, fmt.Errorf("failed to subscribe to %s: %w", subject, err)
-	}
-
-	c.logger.Info("Subscribed to subject", zap.String("subject", subject))
-	return sub, nil
 }
 
 // Drain gracefully closes the connection by draining all subscriptions

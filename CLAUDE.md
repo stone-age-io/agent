@@ -131,7 +131,7 @@ agent/
 ### Communication Flow
 - **Telemetry (JetStream)**: Metrics, service status, inventory → published asynchronously
 - **Heartbeats (Core NATS)**: Fire-and-forget liveness beacons — deliberately NOT JetStream (last-write-wins; a backlog of stale beats after reconnect would be harmful). Matches access-control/kiosk heartbeat semantics.
-- **Commands (Core NATS)**: Request/reply pattern with panic recovery
+- **Commands (Core NATS)**: Request/reply pattern with panic recovery, registered as the endpoints of one NATS micro service (see "Service discovery" below)
 - **Subject Naming**: `{prefix}.{code}.{type}` (e.g., `agents.server-01.heartbeat`)
 - **Stream contract**: The server-side JetStream stream must bind `{prefix}.*.telemetry.>` (NOT `{prefix}.>`) so heartbeats stay outside the stream by subject construction
 
@@ -200,6 +200,13 @@ agent/
    - Async publishing with automatic retries
    - `creds` and `platform` auth both connect with the .creds file; `UserCredentials`
      re-reads it on every reconnect, so `ForceReconnect()` adopts a replaced credential
+   - **The async error callback gets a nil subscription for the errors that matter
+     most** -- a permissions violation, and an auth error on reconnect -- and nats.go
+     runs it on a goroutine with no `recover`. `handleAsyncError` read `sub.Subject`
+     unguarded from the first commit, so a subject the server refused killed the
+     process. `TestRefusedDiscoveryLeavesCommandsWorking` crashes the test binary
+     without the guard. It also keeps the last refusal (`LastRefusal()`), cleared on
+     connect and reconnect, for the `nats_permissions` check
 
 6. **Scheduler** (`internal/scheduler/scheduler.go`):
    - Uses gocron/v2 for interval-based scheduling
@@ -370,7 +377,7 @@ agent/
       `agent_check_state`. The old inline ladder is what let a gateway with every
       bucket down answer "healthy" over NATS while its own `/ready` disagreed.
     - The registry is assembled from two sources that never overlap: `registerAgentChecks`
-      (`nats`, `jetstream`, `task_metrics`, `nebula`, `platform_sync`) answers for any
+      (`nats`, `jetstream`, `nats_permissions`, `task_metrics`, `nebula`, `platform_sync`) answers for any
       agent; `Edge.RegisterChecks` adds `nats_local`, `hub_uplink` and `sync`, which need
       a leaf on the box to mean anything.
     - **`observe.Start` calls `prober.Start` synchronously, not in a goroutine**, and
@@ -438,6 +445,32 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.nebula` - Overlay actions: `sync` (pull and apply now) or `restart` (bounce Nebula on the running config). Enabled agents only; answers with an error otherwise
 
 Command responses use `ts` (RFC3339 UTC) for their timestamp field.
+
+### Service discovery (`$SRV`)
+
+The commands are the endpoints of one NATS micro service (`nats.go/micro`),
+registered in `CommandHandlers.Register()`. Every agent registers as
+`stone-agent` -- a constant, because sharing the name is what lets one
+`$SRV.PING.stone-agent` find the whole fleet -- with metadata `code`,
+`location` and `os`. `$SRV` is an ordinary subject in the agent's own account,
+not a system subject.
+
+- **The subjects and the reply bodies did not change.** The group is
+  `{prefix}.{code}.cmd` and each endpoint is the old suffix. The queue group is
+  **off**, so the wire behaviour is the plain subscriptions it replaced.
+- **Every reply whose body says `"status":"error"` goes out through `h.fail`,
+  never `h.reply`.** micro counts an error in `$SRV.STATS` only when the reply is
+  sent with `req.Error`, which also adds the `Nats-Service-Error` and
+  `Nats-Service-Error-Code` headers. Two codes: `400` when the handler refused the
+  request itself, `500` when the work failed. An error body sent through `reply`
+  is a failure the service's own stats call a success.
+- `serviceVersion` exists because `AddService` refuses a non-semver version and
+  `make build` stamps `dev`; it drops a leading `v` and falls back to `0.0.0-dev`.
+- micro does not recover handler panics, so `handleWithRecovery` stays.
+- A credential without `$SRV.>` is refused discovery and nothing else. Commands
+  still answer; `nats_permissions` warns.
+- **Discovery is not a health check.** It answers on its own subscriptions, so a
+  stuck command handler still answers `PING`.
 
 **`cmd.nebula` is the one command that answers before it acts.** It replies
 `accepted` and does the work asynchronously, because both actions can interrupt
@@ -580,7 +613,9 @@ go test -v -run TestName ./internal/tasks/...
 ## Dependencies
 
 Key dependencies (from go.mod):
-- `github.com/nats-io/nats.go` - NATS client
+- `github.com/nats-io/nats.go` - NATS client, and its `micro` package for the command service
+- `github.com/nats-io/nats-server/v2` - The embedded server a gateway hosts (`internal/natsd`),
+  and the real server the tests stand up rather than a mock
 - `github.com/go-co-op/gocron/v2` - Task scheduling
 - `github.com/kardianos/service` - Cross-platform service management
 - `github.com/spf13/viper` - Configuration
@@ -605,8 +640,9 @@ Key dependencies (from go.mod):
 
 ### Adding a new command handler
 1. Define request/response structs in `internal/nats/handlers.go`
-2. Implement handler method on `CommandHandlers`
-3. Subscribe in `SubscribeAll()` with panic recovery
+2. Implement a `func(msg micro.Request)` method on `CommandHandlers`. Answer with
+   `h.reply`; send every error body through `h.fail` or `h.respondError`
+3. Add it to the endpoint list in `Register()`, which wraps it in panic recovery
 
 ### Adding platform support
 1. Create `*_<platform>.go` files with build tags
