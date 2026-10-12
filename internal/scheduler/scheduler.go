@@ -25,8 +25,8 @@ type CredsSyncer interface {
 	Sync() (bool, error)
 }
 
-// NebulaSyncer adopts the Nebula config the platform currently holds for this
-// agent, reporting whether anything was applied.
+// NebulaSyncer adopts this agent's Nebula config from its source, the platform
+// or a file, when it has changed, reporting whether anything was applied.
 //
 // Declared here for the same reason as CredsSyncer. Implemented by
 // *nebula.Manager.
@@ -516,8 +516,8 @@ func (s *Scheduler) publishInventory(code string) {
 		zap.String("os", inventory.OS.Name))
 }
 
-// syncNebula pulls the Nebula config the platform currently holds and adopts it
-// if it moved.
+// syncNebula re-reads the Nebula config from its source and adopts it if it
+// moved.
 //
 // Failures are warnings, not errors that stop anything: the overlay keeps running
 // on the config it has, and the next tick tries again. That is the right shape
@@ -541,5 +541,6 @@ func (s *Scheduler) syncNebula() {
 		return
 	}
 
-	s.logger.Info("Nebula config updated from platform")
+	// Source-neutral: Manager.Sync has already logged the source and revision.
+	s.logger.Info("Nebula config updated")
 }

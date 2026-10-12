@@ -418,9 +418,10 @@ type Health struct {
 	Enabled bool `json:"enabled"`
 	Running bool `json:"running"`
 
-	// Source says whether this device converges on its own. A "file" agent has no
-	// revision and never polls, so an empty ConfigRevision means something
-	// different for it than for a "platform" one.
+	// Source says whether this device converges on its own: a "file" agent
+	// re-reads its file, but nothing rewrites the file for it. It also says what
+	// ConfigRevision is: the nebula_host record's updated time for "platform",
+	// the SHA-256 of the file for "file".
 	Source string `json:"source,omitempty"`
 
 	OverlayIP    string `json:"overlay_ip,omitempty"`

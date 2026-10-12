@@ -175,21 +175,25 @@ type NebulaConfig struct {
 	// Source is where the config comes from: "platform" (the stone-age.io
 	// nebula_hosts record for this agent's thing) or "file".
 	//
-	// These are not peers. "platform" polls for changes, rolls back a config that
-	// cannot reach the mesh, and reports the revision it adopted. "file" reads a
-	// path and does none of that — it exists so the feature works without the
-	// platform, and so a device can join the mesh before it has a thing record.
+	// Both are re-read every SyncInterval, and a changed config is applied the
+	// same way: verified, rolled back if it cannot reach the mesh, cached, and its
+	// revision reported (the record's updated time for "platform", the file's
+	// SHA-256 for "file"). They are still not peers. The platform rewrites the
+	// config for revocation, renewal and CA rotation; nothing rewrites the file.
+	// "file" exists so the feature works without the platform, and so a device
+	// can join the mesh before it has a thing record.
 	Source string `mapstructure:"source"`
 
 	// ConfigFile is the Nebula config to load when Source is "file".
 	ConfigFile string `mapstructure:"config_file"`
 
 	// CacheFile holds the last config known to have reached the mesh, so a device
-	// that reboots while the platform is unreachable still comes up on the
-	// overlay. Contains the host private key: written 0600. Unused by "file".
+	// that reboots while its source is unreachable or broken still comes up on
+	// the overlay. Contains the host private key: written 0600. Required for
+	// "platform"; optional for "file", whose config is already on disk.
 	CacheFile string `mapstructure:"cache_file"`
 
-	// SyncInterval is how often to ask the platform whether the config changed.
+	// SyncInterval is how often to check the source for a changed config.
 	//
 	// THIS IS A SECURITY NUMBER, NOT A TUNING KNOB. Nebula has no CRL: revoking a
 	// certificate means adding its fingerprint to pki.blocklist in every other
@@ -670,6 +674,13 @@ func validateNebula(cfg *Config) error {
 		}
 	default:
 		return fmt.Errorf("nebula.source must be \"platform\" or \"file\" (got: %q)", cfg.Nebula.Source)
+	}
+
+	// Both sources are synced on this interval, and gocron refuses a job without
+	// one. Unchecked, a file source with "0" passed here and stopped the agent at
+	// scheduler startup instead.
+	if cfg.Nebula.SyncInterval <= 0 {
+		return fmt.Errorf("nebula.sync_interval must be greater than 0 (got: %v)", cfg.Nebula.SyncInterval)
 	}
 
 	// The sync interval is the revocation latency for this device: a blocklisted

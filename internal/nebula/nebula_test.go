@@ -1,9 +1,12 @@
 package nebula
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,21 +53,69 @@ func TestFileSourceReadsConfig(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	got, err := FileSource{Path: path}.Fetch("any-revision")
+	src := FileSource{Path: path}
+
+	// An empty knownRevision is Start on first boot: it must always apply.
+	got, err := src.Fetch("")
 	if err != nil {
 		t.Fatalf("Fetch() error: %v", err)
 	}
 
-	// A file source has no revision and reports every read as changed. That is its
-	// whole contract: it does not poll and cannot answer "unchanged".
+	sum := sha256.Sum256([]byte("pki:\n  ca: x\n"))
+	if want := hex.EncodeToString(sum[:]); got.Revision != want {
+		t.Errorf("Revision = %q, want the SHA-256 of the file %q", got.Revision, want)
+	}
 	if !got.Changed {
 		t.Error("Changed = false, want true")
 	}
-	if got.Revision != "" {
-		t.Errorf("Revision = %q, want empty", got.Revision)
-	}
 	if got.YAML != "pki:\n  ca: x\n" {
 		t.Errorf("YAML = %q, want the file contents", got.YAML)
+	}
+
+	again, err := src.Fetch(got.Revision)
+	if err != nil {
+		t.Fatalf("Fetch(known) error: %v", err)
+	}
+	if again.Changed || again.YAML != "" {
+		t.Errorf("Fetch(known) = %+v, want unchanged with no YAML", again)
+	}
+}
+
+// TestSyncFileSourceAppliesOnlyEdits: a file source used to report every read as
+// changed, so an unchanged file was reloaded, verified against a lighthouse and
+// re-cached every sync_interval.
+func TestSyncFileSourceAppliesOnlyEdits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nebula.yaml")
+	if err := os.WriteFile(path, []byte("pki:\n  ca: x\n"), 0600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := testManager(t, FileSource{Path: path})
+
+	// Stand in for a Start that applied this file, which needs a TUN device.
+	first, err := m.source.Fetch("")
+	if err != nil {
+		t.Fatalf("Fetch() error: %v", err)
+	}
+	m.revision = first.Revision
+
+	changed, err := m.Sync()
+	if err != nil {
+		t.Fatalf("Sync() on an unchanged file: %v", err)
+	}
+	if changed {
+		t.Error("Sync() re-applied an unchanged file")
+	}
+	if _, err := os.Stat(m.cacheFile); !errors.Is(err, os.ErrNotExist) {
+		t.Error("Sync() rewrote the cache for an unchanged file")
+	}
+
+	// Unparseable on purpose: without a TUN device an apply cannot succeed, and a
+	// parse error is how this test sees that Sync tried.
+	if err := os.WriteFile(path, []byte("pki: [this is not: valid yaml"), 0600); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if _, err := m.Sync(); err == nil || !strings.Contains(err.Error(), "parse nebula config") {
+		t.Errorf("Sync() after an edit returned %v, want an attempt to apply the edited file", err)
 	}
 }
 

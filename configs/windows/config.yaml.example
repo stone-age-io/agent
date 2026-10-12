@@ -159,7 +159,8 @@ nebula:
   enabled: false
 
   # "platform" reads this agent's nebula_host record (requires platform auth).
-  # "file" reads a config from disk and re-applies it every sync_interval.
+  # "file" reads a config from disk. An edit is picked up within sync_interval;
+  # an unchanged file is left alone.
   source: "platform"
   # config_file: "C:\\ProgramData\\Agent\\nebula.yaml"   # only for source: "file"
 

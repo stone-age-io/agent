@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 )
@@ -34,20 +36,28 @@ type Source interface {
 
 // FileSource reads a Nebula config from a path on disk.
 //
-// It has no revision and reports every read as changed, which is the whole of
-// its contract: a file source does not poll, does not cache, and does not roll
-// back. It exists so the feature works without the platform, and so a device can
-// join the mesh before it has a thing record.
+// Its revision is the SHA-256 of the file's contents, so a sync applies the file
+// only when it has been edited. Reporting every read as changed re-applied an
+// unchanged file every sync_interval: a reload, a wait for a lighthouse
+// handshake and a rewritten cache, for nothing. It exists so the feature works
+// without the platform, and so a device can join the mesh before it has a thing
+// record.
 type FileSource struct {
 	Path string
 }
 
 func (s FileSource) Name() string { return "file" }
 
-func (s FileSource) Fetch(string) (Fetched, error) {
+func (s FileSource) Fetch(knownRevision string) (Fetched, error) {
 	raw, err := os.ReadFile(s.Path)
 	if err != nil {
 		return Fetched{}, fmt.Errorf("read nebula config %s: %w", s.Path, err)
 	}
-	return Fetched{YAML: string(raw), Changed: true}, nil
+
+	sum := sha256.Sum256(raw)
+	revision := hex.EncodeToString(sum[:])
+	if revision == knownRevision {
+		return Fetched{Revision: revision}, nil
+	}
+	return Fetched{YAML: string(raw), Revision: revision, Changed: true}, nil
 }

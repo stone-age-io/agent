@@ -8,6 +8,23 @@ caveat that a minor version may break something. Pin what you deploy.
 History before `0.1.0` is not reconstructed here; `git log` is the record for
 that period, and this file starts where the versioned releases do.
 
+## [Unreleased]
+
+### Fixed
+
+- **`nebula.source: "file"` no longer re-applies an unchanged file.** Every
+  `sync_interval` it reloaded the config, waited for a lighthouse handshake,
+  rewrote `cache_file` and logged "Adopted new Nebula config", whether the file
+  had changed or not. The file's SHA-256 is now its revision, so only an edit is
+  applied -- within `sync_interval`, or at once with `cmd.nebula` `sync` -- and
+  `config_revision` in `cmd.health` is that hash.
+
+- **A file source with `nebula.sync_interval: "0"` is refused at config load.**
+  The interval was only checked for `source: "platform"`, so a zero passed
+  validation and the agent then failed to start when the scheduler refused the
+  job. Any positive interval is accepted for a file source; the 1m–1h bounds
+  still apply to the platform.
+
 ## [0.4.0] - 2026-10-08
 
 > **Upgrading.** Add `$SRV.>` to the subscribe list of each agent's NATS role.

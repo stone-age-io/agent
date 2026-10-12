@@ -497,9 +497,11 @@ sync, no rollback. It is a path handed to `config.C.Load`, and the `sync` and
 `verify` settings above do not apply to it.
 
 > **As built, it is synced.** The scheduler runs the Nebula sync for any enabled
-> overlay, and `FileSource.Fetch` reports every read as changed, so a file source
-> is re-read and re-applied every `sync_interval` — with verify, rollback and the
-> cache — whether the file changed or not. Still no revision probe.
+> overlay, so a file source is re-read every `sync_interval`. Its revision is the
+> SHA-256 of the file, so an unchanged file is left alone and an edit is applied
+> — with verify, rollback and the cache — within `sync_interval`, or at once with
+> `cmd.nebula` `sync`. Still no revision probe, and none is needed: the probe
+> keeps key material off the network, and reading a local file never puts it there.
 > [nebula.md](nebula.md#source-file) describes the shipped behaviour.
 
 ## Staging

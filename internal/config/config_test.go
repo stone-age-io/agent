@@ -1170,6 +1170,7 @@ func TestValidateNebula(t *testing.T) {
 				Enabled:       true,
 				Source:        "file",
 				ConfigFile:    "/etc/agent/nebula.yaml",
+				SyncInterval:  10 * time.Minute,
 				VerifyTimeout: 30 * time.Second,
 			},
 			authType: "creds",
@@ -1241,12 +1242,40 @@ func TestValidateNebula(t *testing.T) {
 			wantErr:  true,
 			errText:  "must not exceed 1 hour",
 		},
+
+		// A file source is synced too, so it needs an interval, but the bounds
+		// above are about the platform and do not apply to it.
+		{
+			name: "file source without a sync interval",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "file",
+				ConfigFile:    "/etc/agent/nebula.yaml",
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "creds",
+			wantErr:  true,
+			errText:  "must be greater than 0",
+		},
+		{
+			name: "file source with a short sync interval",
+			nebula: NebulaConfig{
+				Enabled:       true,
+				Source:        "file",
+				ConfigFile:    "/etc/agent/nebula.yaml",
+				SyncInterval:  30 * time.Second,
+				VerifyTimeout: 30 * time.Second,
+			},
+			authType: "creds",
+			wantErr:  false,
+		},
 		{
 			name: "verify timeout too short",
 			nebula: NebulaConfig{
 				Enabled:       true,
 				Source:        "file",
 				ConfigFile:    "/etc/agent/nebula.yaml",
+				SyncInterval:  10 * time.Minute,
 				VerifyTimeout: time.Second,
 			},
 			authType: "creds",

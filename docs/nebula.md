@@ -55,7 +55,7 @@ nebula:
 | `source` | `"platform"` | `"platform"` or `"file"`. |
 | `config_file` | — | Required for `source: "file"`. |
 | `cache_file` | per-OS | Last config known to have reached the mesh. Written `0600`. |
-| `sync_interval` | `"10m"` | 1m–1h. **This is the revocation latency.** |
+| `sync_interval` | `"10m"` | 1m–1h for `"platform"`; any positive duration for `"file"`. **This is the revocation latency.** |
 | `verify_timeout` | `"30s"` | 5s–5m. How long a new config has to reach a lighthouse. |
 
 ### Choosing `sync_interval`
@@ -80,13 +80,15 @@ nebula:
 ```
 
 Reads a Nebula config from disk and runs it. The file is read again every
-`sync_interval` and applied the same way a platform config is — reload, verify,
-roll back if the overlay does not come back — and the last one that worked is
-written to `cache_file`. There is no revision to compare, so each sync applies
-the file even when it has not changed. An edit to the file is picked up within
-`sync_interval`, or at once with `cmd.nebula` `sync`. It exists so the feature
-is usable without the platform, and so a device can join the mesh before it has
-a thing record. A file-sourced agent does not converge on its own: revocation,
+`sync_interval`, and an unchanged file is left alone. An edit is picked up within
+`sync_interval`, or at once with `cmd.nebula` `sync`, and applied the same way a
+platform config is — reload, verify, roll back if the overlay does not come
+back — and the last one that worked is written to `cache_file`. An edit that is
+rolled back is tried again at each sync until the file changes. The file's
+SHA-256 is its revision, so `config_revision` in `cmd.health` matches what
+`sha256sum` prints for the file that is running. It exists so the feature is
+usable without the platform, and so a device can join the mesh before it has a
+thing record. A file-sourced agent does not converge on its own: revocation,
 renewal and CA rotation all become your problem again, because nothing rewrites
 the file for you.
 
