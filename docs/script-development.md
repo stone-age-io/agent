@@ -119,7 +119,8 @@ fi
 
 ### 3. Use Timeouts
 
-Agent has a default 30-second timeout. Keep scripts fast:
+Agent has a default 30-second timeout (`commands.timeout`, 5s–5m), and a
+timeout kills the script and everything it started. Keep scripts fast:
 
 **Avoid:**
 ```powershell
@@ -602,7 +603,9 @@ logger -t agent-script "Script execution started"
 
 ## Script Library Structure
 
-Organize scripts by category:
+Organize scripts by category in your own repository. The agent runs only a file
+directly inside `commands.scripts_directory`, requested by its bare filename,
+so deploy the files flat — a script left in a subdirectory cannot be run:
 
 ```
 scripts/

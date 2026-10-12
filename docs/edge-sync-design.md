@@ -169,8 +169,10 @@ There is no `name` or `local_name` field, in either direction, for the reason in
 [What stays exactly as it is](#what-stays-exactly-as-it-is): a bucket has the
 same name at both ends or the relay has no reason to exist.
 
-`sync.twin: true` is expanded by the config loader into two ordinary entries
-carrying an unexported `preset` flag (which is what permits hub-side creation).
+`sync.twin: true` is expanded by the edge package (`plan()` in
+`internal/edge/sync.go`) into two ordinary entries carrying an unexported
+`preset` flag (which is what permits hub-side creation). The config loader only
+reserves the two names, so the both-lists check sees them.
 Everything downstream — the startup loop, the metrics, the check, the tests —
 then sees one kind of thing. Two lists instead of one polymorphic list with a
 `kind:` field, because every reader would have to branch on `kind` before doing
@@ -186,8 +188,10 @@ Both directions take the same field, spelled the same way, holding a KV key
 pattern — `line-a.>`, not `$KV.recipes.line-a.>`. The agent builds whatever the
 mechanism underneath actually wants:
 
-- **Mirror:** a subject filter on the mirror's `SubjectTransforms`, so the agent
-  prefixes `$KV.<bucket>.` itself.
+- **Mirror:** a subject filter on the mirror source, so the agent prefixes
+  `$KV.<bucket>.` itself. As built it is the source's `FilterSubject` rather
+  than `SubjectTransforms`: a filter with no transform, since the bucket keeps
+  the same name and keys at both ends.
 - **Relay:** the pattern goes straight to `WatchFiltered` instead of `WatchAll`.
 
 Two mechanisms, one user-facing idea. Making an operator write a `$KV.` subject
@@ -302,6 +306,11 @@ for, both for the same reason — a silent no-op is worse than a refusal:
   reachable no other way, so the alternative was an agent that starts, declares
   buckets, and disables all of them — which is exactly the failure this document
   opens with.
+
+Since 0.3.0 an entry that is down is no longer skipped until the next restart:
+wiring is retried every 60 seconds, so the ordinary order — install the gateway,
+then create the bucket at the hub — heals on its own. See
+[Leaf Nodes](leaf-node.md#4-kv-sync).
 
 ## Open questions
 

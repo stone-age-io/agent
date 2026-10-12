@@ -26,9 +26,11 @@ and what was rejected — see [nebula-design.md](nebula-design.md).
 - **A `nebula_host` record on the platform, linked to this agent's thing.** An
   owner or admin creates it (UI → *Nebula* → *Hosts*) and assigns it to the thing
   through the thing's `nebula_host` field.
-- **A top-level `platform:` block**, for `source: "platform"`. The agent reads its
-  Nebula config with the same platform identity it uses for its NATS credential,
-  so the same block serves both. Use `source: "file"` if you do not have one.
+- **Platform auth** — `nats.auth.type: "platform"` and the top-level `platform:`
+  block — for `source: "platform"`. The agent reads its Nebula config with the
+  same platform identity it uses for its NATS credential, so the same block
+  serves both, and config load refuses `source: "platform"` with any other auth
+  type. Use `source: "file"` if you do not have one.
 - **Privileges to create a network device.** The agent already runs as root or
   SYSTEM as a service, so this is usually already true.
 - **Nebula 1.10 or newer on every other host in the mesh.** `pb-nebula` issues v2
@@ -77,11 +79,16 @@ nebula:
   verify_timeout: "30s"
 ```
 
-Reads a Nebula config from disk and runs it. It does **not** poll, cache, or roll
-back, and `sync_interval` does not apply. It exists so the feature is usable
-without the platform, and so a device can join the mesh before it has a thing
-record. A file-sourced agent does not converge on its own: revocation, renewal and
-CA rotation all become your problem again.
+Reads a Nebula config from disk and runs it. The file is read again every
+`sync_interval` and applied the same way a platform config is — reload, verify,
+roll back if the overlay does not come back — and the last one that worked is
+written to `cache_file`. There is no revision to compare, so each sync applies
+the file even when it has not changed. An edit to the file is picked up within
+`sync_interval`, or at once with `cmd.nebula` `sync`. It exists so the feature
+is usable without the platform, and so a device can join the mesh before it has
+a thing record. A file-sourced agent does not converge on its own: revocation,
+renewal and CA rotation all become your problem again, because nothing rewrites
+the file for you.
 
 ## Behavior
 

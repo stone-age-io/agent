@@ -18,7 +18,7 @@ Complete guide for installing and configuring the agent on Linux systems.
 ```bash
 # Download and extract the release archive (set VERSION to the latest release)
 cd /tmp
-VERSION=0.1.0
+VERSION=0.4.0
 wget https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_linux_amd64.tar.gz
 tar xzf agent_${VERSION}_linux_amd64.tar.gz
 
@@ -285,7 +285,8 @@ commands:
     - "ps aux | sort -rk 3 | head -10"
 ```
 
-**Security note**: Only exact matches are allowed. Be specific!
+**Security note**: A request must match an entry exactly, apart from
+whitespace, and the entry as you wrote it is what runs. Be specific!
 
 ### Log File Paths
 
@@ -382,8 +383,10 @@ sudo journalctl -u agent -p err
 ### Check Configuration
 
 ```bash
-# Test config without starting service
-/usr/local/bin/agent -config /etc/agent/config.yaml
+# Run the agent in the foreground instead of as the service (Ctrl-C to stop).
+# A config error is reported at once. Stop the service first: otherwise this
+# is a second agent with the same code.
+sudo /usr/local/bin/agent -config /etc/agent/config.yaml
 ```
 
 ---
@@ -467,12 +470,14 @@ sudo systemctl stop agent
 # Backup current binary
 sudo cp /usr/local/bin/agent /usr/local/bin/agent.backup
 
-# Download new version
+# Download and extract the new release archive
 cd /tmp
-wget https://github.com/stone-age-io/agent/releases/download/v1.1.0/agent-linux-amd64
+VERSION=0.4.0
+wget https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_linux_amd64.tar.gz
+tar xzf agent_${VERSION}_linux_amd64.tar.gz
 
 # Install new binary
-sudo mv agent-linux-amd64 /usr/local/bin/agent
+sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # Start service

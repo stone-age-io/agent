@@ -49,7 +49,7 @@ to reach the leaf server it hosts.
 
 ### Core Capabilities
 - **System Metrics**: CPU, memory, disk usage and I/O
-- **Service Management**: Start, stop, restart system services
+- **Service Management**: Start, stop, restart system services, and read one's status on demand
 - **Service Monitoring**: Track service status and health
 - **Command Execution**: Run whitelisted scripts securely
 - **Log Retrieval**: Fetch log files on-demand
@@ -96,13 +96,13 @@ Choose your platform:
 
 ```powershell
 # 1. Download and extract the release archive
-$version = "0.1.0"
+$version = "0.4.0"
 Invoke-WebRequest -Uri "https://github.com/stone-age-io/agent/releases/download/v$version/agent_${version}_windows_amd64.zip" -OutFile "$env:TEMP\agent.zip"
 Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force
 
 # 2. Install (the archive carries the per-OS example configs under configs\)
 New-Item -ItemType Directory -Force -Path "C:\Program Files\Agent"
-New-Item -ItemType Directory -Force -Path "C:\ProgramData\Agent"
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\Agent\Scripts"  # scripts_directory must exist
 Copy-Item "$env:TEMP\agent\agent.exe" "C:\Program Files\Agent\"
 Copy-Item "$env:TEMP\agent\configs\windows\config.yaml.example" "C:\ProgramData\Agent\config.yaml"
 
@@ -126,14 +126,14 @@ Start-Service agent
 
 ```bash
 # 1. Install agent
-VERSION=0.1.0
+VERSION=0.4.0
 wget https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_linux_amd64.tar.gz
 tar xzf agent_${VERSION}_linux_amd64.tar.gz
 sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # 2. Configure (the example config ships in the archive)
-sudo mkdir -p /etc/agent
+sudo mkdir -p /etc/agent /opt/agent/scripts   # scripts_directory must exist
 sudo cp configs/linux/config.yaml.example /etc/agent/config.yaml
 sudo nano /etc/agent/config.yaml
 
@@ -153,14 +153,14 @@ sudo systemctl start agent
 
 ```bash
 # 1. Install agent
-VERSION=0.1.0
+VERSION=0.4.0
 fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
 tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # 2. Configure (the example config ships in the archive)
-sudo mkdir -p /usr/local/etc/agent
+sudo mkdir -p /usr/local/etc/agent/scripts   # scripts_directory must exist
 sudo cp configs/freebsd/config.yaml.example /usr/local/etc/agent/config.yaml
 sudo ee /usr/local/etc/agent/config.yaml
 

@@ -208,11 +208,16 @@ with whatever retention that site happened to guess — and the console then ado
 it. The two preset twin buckets are the exception, because the platform knows
 their shape.
 
-The hub side is checked on every start, in **both** directions, and a missing one
-is reported in `/ready`. That matters most for a mirror: JetStream cannot validate
+The hub side is checked whenever an entry is wired up — at start, and again on
+every retry while it is down — in **both** directions, and a missing one is
+reported in `/ready`. That matters most for a mirror: JetStream cannot validate
 a cross-domain mirror source when the stream is created, so a mirror of a bucket
 the hub does not have would otherwise be accepted, look healthy, and receive
 nothing for ever.
+
+Wiring is retried every 60 seconds while an entry is down, so the ordinary
+order — install the gateway, then create the bucket at the hub — comes right on
+its own within a minute, with no restart.
 
 ### One writer per bucket is the whole safety property
 
@@ -265,6 +270,9 @@ Boring on purpose:
   connection, but a dead watcher stays dead.
 - **Failure is soft.** If any of it cannot start — no hub domain, bucket
   unreachable, mirror rejected — it logs why and carries on with what it can.
+  A bucket that would not come up is retried every minute (an unknown hub
+  domain is not: that needs a restart), and a failure that repeats with the
+  same reason is logged once rather than every minute.
 
 Buckets are created if absent and otherwise **left alone**. Unlike a private
 mirror, these are shared with the console and with operators, so the agent does
@@ -319,6 +327,11 @@ failure is logged rather than fatal.
 keeps working and devices keep running; that autonomy is the entire reason a leaf
 node exists, so reporting it as unready would invert the design.
 
+Every agent's `/metrics` carries `agent_ready`, `agent_check_state{name,state}`
+(1 on each check's current state), `agent_check_timestamp_seconds` and
+`agent_build_info{version}`, plus the Go runtime and process collectors. A
+gateway adds:
+
 | Metric | What it says |
 |---|---|
 | `agent_edge_nats_connected` | 1 when this agent is connected to the local leaf |
@@ -363,7 +376,13 @@ a clean bill of health.
      twin: true
    observability:
      addr: "127.0.0.1:9100"
+   tasks:
+     service_check:
+       enabled: false   # on by default, and refuses to start with no services listed
    ```
+
+   The default `commands.scripts_directory` has to exist too; the install
+   guides create it.
 
 3. `agent -leaf-config` → writes `/etc/agent/nats-leaf.conf` and the creds.
 4. Start the leaf: either `nats-server -c /etc/agent/nats-leaf.conf` under your

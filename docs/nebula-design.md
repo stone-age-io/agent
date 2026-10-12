@@ -1,7 +1,11 @@
 # Nebula Support — Design
 
-**Status: in progress.** Steps 1 to 3 of [Staging](#staging) are implemented — the
-startup change, `internal/nebula`, and the surfaces. Step 4 (`leaf-sync`) is not.
+**Status: implemented.** Steps 1 to 3 of [Staging](#staging) are implemented — the
+startup change, `internal/nebula`, and the surfaces. Step 4 (`leaf-sync`) was
+overtaken: in 0.2.0 `leaf-sync` was absorbed into this agent and the
+`leaf_nodes` collection was dropped, so a site gateway is a Thing running this
+agent and gets its Nebula host from the same feature. See
+[Rejected: one edge binary](#rejected-one-edge-binary).
 
 This is not an installation guide, and it is deliberately not linked from the README's documentation index,
 which lists shipped behaviour only. Read it as the record of a decision and of the
@@ -51,6 +55,7 @@ Nothing needs to be built on the platform side. Specifically:
   which is what makes a host usable as an `unsafe_routes` gateway at all.
 - `leaf_nodes.nebula_host` exists too. The platform already models both identities
   as independent mesh members. See [Rejected: one edge binary](#rejected-one-edge-binary).
+  (Since dropped, with the `leaf_nodes` collection.)
 
 ## Scope: one mode
 
@@ -81,8 +86,8 @@ and dropped for a specific reason.
 The idea: Nebula runs as its own system service; the agent syncs `config_yaml` to
 disk, signals a reload, and reports status. Attractive because it decouples mesh
 uptime from agent restarts, and because the existing Prometheus scraper in
-`internal/tasks/collector_exporter.go` could read Nebula's own stats listener
-almost for free.
+`internal/tasks/collector_exporter.go` (since removed, with the exporter metrics
+mode) could read Nebula's own stats listener almost for free.
 
 It dies on a fact: `config.C.CatchHUP` registers `syscall.SIGHUP` and Nebula's
 config package has no Windows variant. Reload-by-signal works on Linux and
@@ -120,6 +125,12 @@ hundred lines in each binary — not one binary doing three jobs.
 |---|---|---|---|
 | `agent` | `things` | N per site | device on the mesh, optionally a gateway |
 | `leaf-sync` | `leaf_nodes` | 1 per site | site node on the mesh |
+
+> **Reversed in 0.2.0.** The premises changed: the config mirror was dropped
+> rather than moved, so a leaf node stopped being a different identity, and the
+> `leaf_nodes` collection went with it. `leaf-sync` was absorbed into this agent
+> as capabilities a box turns on (`nats.server_config`, `sync:`): every device
+> carries the code, and only a gateway runs it. See [Leaf Nodes](leaf-node.md).
 
 ### Rejected: extracting the platform-client shape into a shared library
 
@@ -207,7 +218,7 @@ Nebula's PKI requires it there.
 revocation mechanism is the blocklist carried by every peer, so *the poll
 interval is the revocation latency*. The 24h used for `platform.sync_interval` is
 wrong here;
-default to 10m, allow 1m–1h. A NATS command (`cmd.nebula_sync`) lets the platform
+default to 10m, allow 1m–1h. A NATS command (`cmd.nebula` with `sync`) lets the platform
 collapse it to seconds when it matters, but polling remains the mechanism of
 record — the mesh must converge without the command channel, because the command
 channel may be riding on the mesh.
@@ -260,6 +271,7 @@ the one it emits today.
 type NebulaHealth struct {
 	Enabled        bool     `json:"enabled"`
 	Running        bool     `json:"running"`
+	Source         string   `json:"source,omitempty"`
 	OverlayIP      string   `json:"overlay_ip,omitempty"`
 	Tunnels        int      `json:"tunnels"`
 	LighthouseUp   bool     `json:"lighthouse_up"`
@@ -285,7 +297,9 @@ the certificate is what Nebula actually enforces.
 does not stop telemetry or commands, and turning a fleet dashboard red for
 someone else's network problem is noise. `determineHealthStatus` should return
 `degraded` when Nebula is enabled but not running, running with zero tunnels, or
-running on a rolled-back config.
+running on a rolled-back config. (As built, those three conditions are the
+`nebula` readiness check, which warns, and `determineHealthStatus` maps any
+warning to `degraded`.)
 
 This creates an asymmetry worth naming: on a device whose NATS rides the overlay,
 a mesh failure means the health response never arrives at all, so the `degraded`
@@ -450,7 +464,9 @@ the network.
 - **cgo.** `miekg/pkcs11` is in Nebula's module graph but sits behind a `pkcs11`
   build tag, so `CGO_ENABLED=0` cross-compiles are unaffected.
 - **Windows packaging.** TUN on Windows is Wintun; `wintun.dll` must ship
-  alongside the executable, which means a goreleaser archive change.
+  alongside the executable, which means a goreleaser archive change. (Not
+  done: the agent does not ship it, and the operator places it — see
+  [nebula.md](nebula.md#windows).)
 - **FreeBSD.** Nebula's FreeBSD TUN support is thinner than Linux or Windows.
   Smoke-test before promising it.
 
@@ -470,11 +486,21 @@ nebula:
     timeout: "30s"             # handshake window before rollback
 ```
 
+As shipped the two nested keys are flat: `nebula.sync_interval` and
+`nebula.verify_timeout`. [nebula.md](nebula.md#configuration) has the final
+shape.
+
 `source: file` exists so the feature is usable without the platform at all, and
 so a device can be brought onto the mesh before it has a Thing record. It is not
 a peer of `source: platform` and should not grow into one: no revision probe, no
 sync, no rollback. It is a path handed to `config.C.Load`, and the `sync` and
 `verify` settings above do not apply to it.
+
+> **As built, it is synced.** The scheduler runs the Nebula sync for any enabled
+> overlay, and `FileSource.Fetch` reports every read as changed, so a file source
+> is re-read and re-applied every `sync_interval` — with verify, rollback and the
+> cache — whether the file changed or not. Still no revision probe.
+> [nebula.md](nebula.md#source-file) describes the shipped behaviour.
 
 ## Staging
 
@@ -493,13 +519,16 @@ sync, no rollback. It is a path handed to `config.C.Load`, and the `sync` and
    than in `go test`; the unit tests cover the state machine around it.
 3. ~~**Surfaces.**~~ **Done**, less the IP-forwarding read, which was cut — see
    the settled questions below.
-4. **`leaf-sync`.** The same feature against `leaf_nodes.nebula_host`, when site
-   nodes are wanted on the mesh.
+4. ~~**`leaf-sync`.**~~ **Overtaken.** The same feature against
+   `leaf_nodes.nebula_host`, when site nodes are wanted on the mesh. `leaf-sync`
+   is now part of this agent and `leaf_nodes` is gone, so a site node gets its
+   Nebula host from step 2 like any other Thing.
 
 ## Open questions
 
 - Does any real deployment want NATS on the overlay, or is underlay-always good
   enough to document as a recommendation rather than support as a case?
+
 Settled during review, recorded so they are not reopened:
 
 - **`sync` does not report "no change" separately.** `ConfigRevision` already

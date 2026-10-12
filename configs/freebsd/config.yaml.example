@@ -147,7 +147,7 @@ nebula:
   enabled: false
 
   # "platform" reads this agent's nebula_host record (requires platform auth).
-  # "file" reads a config from disk and does not poll, cache or roll back.
+  # "file" reads a config from disk and re-applies it every sync_interval.
   source: "platform"
   # config_file: "/usr/local/etc/agent/nebula.yaml"   # only for source: "file"
 
@@ -165,7 +165,8 @@ nebula:
   verify_timeout: "30s"
 # Command Execution
 commands:
-  # Scripts Directory (optional)
+  # Scripts Directory (optional). It must exist, or the agent refuses to start;
+  # set it to "" to run no scripts.
   scripts_directory: "/usr/local/etc/agent/scripts"
   
   # Whitelist of services that can be controlled
@@ -178,7 +179,7 @@ commands:
   allowed_commands:
     - "df -h | grep -E '^/dev/'"
     - "uptime"
-    - "ps aux | sort -rk %cpu | head -10"
+    - "ps aux | sort -rk 3 | head -10"
   
   # Allowed log file paths (glob patterns supported)
   allowed_log_paths:

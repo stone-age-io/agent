@@ -77,8 +77,9 @@ release:
     ## agent {{ .Tag }}
 
     The Stone-Age.io edge agent: a NATS-native management and observability
-    daemon for Linux, Windows and FreeBSD. Outbound-only -- it opens no
-    listening port.
+    daemon for Linux, Windows and FreeBSD. Nothing instructs it except over
+    its own NATS connection, which it dials outbound; the only port it opens
+    by default is /ready and /metrics on loopback.
 
     Install it as a service on the target host:
 

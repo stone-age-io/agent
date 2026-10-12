@@ -93,25 +93,30 @@ Understanding the design and components of the agent platform.
 - Control system services
 - Report health and inventory
 - Publish telemetry to NATS
+- Serve `/ready` and `/metrics` **locally**, on the box — every agent, on
+  loopback by default
+- Optionally, run a Nebula overlay host in-process (see [Nebula Overlay](./nebula.md))
 
 **Optionally, on a site that is also a gateway** (see [Leaf Nodes](./leaf-node.md)):
 - Bootstrap and host the site's NATS **leaf node**
 - Relay declared KV buckets up to the hub, mirror declared buckets down
-- Serve `/ready` and `/metrics` **locally**, on the box
-- Run a Nebula overlay host in-process
+- Add the leaf's own checks — `nats_local`, `hub_uplink` and `sync` — to the
+  agent's `/ready`
 
 None of those is a mode. There is no `edge.enabled` key and no gateway flag on
-the platform either — a gateway is a Thing whose `thing_type` says so and whose
-config turns more of these on. A single flag naming the role would be a second
-control that can disagree with the first.
+the platform either — a gateway is an ordinary Thing whose config turns more of
+these on, and nothing on the platform marks it, not even its `thing_type`. A
+single flag naming the role would be a second control that can disagree with
+the first.
 
 **What it does NOT do:**
 - Parse or analyze metrics (just forwards)
 - Store historical data
 - Make decisions (stateless)
-- Expose HTTP endpoints, **except** `/ready` and `/metrics` when
-  `observability.addr` is set, and that defaults to loopback. It is opt-in for
-  exactly this reason: opening a port on an appliance should be a decision. The
+- Expose HTTP endpoints, **except** `/ready` and `/metrics` on
+  `observability.addr`, which is set by default — to loopback,
+  `127.0.0.1:9100`, for exactly this reason: opening a port beyond the box
+  should be a decision. Set it empty to serve neither. The
   justification for having it at all is that `cmd.health` travels over NATS,
   which is the link that breaks — the box you most need to ask is the one whose
   uplink is down, and that is when it goes quiet
@@ -445,8 +450,11 @@ credential is fixed.
 
 **Agent Level:**
 - Whitelists for services, commands, log paths
-- Exact match required (no wildcards in security checks)
-- Path traversal protection
+- A service must match an allowlist entry exactly; a command must match one
+  apart from whitespace, and the entry as written is what runs; log paths are
+  glob patterns, but the request must equal a file a pattern names
+- Scripts are requested by bare filename only, and the caller's string never
+  reaches a shell
 
 ### 2. Data Flow Security
 
@@ -471,7 +479,8 @@ credential is fixed.
 ### 3. Principle of Least Privilege
 
 **Agent runs as:**
-- Windows: LocalService (no interactive logon)
+- Windows: LocalSystem (the service is installed with no account, so the
+  Service Control Manager's default applies)
 - Linux: root (required for service control) *
 - FreeBSD: root (required for service control) *
 
@@ -530,19 +539,25 @@ nats request "agents.device-123.cmd.health" '{}'
 **Response includes:**
 ```json
 {
-  "status": "healthy",
+  "status": "degraded",
+  "ts": "2025-11-17T12:00:05Z",
   "agent": {
-    "version": "0.1.0",
-    "uptime_seconds": 86400,
+    "memory_usage_mb": 45.2,
     "goroutines": 15,
-    "memory_mb": 45.2
+    "uptime_seconds": 86400,
+    "commands_processed": 42,
+    "commands_errored": 1
   },
   "nats": {
     "connected": true,
-    "url": "nats://nats.example.com:4222",
+    "jetstream": true,
+    "server_url": "nats://nats.example.com:4222",
+    "server_id": "NDXQ...",
     "reconnects": 2,
     "in_msgs": 150,
-    "out_msgs": 720
+    "out_msgs": 720,
+    "in_bytes": 48210,
+    "out_bytes": 391044
   },
   "tasks": {
     "last_heartbeat": "2025-11-17T12:00:00Z",
@@ -551,14 +566,11 @@ nats request "agents.device-123.cmd.health" '{}'
     "metrics_count": 288,
     "metrics_failures": 0
   },
-  "commands": {
-    "processed": 42,
-    "errored": 1
-  },
   "os": {
     "platform": "linux",
     "name": "Ubuntu 24.04",
-    "version": "24.04"
+    "version": "24.04",
+    "build": "6.8.0-45-generic"
   },
   "config": {
     "code": "device-123",
@@ -614,11 +626,12 @@ box. They are configuration, not secrets: they list what an authenticated
 caller was already permitted to do.
 
 **Health Status** is a pure function of the worst check in `checks`:
-- `healthy`: every check reported `ok`
+- `healthy`: every check reported `ok` or `skipped`
 - `degraded`: some check reported `warn` — it works and someone should look at
-  it (an islanded site, a bucket that will not sync, a rolled-back overlay,
-  JetStream unusable, a majority of metrics scrapes failing, a subject the
-  server refused)
+  it (an islanded site, a bucket that will not sync, an overlay that is down,
+  tunnel-less or rolled back, JetStream unusable, a majority of metrics scrapes
+  failing, a subject the server refused, a platform sync that has stopped
+  succeeding)
 - `unhealthy`: some check reported `fail` — currently NATS being disconnected,
   and on a gateway the local leaf being unreachable
 
@@ -742,6 +755,10 @@ scripts/
     └── check-licenses.sh
 ```
 
+Keep a grouping like this in your own repository, and deploy the files flat:
+the agent runs only a file directly inside `commands.scripts_directory`,
+requested by its bare filename. See [Script Development](script-development.md).
+
 ### 2. NATS Consumers
 
 Process telemetry without agent changes:
@@ -763,7 +780,7 @@ Route messages based on content:
 
 ```yaml
 # PocketBase rule
-- match: "cpu_percent > 90"
+- match: "cpu_usage_percent > 90"
   action: 
     - publish: "alerts.high-cpu"
     - webhook: "https://alerts.example.com/cpu"

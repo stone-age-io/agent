@@ -116,6 +116,7 @@ agent/
 │   │   ├── service_*.go       # Platform-specific service control
 │   │   ├── inventory_*.go     # Platform-specific inventory collection
 │   │   ├── logs.go            # Log file retrieval
+│   │   ├── exec.go            # The cmd.exec gate, one copy for every platform
 │   │   └── exec_*.go          # Platform-specific command execution
 │   └── utils/
 │       ├── math.go            # Utility functions (Round)
@@ -166,7 +167,8 @@ agent/
      Rotation is not revocation
    - Fails fast if the thing record's `code` doesn't match the config's `code`, on every
      authentication; warns if the expanded location's `code` differs
-   - Session file (token + credential revision + nebula revision, 0600) makes `password_env`
+   - Session file (token + credential revision + nebula revision + cached hub domain,
+     0600) makes `password_env`
      optional after first boot. The platform's thing token TTL is 7 days, renewed by each sync
    - `Client.mu` guards the session file: the credential sync and the Nebula sync are
      separate scheduled jobs that both read-modify-write it. Exported methods take the
@@ -384,8 +386,10 @@ agent/
       `agent.New` starts it *before* subscribing to commands. That ordering is what
       guarantees `cmd.health` always has a report to answer with. Every check reads
       state the process already holds, so the first round costs microseconds.
-    - A check must never dial anything. A readiness probe that makes network calls
-      turns the probe rate into a load generator and a slow dependency into an outage.
+    - A check must never dial anything off the box. A readiness probe that makes
+      network calls turns the probe rate into a load generator and a slow dependency
+      into an outage. The one local read is `hub_uplink`, which asks the leaf's own
+      loopback monitoring port (`/leafz`, 2s timeout) and skips when it cannot.
 
     - **An islanded edge WARNS, it does not fail.** `hub_uplink` is a warn and
       `nats_local` is a fail. Local NATS still works and devices keep running, and that
@@ -588,10 +592,12 @@ commands:
   copy in `internal/tasks/exec.go`; the platform files only say how to start a
   process. It was once duplicated per platform, and both copies approved
   `$(anything)/deploy.sh` and then ran it through `bash -c` -- do not split it again
-- No WMI or external command execution for inventory (uses native APIs)
+- No WMI for inventory, and native APIs on Windows and Linux. FreeBSD's inventory is the
+  exception: it runs `sysctl -n` and `mount` (the latter under a 30s timeout)
 - Command execution uses context with timeout
 - Secrets on disk (.creds, platform session, Nebula config cache) are written 0600
-  through a temp file + rename. A Nebula config embeds the host private key inline,
+  through a temp file + rename -- except by `agent -leaf-config`, a one-shot that
+  writes its creds in place with `os.WriteFile`. A Nebula config embeds the host private key inline,
   because Nebula's PKI requires it there — treat `config_yaml` as key material
 - `nebula.sync_interval` is a security setting: Nebula has no CRL, so a revoked
   certificate is refused only once each peer re-reads its own config
@@ -602,8 +608,10 @@ commands:
 
 Tests use `_test.go` suffix with platform-specific variants:
 - `*_test.go` - Cross-platform tests
-- `*_test_windows.go` - Windows-specific tests
-- `test_helpers.go` - Shared test utilities
+- `*_windows_test.go`, `*_linux_test.go`, `*_unix_test.go` - Platform-specific tests, each
+  with a `//go:build` line (`unix` is not a filename suffix Go recognises, so that one
+  relies on its `linux || freebsd` tag). The suffix goes before `_test.go`, or Go does
+  not treat the file as a test
 
 Run single test:
 ```bash
@@ -625,6 +633,8 @@ Key dependencies (from go.mod):
   (v1.11 needs Go 1.26) and roughly half the binary size; pinned to the same
   version `pb-nebula` uses, so the library generating the configs and the one
   reading them cannot disagree
+- `github.com/prometheus/client_golang` - The `/metrics` exposition (`internal/metrics`), on a
+  private registry; already linked by Nebula
 - `github.com/prometheus/common/expfmt` - Parses the agent's own `/metrics` output in tests
 - `golang.org/x/sys` - Windows syscalls (registry, service control)
 - `gopkg.in/natefinch/lumberjack.v2` - Log rotation

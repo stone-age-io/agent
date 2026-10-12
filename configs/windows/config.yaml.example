@@ -12,6 +12,21 @@ location: "hq"        # Optional deployment location, carried in heartbeat/telem
 # Max 50 characters total. No leading/trailing dots or consecutive dots.
 subject_prefix: "agents"
 
+# stone-age.io Platform (optional)
+#
+# One home for the platform relationship. Three subsystems read it: the NATS
+# credential lifecycle (nats.auth.type: "platform"), the Nebula config source
+# (nebula.source: "platform"), and the leaf bootstrap (agent -leaf-config).
+# Leave the block out entirely and none of them are available.
+#
+# platform:
+#   url: "https://platform.example.com"
+#   identity: "thing@example.com"                 # the thing's login email
+#   password_env: "AGENT_PLATFORM_PASSWORD"       # reads the password from this env var
+#   sync_interval: "24h"                          # credential refresh, 1h-72h
+#   # session_file: default is beside nats.auth.creds_file
+#   # allow_insecure_url: false                   # http:// platform URL, development only
+
 # NATS Connection
 nats:
   urls: 
@@ -25,11 +40,11 @@ nats:
   # embedded broker on a box with no platform. nats.urls must name the port it
   # listens on -- startup refuses the pair if they disagree.
   #
-  # Leave it unset where systemd or Docker already supervises nats-server: the
+  # Leave it unset where nats-server already runs as its own service: the
   # bus then survives an agent restart, which is what you want when upgrading
   # the agent on a live site.
   #
-  # server_config: "C:ProgramDataAgent/nats-leaf.conf"
+  # server_config: "C:\\ProgramData\\Agent\\nats-leaf.conf"
 
   # Authentication (choose one method)
   auth:
@@ -144,7 +159,7 @@ nebula:
   enabled: false
 
   # "platform" reads this agent's nebula_host record (requires platform auth).
-  # "file" reads a config from disk and does not poll, cache or roll back.
+  # "file" reads a config from disk and re-applies it every sync_interval.
   source: "platform"
   # config_file: "C:\\ProgramData\\Agent\\nebula.yaml"   # only for source: "file"
 
@@ -162,7 +177,8 @@ nebula:
   verify_timeout: "30s"
 # Command Execution
 commands:
-  # PowerShell Scripts Directory (optional)
+  # PowerShell Scripts Directory (optional). It must exist, or the agent refuses
+  # to start; set it to "" to run no scripts.
   # If specified, any .ps1 file in this directory can be executed by filename
   # Example: Control plane sends command "Get-EventLog.ps1", agent executes
   #          C:\ProgramData\Agent\Scripts\Get-EventLog.ps1
@@ -175,7 +191,7 @@ commands:
     - "YourCriticalService"
     - "AnotherImportantService"
   
-  # Whitelist of allowed PowerShell commands (exact match only)
+  # Whitelist of allowed PowerShell commands (exact match, apart from whitespace)
   # For simple one-liners (< 5 operations), add them here
   # For complex commands (> 5 operations), use scripts_directory instead
   allowed_commands:

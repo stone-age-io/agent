@@ -18,7 +18,7 @@ Complete guide for installing and configuring the agent on FreeBSD systems.
 ```bash
 # Download and extract the release archive (set VERSION to the latest release)
 cd /tmp
-VERSION=0.1.0
+VERSION=0.4.0
 fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
 tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 
@@ -211,8 +211,9 @@ sudo service agent status
 # View process
 ps aux | grep agent
 
-# Check if it's running
-sockstat -l | grep 4222  # Should show NATS connection
+# Check its sockets: the outbound NATS connection, and the /ready + /metrics
+# listener on 127.0.0.1:9100
+sockstat -4 | grep agent
 ```
 
 #### Check Agent Logs
@@ -283,11 +284,12 @@ commands:
   allowed_commands:
     - "df -h | grep -E '^/dev/'"
     - "uptime"
-    - "ps aux | sort -rk %cpu | head -10"
+    - "ps aux | sort -rk 3 | head -10"
     - "zpool status"  # ZFS pool status
 ```
 
-**Security note**: Only exact matches are allowed. Be specific!
+**Security note**: A request must match an entry exactly, apart from
+whitespace, and the entry as you wrote it is what runs. Be specific!
 
 Allowlisted commands run through FreeBSD's `/bin/sh`, so write them in `sh`
 syntax. Bash isn't part of the base system, and the agent doesn't need it.
@@ -496,12 +498,14 @@ sudo service agent stop
 # Backup current binary
 sudo cp /usr/local/bin/agent /usr/local/bin/agent.backup
 
-# Download new version
+# Download and extract the new release archive
 cd /tmp
-fetch https://github.com/stone-age-io/agent/releases/download/v1.1.0/agent-freebsd-amd64
+VERSION=0.4.0
+fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
+tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 
 # Install new binary
-sudo mv agent-freebsd-amd64 /usr/local/bin/agent
+sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # Start service

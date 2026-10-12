@@ -6,7 +6,7 @@ Fetch, renew, and rotate NATS credentials from the stone-age.io platform.
 
 ## Overview
 
-On the stone-age.io platform, an agent is a **Thing**. With `auth.type: "platform"` the agent manages its own NATS `.creds` file against the platform, so credentials never have to be distributed to devices by hand.
+On the stone-age.io platform, an agent is a **Thing**. With `nats.auth.type: "platform"` the agent manages its own NATS `.creds` file against the platform, so credentials never have to be distributed to devices by hand.
 
 Three operations, in the order a device meets them:
 
@@ -52,6 +52,11 @@ nats:
     creds_file: "/etc/agent/device.creds"
 ```
 
+That is the platform part only; the rest of the file still applies. In
+particular `tasks.service_check` is on by default and refuses to start with no
+`services` listed, and the default `commands.scripts_directory` has to exist
+(the install guides create it).
+
 The `platform:` block is **top level**, not nested under `nats.auth`. Three
 subsystems read it — the NATS credential lifecycle here, the
 [Nebula config source](./nebula.md), and the [leaf bootstrap](./leaf-node.md) —
@@ -73,10 +78,11 @@ All of these live under `platform:`.
 | `session_file` | No | Where the platform session is stored. Defaults to `platform-session.json` beside `creds_file` |
 | `allow_insecure_url` | No | Permits a plain `http://` platform URL. Development only |
 
-There is no enabled flag for the sync. The block being present is what turns the
-platform relationship on, and an agent configured to fetch its credentials from
-the platform but told not to keep them current is not a state worth being able
-to express.
+There is no enabled flag for the sync. `nats.auth.type: "platform"` is what
+turns the credential lifecycle on, and an agent that fetches its credentials
+from the platform always wants them kept current: the sync renews the session
+token as well as the credential. The interval is the only knob, and `0` skips
+the scheduled sync, leaving only the one at startup.
 
 The collection (`things`), the credential source (`nats_user` relation → `creds_file`), and the identity checks are fixed — the agent is opinionated about the platform schema.
 
@@ -132,7 +138,7 @@ sudo service agent restart
 ## Behavior
 
 ### First Start
-1. Agent detects `auth.type: "platform"` and finds no `.creds` file
+1. Agent detects `nats.auth.type: "platform"` and finds no `.creds` file
 2. Reads the password from the env var named by `password_env`
 3. Authenticates as the thing (`POST /api/collections/things/auth-with-password?expand=nats_user,location`)
 4. Verifies the thing record's `code` equals the agent config's `code` — **fails** on mismatch
@@ -164,7 +170,7 @@ If the stored token has lapsed, the agent falls back to password authentication 
 
 Once the agent holds a session token, it no longer needs the thing's password. Removing `AGENT_PLATFORM_PASSWORD` from the service environment is supported and reduces what a compromised device gives up: a 0600 token file is narrower than a machine-level environment variable, which on Windows any local process can read.
 
-The tradeoff: the platform's session token for a thing lives **7 days**, renewed on each sync. A device that is powered off or offline for longer than that comes back with a dead token, and without a password it cannot recover on its own — re-provision it by setting the env var once, or delete `.creds` and let it bootstrap again.
+The tradeoff: the platform's session token for a thing lives **7 days**, renewed on each sync. A device that is powered off or offline for longer than that comes back with a dead token, and without a password it cannot recover on its own — re-provision it by setting the env var once (with `password_env` naming it). Deleting `.creds` does not help here: bootstrapping again needs the password too.
 
 Devices that are frequently offline should keep the password configured.
 
@@ -208,7 +214,7 @@ No manual step is needed. The sync path never touches NATS, so it keeps working 
 The env var named by `password_env` is not set in the **service** environment (setting it in your shell is not enough).
 
 ### "no password_env configured and no usable platform session token"
-The password was removed from the environment and the stored session token has lapsed or was rejected. Set the env var again, or delete `.creds` and `platform-session.json` to re-bootstrap.
+The password was removed from the environment and the stored session token has lapsed or was rejected. Set the env var again, with `password_env` naming it; the agent then signs in with the password and stores a fresh session token. Deleting `.creds` or `platform-session.json` does not avoid this, because bootstrapping needs the password as well.
 
 ### "platform.url must be https://"
 The platform URL is plain HTTP. Bootstrap sends the thing's password and receives a private key, so this is refused unless `allow_insecure_url: true` is set for development.
