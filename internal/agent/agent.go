@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -23,6 +24,11 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+// edgeStopTimeout bounds how long Shutdown waits for the edge goroutine. The
+// same as natsd's start-up allowance: a large JetStream store on a slow disk is
+// what makes either one slow.
+const edgeStopTimeout = 30 * time.Second
+
 // Agent represents the main agent
 type Agent struct {
 	config    *config.Config
@@ -32,6 +38,7 @@ type Agent struct {
 	handlers  *natsclient.CommandHandlers
 	nebula    *nebula.Manager // nil unless the overlay is enabled
 	edge      *edge.Edge      // nil unless this box has a leaf to look after
+	edgeDone  chan struct{}   // closed when the edge goroutine returns; nil with no edge
 	observe   *observe.Server // always built: every agent answers for itself
 	version   string
 	ctx       context.Context // root context, cancelled on shutdown
@@ -160,6 +167,11 @@ func New(configPath string, version string) (*Agent, error) {
 		edgeNode = edge.New(edgeConfig(cfg, hubDomain))
 	}
 
+	// The leaf preload refresh, on a box with a generated nats-leaf.conf beside
+	// its creds. Nil everywhere else. Built after the edge because an embedded
+	// leaf is reloaded through it.
+	leafRefresh := leafRefresher(cfg, platformClient, edgeNode, logger)
+
 	// Readiness and metrics. EVERY agent has these, not only a gateway: a box
 	// whose uplink is down is exactly the one you want to ask how it is, and
 	// cmd.health travels over the link that broke.
@@ -171,6 +183,11 @@ func New(configPath string, version string) (*Agent, error) {
 	// see edgeEnabled and observe.go.
 	reg := &health.Registry{}
 	registerAgentChecks(reg, cfg, natsClient, executor, nebulaManager, platformClient)
+
+	// Registered on every agent and skipped where there is no generated leaf
+	// config. Not one of the edge's checks: a separately supervised leaf with
+	// no sync declared has no edge at all, and it is the shape that needs this.
+	edge.RegisterLeafPreloadCheck(reg, leafRefresh)
 
 	var collectors []prometheus.Collector
 	if edgeNode != nil {
@@ -197,7 +214,7 @@ func New(configPath string, version string) (*Agent, error) {
 	observeServer.Start(ctx)
 
 	// Create command handlers (now with NATS client for health checks and version)
-	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager), observeServer)
+	handlers := natsclient.NewCommandHandlers(logger, cfg, executor, natsClient, version, credsRotator, nebulaController(nebulaManager), leafCommand(leafRefresh), observeServer)
 
 	// Register the commands as a NATS micro service
 	logger.Info("Registering command service...")
@@ -209,11 +226,16 @@ func New(configPath string, version string) (*Agent, error) {
 
 	// Create and start scheduler
 	logger.Info("Starting scheduler...")
-	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, nebulaSyncer(nebulaManager), ctx)
+	sched, err := scheduler.New(logger, natsClient, executor, cfg, version, credsSyncer, nebulaSyncer(nebulaManager), leafJob(leafRefresh), ctx)
 	if err != nil {
 		cancel()
 		natsClient.Close()
 		return nil, fmt.Errorf("failed to create scheduler: %w", err)
+	}
+
+	var edgeDone chan struct{}
+	if edgeNode != nil {
+		edgeDone = make(chan struct{})
 	}
 
 	return &Agent{
@@ -224,6 +246,7 @@ func New(configPath string, version string) (*Agent, error) {
 		handlers:  handlers,
 		nebula:    nebulaManager,
 		edge:      edgeNode,
+		edgeDone:  edgeDone,
 		observe:   observeServer,
 		version:   version,
 		ctx:       ctx,
@@ -248,6 +271,7 @@ func (a *Agent) Run() error {
 	// over it would be one you could not ask what went wrong.
 	if a.edge != nil {
 		go func() {
+			defer close(a.edgeDone)
 			if err := a.edge.Run(a.ctx); err != nil {
 				a.logger.Error("Edge subsystems stopped", zap.Error(err))
 			}
@@ -309,6 +333,19 @@ func (a *Agent) Shutdown() error {
 	// Drain NATS connection (wait for in-flight messages)
 	if err := a.nats.Drain(drainCtx); err != nil {
 		a.logger.Error("Error draining NATS", zap.Error(err))
+	}
+
+	// Wait for the edge to finish stopping. The cancel above is what stops it,
+	// but nothing used to wait: an embedded leaf's Stop -- which flushes
+	// JetStream -- could still be running when the process exited. Bounded,
+	// because Shutdown can run when Run never did (a service stop racing the
+	// start), and then nothing will ever close the channel.
+	if a.edgeDone != nil {
+		select {
+		case <-a.edgeDone:
+		case <-time.After(edgeStopTimeout):
+			a.logger.Warn("Edge subsystems did not stop in time", zap.Duration("waited", edgeStopTimeout))
+		}
 	}
 
 	// Stop the overlay last: NATS may have been riding on it, so draining above
@@ -400,4 +437,19 @@ func nebulaSyncer(m *nebula.Manager) scheduler.NebulaSyncer {
 		return nil
 	}
 	return m
+}
+
+// leafCommand and leafJob do the same for the leaf refresher.
+func leafCommand(r *edge.LeafRefresher) natsclient.LeafRefresher {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+func leafJob(r *edge.LeafRefresher) scheduler.LeafRefresher {
+	if r == nil {
+		return nil
+	}
+	return r
 }

@@ -81,7 +81,7 @@ func startAgent(t *testing.T, url string) *Client {
 	t.Cleanup(client.Close)
 
 	executor := tasks.NewExecutor(zap.NewNop(), 5*time.Second, context.Background())
-	handlers := NewCommandHandlers(zap.NewNop(), cfg, executor, client, "v1.2.3", nil, nil, nil)
+	handlers := NewCommandHandlers(zap.NewNop(), cfg, executor, client, "v1.2.3", nil, nil, nil, nil)
 	if err := handlers.Register(); err != nil {
 		t.Fatalf("Register() error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestServiceDiscovery(t *testing.T) {
 	if err := json.Unmarshal(request(t, ops, "$SRV.INFO."+ServiceName, "").Data, &info); err != nil {
 		t.Fatalf("unmarshal info: %v", err)
 	}
-	want := []string{"ping", "service", "logs", "exec", "health", "rotate_creds", "nebula"}
+	want := []string{"ping", "service", "logs", "exec", "health", "rotate_creds", "nebula", "leaf_refresh"}
 	if len(info.Endpoints) != len(want) {
 		t.Errorf("info lists %d endpoints, want %d: %+v", len(info.Endpoints), len(want), info.Endpoints)
 	}
@@ -179,6 +179,7 @@ func TestErrorRepliesKeepTheirBodyAndAreCounted(t *testing.T) {
 	}{
 		{"refused by the executor", "agents.srv-01.cmd.exec", `{"command":"not-allowlisted"}`, "error", codeInternal},
 		{"unparseable request", "agents.srv-01.cmd.service", `not json`, "error", codeBadRequest},
+		{"no leaf to refresh", "agents.srv-01.cmd.leaf_refresh", ``, "error", codeBadRequest},
 		{"success", "agents.srv-01.cmd.ping", ``, "pong", ""},
 	}
 	for _, tt := range tests {

@@ -19,6 +19,8 @@ subject_prefix: "agents"
 #   identity: "thing@example.com"                 # the thing's login email
 #   password_env: "AGENT_PLATFORM_PASSWORD"       # reads the password from this env var
 #   sync_interval: "24h"                          # credential refresh, 1h-72h
+#   leaf_refresh_interval: "5m"                   # gateways: re-read the leaf's account JWT (revocations)
+#                                                 # and reload the leaf. 0 = off, else 30s-1h
 #   # session_file: default is beside nats.auth.creds_file
 #   # allow_insecure_url: false                   # http:// platform URL, development only
 

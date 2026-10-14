@@ -1,10 +1,15 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
+
+	"go.uber.org/zap"
 
 	"github.com/stone-age-io/agent/internal/config"
 	"github.com/stone-age-io/agent/internal/edge"
+	"github.com/stone-age-io/agent/internal/platform"
 )
 
 // edgeEnabled reports whether this box has any edge work to do.
@@ -54,9 +59,8 @@ func edgeConfig(cfg *config.Config, hubDomain string) *edge.Config {
 
 		// Where the one-shot writes nats-leaf.conf and the creds. Derived from
 		// the creds file's own directory rather than being a separate key: the
-		// generated conf references the creds by base name and nats-server
-		// resolves that relative to the conf, so the two have to live together
-		// anyway.
+		// generated conf and the creds it names (by absolute path) are written
+		// side by side, and the refresh finds the conf there again.
 		OutputDir: filepath.Dir(cfg.NATS.Auth.CredsFile),
 
 		EmbeddedConfig: cfg.NATS.ServerConfig,
@@ -71,6 +75,75 @@ func edgeConfig(cfg *config.Config, hubDomain string) *edge.Config {
 		// resolving it needs the platform client, which lives in agent.New.
 		HubDomain: hubDomain,
 	}
+}
+
+// leafRefresher builds the job that keeps a generated nats-leaf.conf's account
+// JWT current, or returns nil when there is nothing for it to do.
+//
+// There is no key that turns it on. It runs where `agent -leaf-config` has
+// written a conf -- beside nats.auth.creds_file, the only place that one-shot
+// writes -- on a platform-managed agent, because the leaf config comes from the
+// platform. That is the same "capabilities, not a role" rule as edgeEnabled:
+// the file existing is the declaration. A hand-written nats-server config
+// elsewhere is never touched.
+//
+// How the leaf is reloaded depends on who runs it:
+//
+//   - nats.server_config IS that file (os.SameFile, so a symlink or a
+//     differently spelled path still counts): this process hosts the leaf, and
+//     reloads it in-process.
+//   - anything else: something else supervises it, and it is sent SIGHUP via
+//     the pid_file the generated conf names. On Windows it cannot be, and the
+//     operator is told so once here and again by leaf_preload.
+//
+// It says which, once, at startup -- "why did it not reload?" should be
+// answerable from the first lines of the log.
+func leafRefresher(cfg *config.Config, client *platform.Client, edgeNode *edge.Edge, logger *zap.Logger) *edge.LeafRefresher {
+	if client == nil {
+		return nil
+	}
+
+	credsFile := cfg.NATS.Auth.CredsFile
+	confPath := edge.LeafConfPath(credsFile)
+	confInfo, err := os.Stat(confPath)
+	if err != nil {
+		logger.Info("Leaf preload refresh inactive: no generated leaf config",
+			zap.String("path", confPath))
+		return nil
+	}
+
+	embedded := false
+	if edgeNode != nil && cfg.NATS.ServerConfig != "" {
+		hosted, err := os.Stat(cfg.NATS.ServerConfig)
+		embedded = err == nil && os.SameFile(hosted, confInfo)
+	}
+
+	pidPath := edge.LeafPidPath(credsFile)
+	reload := func() error { return edge.SignalLeafReload(pidPath) }
+	mode := "separately supervised (SIGHUP via " + pidPath + ")"
+	if embedded {
+		reload = edgeNode.ReloadEmbedded
+		mode = "embedded (reloaded in-process)"
+	}
+
+	interval := cfg.Platform.LeafRefreshInterval
+	if interval > 0 {
+		logger.Info("Leaf preload refresh watching the generated leaf config",
+			zap.String("path", confPath),
+			zap.String("leaf", mode),
+			zap.Duration("interval", interval))
+	} else {
+		logger.Info("Leaf preload refresh off (platform.leaf_refresh_interval: 0); cmd.leaf_refresh still runs it",
+			zap.String("path", confPath),
+			zap.String("leaf", mode))
+	}
+	if runtime.GOOS == "windows" && !embedded {
+		logger.Warn("A separately supervised leaf cannot be signalled to reload on Windows: " +
+			"restart it after each refresh that rewrites the leaf config, or set nats.server_config to host it in-process. " +
+			"The leaf_preload check reports when it is behind.")
+	}
+
+	return edge.NewLeafRefresher(credsFile, client, reload, logger)
 }
 
 func syncBuckets(in []config.SyncBucket) []edge.Bucket {

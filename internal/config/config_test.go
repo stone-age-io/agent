@@ -980,6 +980,12 @@ commands:
 	if cfg.Platform.SyncInterval != 24*time.Hour {
 		t.Errorf("platform.sync_interval = %v, want 24h", cfg.Platform.SyncInterval)
 	}
+
+	// The leaf refresh defaults on too: it is a gateway's revocation latency,
+	// and it is inert on a box with no generated nats-leaf.conf.
+	if cfg.Platform.LeafRefreshInterval != 5*time.Minute {
+		t.Errorf("platform.leaf_refresh_interval = %v, want 5m", cfg.Platform.LeafRefreshInterval)
+	}
 }
 
 func TestValidatePlatformAuth(t *testing.T) {
@@ -1065,6 +1071,33 @@ func TestValidatePlatformAuth(t *testing.T) {
 			name:    "platform sync_interval beyond token ttl",
 			mutate:  func(c *Config) { c.Platform.SyncInterval = 96 * time.Hour },
 			wantErr: "must not exceed 72 hours",
+		},
+		{
+			name:   "leaf_refresh_interval 0 turns the refresh off",
+			mutate: func(c *Config) { c.Platform.LeafRefreshInterval = 0 },
+		},
+		{
+			name:   "leaf_refresh_interval at the lower bound",
+			mutate: func(c *Config) { c.Platform.LeafRefreshInterval = 30 * time.Second },
+		},
+		{
+			name:   "leaf_refresh_interval at the upper bound",
+			mutate: func(c *Config) { c.Platform.LeafRefreshInterval = time.Hour },
+		},
+		{
+			name:    "leaf_refresh_interval negative",
+			mutate:  func(c *Config) { c.Platform.LeafRefreshInterval = -time.Minute },
+			wantErr: "must not be negative",
+		},
+		{
+			name:    "leaf_refresh_interval too short",
+			mutate:  func(c *Config) { c.Platform.LeafRefreshInterval = 10 * time.Second },
+			wantErr: "at least 30 seconds",
+		},
+		{
+			name:    "leaf_refresh_interval beyond an hour",
+			mutate:  func(c *Config) { c.Platform.LeafRefreshInterval = 2 * time.Hour },
+			wantErr: "must not exceed 1 hour",
 		},
 	}
 

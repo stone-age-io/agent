@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"go.uber.org/zap"
+
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // session is what the agent keeps between runs so it does not need the thing's
@@ -77,7 +79,7 @@ func (c *Client) saveSession(s session) {
 		return
 	}
 
-	if err := writeFileAtomic(c.auth.SessionFile, data); err != nil {
+	if err := utils.WriteFileAtomic(c.auth.SessionFile, data, 0o600); err != nil {
 		c.logger.Warn("Failed to save platform session",
 			zap.String("path", c.auth.SessionFile),
 			zap.Error(err))

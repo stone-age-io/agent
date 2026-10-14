@@ -82,12 +82,14 @@ agent/
 │   ├── platform/              # stone-age.io platform credential lifecycle
 │   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
 │   │   ├── nebula.go          # NebulaSource: this thing's nebula_host config
-│   │   ├── leafconfig.go      # LeafConfig: GET /api/me/leaf-config
+│   │   ├── leafconfig.go      # LeafConfig + its AccountJWT probe (/api/me/...)
 │   │   └── session.go         # Session file (token, revisions, hub domain)
 │   ├── edge/                  # Leaf-node duties, on a box that runs one
 │   │   ├── run.go             # Edge: build, RegisterChecks, Collector, Run
-│   │   ├── leafconf.go        # buildLeafConf: nats-leaf.conf generator
+│   │   ├── leafconf.go        # leafConf/buildLeafConf: nats-leaf.conf generator
 │   │   ├── bootstrap.go       # WriteLeafConfig: conf 0644 + creds 0600
+│   │   ├── refresh.go         # LeafRefresher + leaf_preload: keep the preloaded JWT current
+│   │   ├── leafsignal_*.go    # SIGHUP a separately supervised leaf (unix) / refuse (other)
 │   │   ├── config.go          # edge.Config, mapped from the agent's YAML
 │   │   ├── sync.go            # Declared buckets: mirrors down, relays up, wiring retried
 │   │   ├── twin.go / kv.go    # The twin preset + the relay itself
@@ -120,6 +122,7 @@ agent/
 │   │   └── exec_*.go          # Platform-specific command execution
 │   └── utils/
 │       ├── math.go            # Utility functions (Round)
+│       ├── fileutil.go        # WriteFileAtomic: temp file + rename, explicit mode
 │       └── timeutil.go        # NowRFC3339 timestamp helper for wire payloads
 ├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md and
 │                              # edge-sync-design.md, design records not guides)
@@ -219,6 +222,8 @@ agent/
      `tasks.creds_sync` config key, because the cadence of a platform conversation
      belongs beside the platform rather than in the task list
    - `nebula_sync` task is scheduled only when a NebulaSyncer is supplied (overlay enabled)
+   - `leaf_refresh` task is scheduled only when a LeafRefresher is supplied and
+     `platform.leaf_refresh_interval` is non-zero. See item 9a
 
 7. **Executor** (`internal/tasks/executor.go`):
    - Central task execution with stats tracking
@@ -277,6 +282,45 @@ agent/
    the `nats-server` package's own `ProcessConfigFile` + `NewServer` (no ports, no
    network). It moved from the platform repo unchanged apart from its imports, and that
    was deliberate: **keep it, and do not replace it with more `Contains` checks.**
+
+9a. **Leaf preload refresh** (`internal/edge/refresh.go`): NATS user revocations
+   live in the account JWT, and a `resolver: MEMORY` leaf knows only the one in
+   `resolver_preload`. Without this, a device revoked at the hub kept connecting
+   at its site's leaf until someone re-ran `-leaf-config` by hand.
+
+   - **No switch.** It runs where `-leaf-config` wrote a conf (beside
+     `nats.auth.creds_file`) on a platform-managed agent; `agent/edge.go`
+     `leafRefresher()` decides, and logs which file and which reload mode once.
+   - **One builder.** `leafConf()` is the only thing that turns a `LeafConfig`
+     into file contents; `-leaf-config` and the refresh both call it, and the
+     refresh compares its output with the disk byte for byte. Two builders
+     would disagree about a comment and reload the leaf every run.
+   - Writes the conf only (atomic, 0644), never the creds -- those are the
+     credential sync's.
+   - Reload: embedded -> `natsd.Server.Reload` (chosen by `os.SameFile` against
+     `nats.server_config`); separate -> SIGHUP via the conf's `pid_file`
+     (`leafsignal_unix.go`); Windows separate -> not attempted, error says
+     restart. A leaf started before `pid_file` existed needs one restart.
+   - A changed operator or `$SYS` key is refused by nats-server's reload, so the
+     refresh does not write and says to re-run `-leaf-config` and restart.
+   - `TestLeafReloadAppliesRevocation` pins that the reload closes a revoked
+     user's live connection and refuses its reconnect.
+   - `leaf_preload` (warn) compares `/accountz?acc=` on the loopback monitor
+     with the last fetched JWT. It is registered by the agent, not the Edge: a
+     separately supervised leaf with no sync has no Edge.
+   - **Probe first.** `/api/me/leaf-config` carries this thing's `.creds`, so
+     each run asks `platform.Client.AccountJWT()` (`/api/me/account-jwt`, public
+     trust material only) and does the full read only when that JWT differs
+     from the last one a full pass applied -- always on the first run after
+     start, never remembered from a failed pass, so a failure repeats. A 404
+     (older platform) means a full read every run and one Warn. The creds are
+     discarded on arrival.
+   - **Every path in the conf is absolute** (`credentials`, `store_dir`,
+     `pid_file`), from `filepath.Abs` of the conf's directory in `leafConf()`:
+     nats-server resolves relative ones against its cwd, not the conf's.
+     nats-server refuses to reload a changed `store_dir`, all-or-nothing, so
+     a leaf started on an older agent's relative conf needs one restart;
+     `TestLeafReloadRefusesAStoreDirChange` pins the refusal.
 
 10. **Edge sync** (`internal/edge/sync.go`, `internal/edge/twin.go`): KV buckets moved
     between this site's JetStream domain and the hub, off by default. Two directions,
@@ -378,18 +422,20 @@ agent/
       registering a check -- which also puts it on `/ready` and in
       `agent_check_state`. The old inline ladder is what let a gateway with every
       bucket down answer "healthy" over NATS while its own `/ready` disagreed.
-    - The registry is assembled from two sources that never overlap: `registerAgentChecks`
+    - The registry is assembled from sources that never overlap: `registerAgentChecks`
       (`nats`, `jetstream`, `nats_permissions`, `task_metrics`, `nebula`, `platform_sync`) answers for any
       agent; `Edge.RegisterChecks` adds `nats_local`, `hub_uplink` and `sync`, which need
-      a leaf on the box to mean anything.
+      a leaf on the box to mean anything; `edge.RegisterLeafPreloadCheck` adds
+      `leaf_preload` on every agent, skipped without a generated leaf conf.
     - **`observe.Start` calls `prober.Start` synchronously, not in a goroutine**, and
       `agent.New` starts it *before* subscribing to commands. That ordering is what
       guarantees `cmd.health` always has a report to answer with. Every check reads
       state the process already holds, so the first round costs microseconds.
     - A check must never dial anything off the box. A readiness probe that makes
       network calls turns the probe rate into a load generator and a slow dependency
-      into an outage. The one local read is `hub_uplink`, which asks the leaf's own
-      loopback monitoring port (`/leafz`, 2s timeout) and skips when it cannot.
+      into an outage. The two local reads are `hub_uplink` and `leaf_preload`, which
+      ask the leaf's own loopback monitoring port (`/leafz`, `/accountz`, 2s
+      timeout) and skip when they cannot.
 
     - **An islanded edge WARNS, it does not fail.** `hub_uplink` is a warn and
       `nats_local` is a fail. Local NATS still works and devices keep running, and that
@@ -447,6 +493,7 @@ All telemetry payloads carry `code`, `location`, and `ts` (RFC3339 UTC) so messa
 - `{prefix}.{code}.cmd.health` - Agent health check (agent version, the `nebula` block when the overlay is enabled, the three command allowlists, and `checks`: the same readiness report `/ready` serves)
 - `{prefix}.{code}.cmd.rotate_creds` - Re-mint this agent's NATS credential on the platform, then reconnect (platform auth only; answers with an error otherwise)
 - `{prefix}.{code}.cmd.nebula` - Overlay actions: `sync` (pull and apply now) or `restart` (bounce Nebula on the running config). Enabled agents only; answers with an error otherwise
+- `{prefix}.{code}.cmd.leaf_refresh` - Run one leaf preload refresh now; replies `{changed, reloaded}` after acting. Agents with a generated nats-leaf.conf only; answers with an error otherwise
 
 Command responses use `ts` (RFC3339 UTC) for their timestamp field.
 
@@ -521,6 +568,8 @@ platform:                        # The platform relationship. TOP-LEVEL: three
   identity: "thing@example.com"            # source, leaf bootstrap), so it is not
   password_env: "AGENT_PLATFORM_PASSWORD"  # nested under any one of them.
   sync_interval: "24h"           # 1h-72h; credential refresh. Was tasks.creds_sync.interval
+  leaf_refresh_interval: "5m"    # 0 or 30s-1h; a gateway's leaf preload refresh.
+                                 # THIS IS THE SITE'S REVOCATION LATENCY
   session_file: "/path/to/platform-session.json"  # default: beside nats.auth.creds_file
   allow_insecure_url: false      # http:// platform URL, development only
 nats:
@@ -596,8 +645,10 @@ commands:
   exception: it runs `sysctl -n` and `mount` (the latter under a 30s timeout)
 - Command execution uses context with timeout
 - Secrets on disk (.creds, platform session, Nebula config cache) are written 0600
-  through a temp file + rename -- except by `agent -leaf-config`, a one-shot that
-  writes its creds in place with `os.WriteFile`. A Nebula config embeds the host private key inline,
+  through a temp file + rename (`utils.WriteFileAtomic`, one copy) -- except by
+  `agent -leaf-config`, a one-shot that writes its creds in place with
+  `os.WriteFile`. nats-leaf.conf goes through the same helper at 0644, because
+  the refresh rewrites it under a running leaf. A Nebula config embeds the host private key inline,
   because Nebula's PKI requires it there — treat `config_yaml` as key material
 - `nebula.sync_interval` is a security setting: Nebula has no CRL, so a revoked
   certificate is refused only once each peer re-reads its own config

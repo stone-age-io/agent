@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // NOTE ON COVERAGE. Everything below exercises the paths that do not need a TUN
@@ -253,8 +255,8 @@ func TestWriteFileAtomicCreatesParentAndRoundTrips(t *testing.T) {
 	// directory that may not exist on a first run.
 	path := filepath.Join(t.TempDir(), "state", "nebula-cache.yaml")
 
-	if err := writeFileAtomic(path, []byte("config")); err != nil {
-		t.Fatalf("writeFileAtomic() error: %v", err)
+	if err := utils.WriteFileAtomic(path, []byte("config"), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomic() error: %v", err)
 	}
 
 	m := New(Options{CacheFile: path, Logger: zap.NewNop()})

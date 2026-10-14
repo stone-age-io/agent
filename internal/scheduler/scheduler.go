@@ -34,6 +34,16 @@ type NebulaSyncer interface {
 	Sync() (bool, error)
 }
 
+// LeafRefresher re-reads this gateway's leaf config from the platform and, when
+// the generated nats-leaf.conf would change, rewrites it and reloads the leaf.
+//
+// Declared here for the same reason as CredsSyncer. Implemented by
+// *edge.LeafRefresher.
+type LeafRefresher interface {
+	Refresh() (changed, reloaded bool, err error)
+	ConfPath() string
+}
+
 // Scheduler manages periodic task execution
 type Scheduler struct {
 	scheduler     gocron.Scheduler
@@ -43,8 +53,9 @@ type Scheduler struct {
 	config        *config.Config
 	version       string
 	subjectPrefix string
-	credsSyncer   CredsSyncer  // nil unless this agent gets its credentials from the platform
-	nebulaSyncer  NebulaSyncer // nil unless the embedded overlay is enabled
+	credsSyncer   CredsSyncer   // nil unless this agent gets its credentials from the platform
+	nebulaSyncer  NebulaSyncer  // nil unless the embedded overlay is enabled
+	leafRefresher LeafRefresher // nil unless a generated nats-leaf.conf sits beside the creds
 	ctx           context.Context
 }
 
@@ -58,6 +69,7 @@ func New(
 	version string,
 	credsSyncer CredsSyncer,
 	nebulaSyncer NebulaSyncer,
+	leafRefresher LeafRefresher,
 	ctx context.Context,
 ) (*Scheduler, error) {
 	// Create gocron scheduler
@@ -76,6 +88,7 @@ func New(
 		version:       version,
 		subjectPrefix: cfg.SubjectPrefix,
 		credsSyncer:   credsSyncer,
+		leafRefresher: leafRefresher,
 		ctx:           ctx,
 	}
 
@@ -271,6 +284,28 @@ func (s *Scheduler) scheduleTasks() error {
 		}
 		s.logger.Info("Scheduled nebula config sync task",
 			zap.Duration("interval", s.config.Nebula.SyncInterval))
+	}
+
+	// Schedule the leaf preload refresh WITH PANIC RECOVERY AND CONTEXT CHECK.
+	// Only on a gateway: leafRefresher is nil unless a generated nats-leaf.conf
+	// sits beside the creds file of a platform-managed agent. 0 turns the timer
+	// off; cmd.leaf_refresh still runs it on demand.
+	//
+	// Like nebula_sync, this interval is a revocation latency: a device revoked
+	// at the hub keeps connecting at this site's leaf until this runs. The first
+	// run is one interval after start, not at start -- an embedded leaf is still
+	// coming up then, and one started from the file just loaded what is in it.
+	if s.leafRefresher != nil && s.config.Platform.LeafRefreshInterval > 0 {
+		_, err := s.scheduler.NewJob(
+			gocron.DurationJob(s.config.Platform.LeafRefreshInterval),
+			gocron.NewTask(s.wrapTaskWithRecovery("leaf_refresh", s.refreshLeaf)),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to schedule leaf refresh: %w", err)
+		}
+		s.logger.Info("Scheduled leaf preload refresh task",
+			zap.String("conf", s.leafRefresher.ConfPath()),
+			zap.Duration("interval", s.config.Platform.LeafRefreshInterval))
 	}
 
 	return nil
@@ -543,4 +578,36 @@ func (s *Scheduler) syncNebula() {
 
 	// Source-neutral: Manager.Sync has already logged the source and revision.
 	s.logger.Info("Nebula config updated")
+}
+
+// refreshLeaf brings the leaf's preloaded account JWT up to date with the
+// platform's.
+//
+// A fetch failure is a warning, for syncCredentials' reason: the leaf keeps
+// running on what it has and the next tick retries. Anything after the fetch is
+// an error, because it means the platform has a newer JWT -- quite possibly a
+// revocation -- that this site is not enforcing, and only a person can fix
+// what stopped it (a leaf that cannot be signalled, a changed operator). The
+// leaf_preload check reports the same thing for as long as it is true.
+func (s *Scheduler) refreshLeaf() {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	// No error with changed true always means reloaded true, so the second
+	// result adds nothing here; cmd.leaf_refresh reports it to its caller.
+	changed, _, err := s.leafRefresher.Refresh()
+	switch {
+	case err != nil && !changed:
+		s.logger.Warn("Leaf preload refresh failed", zap.Error(err))
+	case err != nil:
+		s.logger.Error("Leaf config rewritten but the leaf has not loaded it", zap.Error(err))
+	case !changed:
+		s.logger.Debug("Leaf preload refresh: unchanged")
+	default:
+		s.logger.Info("Leaf config rewritten and leaf reloaded",
+			zap.String("conf", s.leafRefresher.ConfPath()))
+	}
 }

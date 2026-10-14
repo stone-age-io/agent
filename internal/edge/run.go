@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -28,6 +29,11 @@ import (
 type Edge struct {
 	cfg *Config
 	st  *state
+
+	// srv is the embedded leaf while Run is hosting one, for ReloadEmbedded.
+	// Guarded because the leaf refresh reaches it from a scheduler goroutine.
+	mu  sync.Mutex
+	srv *natsd.Server
 }
 
 // New builds the edge without starting anything.
@@ -64,7 +70,11 @@ func (e *Edge) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		defer srv.Stop()
+		e.setServer(srv)
+		defer func() {
+			e.setServer(nil)
+			srv.Stop()
+		}()
 	}
 
 	nc, err := nats.Connect(e.cfg.LocalNatsURL, localConnectOptions(e.cfg)...)
@@ -82,6 +92,29 @@ func (e *Edge) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	return nil
+}
+
+// ReloadEmbedded has the leaf this process hosts re-read its config file. It is
+// the leaf refresh's reload when nats.server_config is the generated conf.
+//
+// It errors rather than waits when no server is up -- before Run has started
+// one, or after it failed to -- because a server that has not started yet will
+// read the rewritten file when it does, and one that failed to start has
+// nothing to reload.
+func (e *Edge) ReloadEmbedded() error {
+	e.mu.Lock()
+	srv := e.srv
+	e.mu.Unlock()
+	if srv == nil {
+		return fmt.Errorf("the embedded leaf is not running")
+	}
+	return srv.Reload()
+}
+
+func (e *Edge) setServer(srv *natsd.Server) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.srv = srv
 }
 
 // localConnectOptions dials the leaf on this box.

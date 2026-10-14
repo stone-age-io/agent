@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/edge"
+	"github.com/stone-age-io/agent/internal/platform"
 )
 
 // A plain device must not start the edge subsystem.
@@ -56,5 +62,35 @@ func TestEdgeIsEnabledByLeafCapabilities(t *testing.T) {
 func TestBareAgentDoesNoEdgeWork(t *testing.T) {
 	if edgeEnabled(&config.Config{}) {
 		t.Error("a bare agent has no leaf, no server and no buckets")
+	}
+}
+
+// The leaf refresh has no switch of its own: it runs where `agent -leaf-config`
+// has left a conf beside the creds file of a platform-managed agent, and
+// nowhere else. A hand-written nats-server config elsewhere is never touched.
+func TestLeafRefresherRunsOnlyBesideAGeneratedConf(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{Code: "gw-01"}
+	cfg.NATS.Auth.Type = "platform"
+	cfg.NATS.Auth.CredsFile = filepath.Join(dir, "gw.creds")
+	client := platform.NewClient(cfg, zap.NewNop())
+
+	if r := leafRefresher(cfg, nil, nil, zap.NewNop()); r != nil {
+		t.Error("an agent that is not platform-managed has nowhere to fetch a leaf config from")
+	}
+	if r := leafRefresher(cfg, client, nil, zap.NewNop()); r != nil {
+		t.Error("no nats-leaf.conf beside the creds file, so there is nothing to refresh")
+	}
+
+	confPath := filepath.Join(dir, edge.LeafConfName)
+	if err := os.WriteFile(confPath, []byte("# generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := leafRefresher(cfg, client, nil, zap.NewNop())
+	if r == nil {
+		t.Fatal("a generated conf beside the creds file should be refreshed")
+	}
+	if r.ConfPath() != confPath {
+		t.Errorf("refresher watches %s, want %s", r.ConfPath(), confPath)
 	}
 }

@@ -36,6 +36,15 @@ type HealthReporter interface {
 	Report() *health.Report
 }
 
+// LeafRefresher runs one leaf preload refresh: re-read the leaf config from the
+// platform and, if the generated nats-leaf.conf would change, rewrite it and
+// reload the leaf. Implemented by *edge.LeafRefresher.
+//
+// Declared here rather than imported for the same reason as CredsRotator.
+type LeafRefresher interface {
+	Refresh() (changed, reloaded bool, err error)
+}
+
 // CommandHandlers manages all command subscriptions and handlers
 type CommandHandlers struct {
 	logger        *zap.Logger
@@ -47,6 +56,7 @@ type CommandHandlers struct {
 	natsClient    *Client
 	credsRotator  CredsRotator     // nil unless this agent gets its credentials from the platform
 	nebulaCtl     NebulaController // nil unless the embedded overlay is enabled
+	leafRefresher LeafRefresher    // nil unless a generated nats-leaf.conf sits beside the creds
 	reporter      HealthReporter   // the readiness registry, shared with /ready
 }
 
@@ -68,8 +78,10 @@ type NebulaController interface {
 // it is not available on this agent.
 // nebulaCtl may be nil, in which case the nebula command reports that the
 // overlay is not enabled on this agent.
+// leafRefresher may be nil, in which case the leaf_refresh command reports that
+// this agent has no generated leaf config to refresh.
 // reporter supplies the readiness report that cmd.health answers with.
-func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator, nebulaCtl NebulaController, reporter HealthReporter) *CommandHandlers {
+func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.Executor, natsClient *Client, version string, credsRotator CredsRotator, nebulaCtl NebulaController, leafRefresher LeafRefresher, reporter HealthReporter) *CommandHandlers {
 	return &CommandHandlers{
 		logger:        logger,
 		config:        cfg,
@@ -80,6 +92,7 @@ func NewCommandHandlers(logger *zap.Logger, cfg *config.Config, executor *tasks.
 		natsClient:    natsClient,
 		credsRotator:  credsRotator,
 		nebulaCtl:     nebulaCtl,
+		leafRefresher: leafRefresher,
 		reporter:      reporter,
 	}
 }
@@ -118,8 +131,9 @@ const (
 // from discovery, and the nats_permissions check says so.
 //
 // Every command is registered whether or not this agent can carry it out, so
-// that rotate_creds and nebula answer with a reason instead of timing out on an
-// agent that is not platform-managed or has no overlay.
+// that rotate_creds, nebula and leaf_refresh answer with a reason instead of
+// timing out on an agent that is not platform-managed, has no overlay or has
+// no leaf.
 func (h *CommandHandlers) Register() error {
 	svc, err := micro.AddService(h.natsClient.conn, micro.Config{
 		Name:        ServiceName,
@@ -148,6 +162,7 @@ func (h *CommandHandlers) Register() error {
 		{"health", h.handleHealth},
 		{"rotate_creds", h.handleRotateCreds},
 		{"nebula", h.handleNebula},
+		{"leaf_refresh", h.handleLeafRefresh},
 	} {
 		if err := commands.AddEndpoint(e.name, h.handleWithRecovery(e.name, e.handler)); err != nil {
 			return fmt.Errorf("failed to add the %s command: %w", e.name, err)
@@ -358,6 +373,18 @@ type nebulaResponse struct {
 	TS     string `json:"ts"`
 }
 
+// leafRefreshResponse is the outcome of one refresh. Changed means
+// nats-leaf.conf was rewritten; Reloaded means the leaf was told to re-read it.
+// Both are in the error reply too, because "rewritten but not reloaded" is the
+// failure an operator most needs to tell apart from "nothing happened".
+type leafRefreshResponse struct {
+	Status   string `json:"status"`
+	Changed  bool   `json:"changed"`
+	Reloaded bool   `json:"reloaded"`
+	Error    string `json:"error,omitempty"`
+	TS       string `json:"ts"`
+}
+
 type errorResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error"`
@@ -517,6 +544,49 @@ func (h *CommandHandlers) runNebulaAction(action string) {
 		h.taskExecutor.RecordCommandSuccess()
 		h.logger.Info("Nebula restart complete")
 	}
+}
+
+// handleLeafRefresh runs one leaf preload refresh now, rather than waiting up to
+// platform.leaf_refresh_interval -- the thing to send after revoking a device
+// that must stop connecting at a site immediately.
+//
+// It is cmd.nebula's `sync` in purpose but NOT in shape: it acts first and
+// answers with the outcome, like rotate_creds. cmd.nebula answers early because
+// its actions can cut the tunnel the request arrived through. A leaf reload
+// does not drop connections, only the ones whose credential the new JWT
+// revokes, so the reply can wait for the result and carry it.
+func (h *CommandHandlers) handleLeafRefresh(msg micro.Request) {
+	h.logger.Info("Received leaf refresh command")
+
+	if h.leafRefresher == nil {
+		h.respondError(msg, codeBadRequest, "leaf refresh is not available on this agent: it needs platform auth and a nats-leaf.conf written by `agent -leaf-config` beside nats.auth.creds_file")
+		return
+	}
+
+	changed, reloaded, err := h.leafRefresher.Refresh()
+	if err != nil {
+		h.logger.Error("Leaf refresh failed",
+			zap.Bool("changed", changed), zap.Error(err))
+		h.taskExecutor.RecordCommandError(err)
+		h.fail(msg, codeInternal, err.Error(), leafRefreshResponse{
+			Status:   "error",
+			Changed:  changed,
+			Reloaded: reloaded,
+			Error:    err.Error(),
+			TS:       utils.NowRFC3339(),
+		})
+		return
+	}
+
+	h.taskExecutor.RecordCommandSuccess()
+	h.logger.Info("Leaf refresh complete",
+		zap.Bool("changed", changed), zap.Bool("reloaded", reloaded))
+	h.reply(msg, leafRefreshResponse{
+		Status:   "success",
+		Changed:  changed,
+		Reloaded: reloaded,
+		TS:       utils.NowRFC3339(),
+	})
 }
 
 // marshalFailure is the reply when a reply cannot be marshalled. Every response
@@ -864,6 +934,9 @@ func (h *CommandHandlers) getConfigInfo() *ConfigInfo {
 	}
 	if h.nebulaCtl != nil {
 		enabledTasks = append(enabledTasks, "nebula_sync")
+	}
+	if h.leafRefresher != nil && h.config.Platform.LeafRefreshInterval > 0 {
+		enabledTasks = append(enabledTasks, "leaf_refresh")
 	}
 
 	return &ConfigInfo{

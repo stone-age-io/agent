@@ -99,6 +99,9 @@ Understanding the design and components of the agent platform.
 
 **Optionally, on a site that is also a gateway** (see [Leaf Nodes](./leaf-node.md)):
 - Bootstrap and host the site's NATS **leaf node**
+- Keep the leaf's preloaded account JWT current, and reload the leaf when it
+  moves, so revocations made at the hub reach the site
+  (`platform.leaf_refresh_interval`, or at once with `cmd.leaf_refresh`)
 - Relay declared KV buckets up to the hub, mirror declared buckets down
 - Add the leaf's own checks — `nats_local`, `hub_uplink` and `sync` — to the
   agent's `/ready`
@@ -631,7 +634,8 @@ caller was already permitted to do.
   it (an islanded site, a bucket that will not sync, an overlay that is down,
   tunnel-less or rolled back, JetStream unusable, a majority of metrics scrapes
   failing, a subject the server refused, a platform sync that has stopped
-  succeeding)
+  succeeding, a site leaf enforcing an older account JWT than the platform
+  serves)
 - `unhealthy`: some check reported `fail` — currently NATS being disconnected,
   and on a gateway the local leaf being unreachable
 

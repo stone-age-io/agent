@@ -22,13 +22,14 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	nebulalib "github.com/slackhq/nebula"
 	nebulaconfig "github.com/slackhq/nebula/config"
 	"go.uber.org/zap"
+
+	"github.com/stone-age-io/agent/internal/utils"
 )
 
 // verifyPoll is how often the verify step asks whether a lighthouse tunnel has
@@ -360,7 +361,9 @@ func (m *Manager) cacheLocked(yaml string) {
 	if m.cacheFile == "" {
 		return
 	}
-	if err := writeFileAtomic(m.cacheFile, []byte(yaml)); err != nil {
+	// 0600: a Nebula config embeds the host's private key inline, because
+	// Nebula's PKI requires it there.
+	if err := utils.WriteFileAtomic(m.cacheFile, []byte(yaml), 0o600); err != nil {
 		m.logger.Warn("Failed to cache Nebula config", zap.Error(err))
 	}
 }
@@ -374,39 +377,6 @@ func (m *Manager) readCache() (string, error) {
 		return "", fmt.Errorf("read cached nebula config: %w", err)
 	}
 	return string(raw), nil
-}
-
-// writeFileAtomic writes data through a temp file in the same directory and
-// renames it into place, so a crash mid-write cannot leave a truncated config.
-//
-// os.CreateTemp opens 0600, which is what this wants: a Nebula config embeds the
-// host's private key inline, because Nebula's PKI requires it there.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) //nolint:errcheck // no-op once the rename succeeds
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close() //nolint:errcheck // write error is the one that matters
-		return fmt.Errorf("failed to write %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close %s: %w", tmpName, err)
-	}
-
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("failed to install %s: %w", path, err)
-	}
-
-	return nil
 }
 
 // Health is the mesh state the agent reports through cmd.health.

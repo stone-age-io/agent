@@ -108,3 +108,15 @@ func TestStatsOnNoServer(t *testing.T) {
 		t.Error("Stats on a zero Server should report ok == false")
 	}
 }
+
+// Reload with no server says so rather than panicking. The leaf refresh can
+// reach it before the edge has started one, or after it failed to.
+func TestReloadOnNoServer(t *testing.T) {
+	var nilSrv *Server
+	if err := nilSrv.Reload(); err == nil {
+		t.Error("Reload on a nil Server should return an error")
+	}
+	if err := (&Server{}).Reload(); err == nil {
+		t.Error("Reload on a zero Server should return an error")
+	}
+}

@@ -37,13 +37,13 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/stone-age-io/agent/internal/config"
+	"github.com/stone-age-io/agent/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -559,42 +559,12 @@ func (c *Client) writeCreds(creds string) (bool, error) {
 		return false, nil
 	}
 
-	if err := writeFileAtomic(c.credsPath, []byte(creds)); err != nil {
+	// 0600 through a temp file and a rename: the credential embeds the nkey
+	// seed, and an agent that cannot parse its own credential does not come
+	// back on its own.
+	if err := utils.WriteFileAtomic(c.credsPath, []byte(creds), 0o600); err != nil {
 		return false, fmt.Errorf("failed to write credentials file: %w", err)
 	}
 
 	return true, nil
-}
-
-// writeFileAtomic writes data through a temp file in the same directory and
-// renames it into place, so a crash mid-write cannot leave a truncated secret —
-// an agent that cannot parse its own credential does not come back on its own.
-//
-// os.CreateTemp opens with 0600, which is what both secrets here want.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) //nolint:errcheck // no-op once the rename succeeds
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close() //nolint:errcheck // write error is the one that matters
-		return fmt.Errorf("failed to write %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close %s: %w", tmpName, err)
-	}
-
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("failed to install %s: %w", path, err)
-	}
-
-	return nil
 }

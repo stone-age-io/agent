@@ -10,7 +10,65 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+> **Upgrading a gateway: restart the leaf once.** The generated
+> `nats-leaf.conf` now names a `pid_file` (`nats-leaf.pid`, beside the conf) and
+> writes every path -- `credentials`, `store_dir`, `pid_file` -- as an absolute
+> path into the conf's directory. Re-run `agent -leaf-config` (or let the first
+> refresh rewrite the conf), then restart the leaf: the separately supervised
+> `nats-server`, or the agent when it hosts the leaf. A running leaf cannot
+> adopt the new file by reload: it has no pid file to be signalled through, and
+> nats-server refuses to reload a changed `store_dir` at all ("config reload not
+> supported for jetstream storage directory"), applying nothing from the file.
+> The refresh reports the failed reload on the run that rewrote the file, and `leaf_preload`
+> warns from the next account JWT change until the restart. The leaf needs write
+> access to its config directory -- the same access it already needs to create
+> its JetStream store there. **If the leaf did not run from its conf's
+> directory, its JetStream data is not in `<confdir>/jetstream`:** move the old
+> `jetstream` directory there before the restart, or accept a resync (hub → edge
+> mirrors refill from the hub; any relay backlog not yet sent to the hub is
+> lost). On Windows a separately supervised leaf is never signalled; restart it
+> after each change, or host it in-process with `nats.server_config`.
+
+### Added
+
+- **A gateway keeps its leaf's account JWT current**, so a device revoked at
+  the hub stops connecting at its site. NATS revocations live in the account
+  JWT, and the leaf's `resolver: MEMORY` only ever knew the one `agent
+  -leaf-config` preloaded -- a revoked device kept authenticating at its site's
+  leaf indefinitely. Every `platform.leaf_refresh_interval` (default `5m`; `0`
+  off, otherwise 30s–1h) the agent probes `/api/me/account-jwt`, and only when
+  the account JWT changed (or on the first run after start) reads the full
+  `/api/me/leaf-config`, rewrites `nats-leaf.conf` if it changed, and reloads
+  the leaf: in-process when the agent hosts it, by `SIGHUP` via `pid_file` on
+  Linux and FreeBSD. On reload the leaf closes a revoked user's live
+  connections and refuses its reconnects. It runs only where a generated
+  `nats-leaf.conf` sits beside `nats.auth.creds_file`, and never writes the
+  creds. A changed operator is not reloadable and is reported instead. See
+  `docs/leaf-node.md`.
+- **The probe keeps the credential off the wire.** The full leaf config carries
+  this thing's `.creds`; the probe carries only the account JWT and its public
+  key, so a refresh that finds nothing changed transfers no key material. It
+  needs a platform that serves `/api/me/account-jwt`. An older platform answers
+  404, and the agent falls back to reading the full leaf config on every run --
+  credential included -- and warns once.
+- **`cmd.leaf_refresh`** runs one refresh now and answers
+  `{"changed": ..., "reloaded": ...}`.
+- **A `leaf_preload` readiness check** warns when the leaf is enforcing a
+  different account JWT from the one the platform last served, read from the
+  leaf's loopback `/accountz`.
+
 ### Fixed
+
+- **`agent -leaf-config` writes `nats-leaf.conf` atomically** (temp file and
+  rename). The creds write is unchanged.
+- **Paths in the generated `nats-leaf.conf` are absolute.** It wrote
+  `credentials` as the creds file's base name and `store_dir: "./jetstream"`,
+  and nats-server resolves both against its working directory, not the conf's
+  -- so a leaf run from anywhere else (under a service manager, typically)
+  could not find its credential and kept its JetStream store in that other
+  directory. See the upgrade note above.
+- **Shutdown waits for an embedded leaf to stop** (up to 30s) instead of
+  letting the process exit while it was still flushing JetStream.
 
 - **`nebula.source: "file"` no longer re-applies an unchanged file.** Every
   `sync_interval` it reloaded the config, waited for a lighthouse handshake,

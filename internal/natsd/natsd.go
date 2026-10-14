@@ -253,6 +253,34 @@ func (s *Server) Stats() (*Stats, bool) {
 	return st, true
 }
 
+// Reload re-reads the server's config file and applies what nats-server can
+// change in place -- exactly what SIGHUP does to a standalone nats-server.
+//
+// The edge calls it after rewriting resolver_preload, and that is a change
+// nats-server supports: under `resolver: MEMORY` it re-stores the preloads and
+// re-applies each account's claims, which is how a revocation added to the
+// account JWT takes effect. What it refuses -- a changed operator, a moved
+// listen port -- it refuses with an error and leaves the running server as it
+// was.
+//
+// It needs the config file path, which ProcessConfigFile recorded in Start.
+// NoSigs does not matter: it only stops nats-server installing signal handlers.
+func (s *Server) Reload() error {
+	if s == nil || s.ns == nil {
+		return fmt.Errorf("no embedded NATS server is running")
+	}
+	return s.ns.Reload()
+}
+
+// ClientURL is the address the embedded server accepts clients on -- the port
+// it actually bound, which differs from the config when that says `port: -1`.
+func (s *Server) ClientURL() string {
+	if s == nil || s.ns == nil {
+		return ""
+	}
+	return s.ns.ClientURL()
+}
+
 // Stop shuts the server down and waits for it to finish.
 func (s *Server) Stop() {
 	if s == nil || s.ns == nil {

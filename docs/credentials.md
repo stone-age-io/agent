@@ -75,6 +75,7 @@ All of these live under `platform:`.
 | `identity` | Yes | The thing's login email |
 | `password_env` | Until bootstrapped | Name of the env var holding the thing's password — see [After the first boot](#after-the-first-boot) |
 | `sync_interval` | `24h` | Range 1h–72h. Must stay well inside the platform's session token TTL (7 days) |
+| `leaf_refresh_interval` | `5m` | Gateways only: how often the leaf's preloaded account JWT is re-read and the leaf reloaded. `0` turns the timer off; otherwise 30s–1h. It is the site's revocation latency — see [Leaf Nodes](./leaf-node.md#keeping-the-account-jwt-current). Inert without a generated `nats-leaf.conf` |
 | `session_file` | No | Where the platform session is stored. Defaults to `platform-session.json` beside `creds_file` |
 | `allow_insecure_url` | No | Permits a plain `http://` platform URL. Development only |
 
@@ -200,11 +201,13 @@ Empty request body. The agent asks the platform to re-mint its credential (`POST
 
 ### Recovering a revoked device
 
-No manual step is needed. The sync path never touches NATS, so it keeps working while the NATS connection does not:
+No manual step is needed on the device itself. The sync path never touches NATS, so it keeps working while the NATS connection does not:
 
 1. NATS rejects the revoked credential and the agent exits
 2. The service manager restarts it (`Restart=always` on systemd, recovery actions on Windows)
 3. The startup sync adopts the current credential, and the agent connects
+
+**Behind a site gateway, step 1 waits for the gateway.** A device there connects to its site's leaf node, and the leaf learns of a revocation only from the account JWT preloaded into its `nats-leaf.conf` — it cannot ask the hub. The gateway's agent re-reads that JWT every `platform.leaf_refresh_interval` (default `5m`) and reloads the leaf, which then closes the revoked device's live connection and refuses its reconnects. So at a site, a revoked device keeps connecting for up to one interval — or until you send `cmd.leaf_refresh` to the gateway. Two cases still need a person: a **separately supervised leaf on Windows**, which the agent cannot signal, and any leaf **started from a config an older agent generated**, which needs restarting once after the upgrade. In both the gateway's `leaf_preload` check warns until the leaf is enforcing the current JWT. See [Leaf Nodes](leaf-node.md#keeping-the-account-jwt-current).
 
 ---
 

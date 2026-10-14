@@ -69,6 +69,19 @@ type PlatformConfig struct {
 	// conversation in the task list rather than beside the platform.
 	SyncInterval time.Duration `mapstructure:"sync_interval"`
 
+	// LeafRefreshInterval is how often a gateway re-reads its leaf config from
+	// the platform and, when the account JWT in it has moved, rewrites
+	// nats-leaf.conf and reloads the leaf. 0 turns the scheduled refresh off.
+	//
+	// It lives beside the platform rather than under nats because it is a
+	// platform conversation, like SyncInterval -- and because it is a SECURITY
+	// setting in the same way nebula.sync_interval is. NATS user revocations
+	// travel inside the account JWT, and a leaf running `resolver: MEMORY` knows
+	// only the JWT preloaded into its config file. Until this re-reads it, a
+	// device revoked at the hub keeps authenticating at its site's leaf. Inert
+	// on an agent with no generated nats-leaf.conf beside its creds file.
+	LeafRefreshInterval time.Duration `mapstructure:"leaf_refresh_interval"`
+
 	// AllowInsecureURL permits a plain http:// platform URL. Development only:
 	// bootstrap sends the thing's password and receives an nkey seed, so on the
 	// wire in cleartext both are readable.
@@ -369,6 +382,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.inventory.enabled", true)
 	v.SetDefault("tasks.inventory.interval", "24h")
 	v.SetDefault("platform.sync_interval", "24h")
+	v.SetDefault("platform.leaf_refresh_interval", "5m")
 
 	// Nebula defaults. Off unless asked for; the paths sit beside the other
 	// platform-managed secrets.
@@ -574,6 +588,10 @@ func validate(cfg *Config) error {
 		}
 	}
 
+	if err := validateLeafRefresh(cfg); err != nil {
+		return err
+	}
+
 	if err := validateNebula(cfg); err != nil {
 		return err
 	}
@@ -644,6 +662,37 @@ func validateSubjectPrefix(prefix string) error {
 		}
 	}
 
+	return nil
+}
+
+// validateLeafRefresh checks platform.leaf_refresh_interval. Only meaningful
+// with platform auth, because the leaf config comes from the platform; the key
+// is inert everywhere else, so it is not checked there either.
+//
+// 0 is the off switch -- like platform.sync_interval there is no separate
+// enabled flag -- so it is allowed, and a negative value is refused rather than
+// read as a second spelling of off.
+//
+// Bounded at both ends, for nebula.sync_interval's reasons. Below 30 seconds is
+// hammering the platform (each run is a token refresh plus a leaf-config read)
+// for a JWT that changes when someone revokes a device. Above an hour is too
+// long: this interval IS how long a device revoked at the hub can still connect
+// at this site's leaf, and nothing else shortens it.
+func validateLeafRefresh(cfg *Config) error {
+	if cfg.NATS.Auth.Type != authPlatform {
+		return nil
+	}
+	interval := cfg.Platform.LeafRefreshInterval
+	switch {
+	case interval == 0:
+		return nil
+	case interval < 0:
+		return fmt.Errorf("platform.leaf_refresh_interval must not be negative (got: %v) - use 0 to turn the refresh off", interval)
+	case interval < 30*time.Second:
+		return fmt.Errorf("platform.leaf_refresh_interval must be 0 (off) or at least 30 seconds (got: %v)", interval)
+	case interval > time.Hour:
+		return fmt.Errorf("platform.leaf_refresh_interval must not exceed 1 hour (got: %v) - it is how long a device revoked at the hub can still connect at this site's leaf, because the leaf learns of revocations only from the account JWT preloaded into its config", interval)
+	}
 	return nil
 }
 

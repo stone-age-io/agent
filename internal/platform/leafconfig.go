@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,6 +12,10 @@ import (
 // route it takes no record id — the target is derived from the caller's own auth
 // token, so there is no parameter that could aim it at another Thing.
 const leafConfigPath = "/api/me/leaf-config"
+
+// accountJWTPath is the leaf refresh's probe: the same caller-derived target,
+// but only the account JWT and its public key. See AccountJWT.
+const accountJWTPath = "/api/me/account-jwt"
 
 // LeafConfig is everything a gateway needs to stand up its NATS leaf server.
 //
@@ -61,9 +66,9 @@ type LeafConfig struct {
 // every writer of the session file does a read-modify-write under c.mu, or one
 // job drops another's token — the agent's only password-free way back in.
 //
-// There is deliberately no revision probe here, unlike the credential and Nebula
-// syncs. This is a one-shot run before the NATS server exists, not a poll, and
-// every value in it is either public or already on disk.
+// It carries this Thing's .creds, so the leaf refresh does not poll it: it polls
+// AccountJWT and calls this only when the account JWT moved (or on a platform
+// that predates that route). `agent -leaf-config` calls it once.
 func (c *Client) LeafConfig() (*LeafConfig, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -94,6 +99,60 @@ func (c *Client) LeafConfig() (*LeafConfig, error) {
 	c.saveSession(prev)
 
 	return &cfg, nil
+}
+
+// ErrNoAccountJWTRoute is AccountJWT's answer from a platform that predates the
+// probe route: PocketBase answers a route it does not have with 404. The leaf
+// refresh then falls back to reading the full leaf config every run.
+var ErrNoAccountJWTRoute = errors.New("the platform has no " + accountJWTPath + " route (it predates the probe)")
+
+// AccountJWT reads only this Thing's account JWT and its public key -- the
+// revision probe for the leaf refresh.
+//
+// The full leaf config carries this Thing's .creds, nkey seed and all, and the
+// refresh only needs to know whether the account JWT moved. This route serves
+// public trust material and nothing else, so a refresh that finds nothing
+// changed has put no key material on the wire. Same lock and session
+// discipline as LeafConfig.
+func (c *Client) AccountJWT() (accountPub, accountJWT string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	prev := c.loadSession()
+
+	token, _, err := c.authenticate(prev.Token)
+	if err != nil {
+		return "", "", err
+	}
+
+	req, err := c.newRequest(http.MethodGet, c.url(accountJWTPath, "", ""), nil)
+	if err != nil {
+		return "", "", err
+	}
+	c.setAuth(req, token)
+
+	var resp struct {
+		AccountJWT string `json:"account_jwt"`
+		AccountPub string `json:"account_pub"`
+	}
+	err = c.do(req, &resp)
+
+	// The token was accepted either way, and it is the agent's only
+	// password-free way back in, so it is kept even when the route is missing.
+	prev.Token = token
+	c.saveSession(prev)
+
+	var he *httpError
+	if errors.As(err, &he) && he.status == http.StatusNotFound {
+		return "", "", ErrNoAccountJWTRoute
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read account JWT: %w", err)
+	}
+	if resp.AccountJWT == "" || resp.AccountPub == "" {
+		return "", "", errors.New("platform returned an incomplete account JWT probe: account_jwt and account_pub are both required")
+	}
+	return resp.AccountPub, resp.AccountJWT, nil
 }
 
 // HubDomain returns the hub's JetStream domain: from the session file if a leaf

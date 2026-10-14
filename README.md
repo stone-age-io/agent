@@ -77,6 +77,7 @@ to reach the leaf server it hosts.
 
 ### Site gateway (all optional)
 - **NATS leaf node**: bootstrap a site's `nats-leaf.conf` from the platform (`agent -leaf-config`) and, if you want, host that server in this process
+- **Revocations reach the site**: the leaf's preloaded account JWT -- where NATS user revocations live -- is re-read every `platform.leaf_refresh_interval` (default 5m) and the leaf reloaded, so a device revoked at the hub stops connecting at its site within that interval, or at once with `cmd.leaf_refresh`
 - **KV sync**: relay declared buckets up to the hub and mirror declared buckets down, so the site keeps working through a WAN outage
 
 None of these is a mode you switch on. There is no `edge.enabled` key and no
@@ -220,6 +221,8 @@ location: "hq"            # Optional deployment location, carried in telemetry p
 #   identity: "thing@example.com"              # the thing's login email
 #   password_env: "AGENT_PLATFORM_PASSWORD"
 #   sync_interval: "24h"                       # credential refresh, 1h-72h
+#   leaf_refresh_interval: "5m"                # gateways: keep the leaf's account JWT, and so
+#                                              # its revocations, current. 0 = off, else 30s-1h
 
 # NATS Connection
 nats:
