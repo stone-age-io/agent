@@ -579,7 +579,7 @@ nats request "agents.device-123.cmd.health" '{}'
     "code": "device-123",
     "location": "hq",
     "subject_prefix": "agents",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "enabled_tasks": ["heartbeat", "system_metrics", "creds_sync"],
     "allowed_commands": ["df -h"],
     "allowed_services": ["nginx"],

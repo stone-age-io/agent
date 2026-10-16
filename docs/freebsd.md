@@ -18,7 +18,7 @@ Complete guide for installing and configuring the agent on FreeBSD systems.
 ```bash
 # Download and extract the release archive (set VERSION to the latest release)
 cd /tmp
-VERSION=0.4.0
+VERSION=0.5.0
 fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
 tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 
@@ -500,7 +500,7 @@ sudo cp /usr/local/bin/agent /usr/local/bin/agent.backup
 
 # Download and extract the new release archive
 cd /tmp
-VERSION=0.4.0
+VERSION=0.5.0
 fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
 tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 

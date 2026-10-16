@@ -10,6 +10,8 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-15
+
 > **Upgrading a gateway: restart the leaf once.** The generated
 > `nats-leaf.conf` now names a `pid_file` (`nats-leaf.pid`, beside the conf) and
 > writes every path -- `credentials`, `store_dir`, `pid_file` -- as an absolute
@@ -598,7 +600,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/stone-age-io/agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stone-age-io/agent/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/stone-age-io/agent/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/stone-age-io/agent/compare/v0.3.0...v0.3.1
