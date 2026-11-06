@@ -41,14 +41,18 @@ import (
 //	              comes into play; reads are served locally from the last-known
 //	              values, which is exactly right when the link is down.
 //
-//	twin          N origins (every site), aggregated at the hub. Native sourcing
-//	              cannot do this cleanly: every site's bucket would be the stream
-//	              `KV_twin`, and aggregating same-named sources needs the server's
-//	              internal `iname`, which nats.go does not expose. The documented
-//	              guidance is unique stream names for centrally-referenced
-//	              streams — which would mean `twin_<code>` at each edge, so
-//	              rule-router would read a different bucket name at every site.
-//	              Not worth it. The relay below carries this one direction.
+//	twin          N origins (every site), aggregated at the hub. A native
+//	              source CAN aggregate same-named buckets -- the server tells
+//	              `KV_twin` from S01 and `KV_twin` from S02 apart by API prefix --
+//	              but the sources live in ONE list on the hub's stream, and that
+//	              list has no safe writer. A stream update replaces the whole
+//	              list, with no per-source add or remove and no expected-revision
+//	              check, and the server cancels every source the new list omits.
+//	              Two sites adding themselves at once therefore remove each
+//	              other, and nothing owns removing a decommissioned site. The
+//	              Control Plane cannot hold the list either: it has no credential
+//	              in the org's account. The relay below needs no shared config:
+//	              each site owns its own upstream path.
 //
 // That last point is also why no entry in either list may be renamed across the
 // link: a bucket has the same name at both ends, or the reason the relay exists

@@ -362,13 +362,19 @@ agent/
       it serves last-known values offline since the edge never writes it. Configured on
       the RECEIVING side, so there is no hub-side stream to mutate and no race between
       sites.
-    - **Upstream cannot be a source.** Aggregating N sites natively needs N sources
-      all named `KV_twin`, which requires the server's internal `iname` that nats.go
-      does not expose; the alternative is `twin_<code>` at every edge and a rule engine
-      reading a different bucket name per site. Hence the relay for this one direction --
-      do not "finish the job" by making it a source without solving that. **This is also
-      why `SyncBucket` has no rename field:** a bucket carries the same name at both
-      ends, or the reason the relay exists evaporates.
+    - **Upstream cannot be a source, because the source list has no safe writer.**
+      Same-named sources DO work: the server tells `KV_twin` from each domain apart
+      by API prefix, and nats.go builds them with no transform. The blocker is that
+      the hub's stream holds every site in one list. A stream update replaces the
+      whole list (no per-source add or remove, no expected-revision check), and the
+      server cancels any source the new list omits, so two sites adding themselves
+      at once remove each other; nothing owns removing a decommissioned site; and
+      the Control Plane has no credential in the org's account to hold it. Checked
+      against nats.go v1.55 and nats-server up to 2.15.2. An earlier version of this
+      note blamed the server's `iname`, which is wrong. Do not "finish the job" by
+      making reported state a source without solving the list. **`SyncBucket` has
+      no rename field for a separate reason:** the console and rule engine read one
+      bucket name per org, so a bucket carries the same name at both ends.
     - **A mirror's filter cannot be changed later.** nats-server rejects any change to a
       mirror block on an existing stream (`JSStreamMirrorNotUpdatableErr`), so narrowing
       an existing mirror means deleting and recreating the bucket on every site by hand.

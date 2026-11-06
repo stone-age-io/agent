@@ -126,11 +126,11 @@ func (s SyncConfig) Any() bool {
 
 // SyncBucket is one declared bucket, in either direction.
 //
-// There is deliberately no field for a different name at the other end. A bucket
-// carrying the same name at both ends is the whole reason the upstream direction
-// is an application relay rather than a native JetStream source: a source would
-// force `twin_<code>` at every site, and then the console and the rule engine
-// would read a different bucket name per site.
+// There is deliberately no field for a different name at the other end. The
+// console and the rule engine read one bucket name for the whole organization;
+// a per-site name at the hub (`twin_<code>`) would make them read a different
+// bucket at every site. Why the upstream direction is a relay rather than a
+// native source is a separate question, answered in internal/edge/twin.go.
 type SyncBucket struct {
 	Bucket string `mapstructure:"bucket"`
 

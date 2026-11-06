@@ -386,12 +386,25 @@ the link is down. The mirror is configured on the *receiving* side, so there is 
 hub-side stream to mutate and no race between sites.
 
 **Upstream cannot be a source,** which would otherwise be the symmetric
-answer. Aggregating N sites at the hub means N sources all named `KV_twin`;
-same-named sources need the server's internal `iname`, which nats.go does not
-expose. The alternative is `twin_<code>` at every edge, which makes a rule engine
-read a different bucket name at every site. Not worth it — hence the relay for
-this one direction. Do not "finish the job" by making reported state a source
-without solving that.
+answer. The mechanism itself works: a hub `twin` bucket can source every site's
+`KV_twin`, because the server tells same-named sources apart by their domain's
+API prefix. What fails is managing it. Every site is an entry in **one** source
+list on the hub's stream, and that list has no safe writer:
+
+- A stream update replaces the whole list. There is no call to add or remove one
+  source, and no expected-revision check to catch a concurrent edit.
+- The server cancels every source the new list leaves out. Two sites adding
+  themselves at the same moment do not merely lose an add — each removes the
+  other.
+- Nothing owns removing a decommissioned site, and a site whose agent still runs
+  would put itself back.
+- The Control Plane, which knows the fleet, has no credential in the
+  organization's account, so it cannot hold the list either.
+
+The relay needs no shared configuration: each site owns its own path upstream.
+Hence the relay for this one direction. Do not "finish the job" by making
+reported state a source without solving the list. (An earlier version of this
+section blamed the server's internal `iname`; that was wrong.)
 
 ### Relay mechanics
 

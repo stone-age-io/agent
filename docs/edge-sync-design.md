@@ -69,15 +69,17 @@ correct and this proposal does not touch them:
 | Direction | Mechanism | Why |
 |---|---|---|
 | hub → edge | JetStream **mirror** | one origin, server-maintained, no code in the data path, serves last-known values offline |
-| edge → hub | **application relay** | N origins aggregated; native sourcing needs the server's `iname`, which nats.go still does not expose |
+| edge → hub | **application relay** | N origins aggregated; a native source would put every site in one hub-side source list, which has no safe writer (see [leaf-node.md](leaf-node.md#why-desired-is-a-mirror-and-reported-is-a-relay)) |
 
 So does the naming rule, which is easy to mistake for an accident: **a bucket
-has the same name at both ends.** That is the whole reason the upstream
-direction is a relay rather than a source — a source would force `twin_<code>`
-at every site, and then the console and the rule engine would read a different
-bucket name per site. The generalisation must therefore *not* offer a rename
-knob in either direction. Same name both ends, or the reason the relay exists
-evaporates.
+has the same name at both ends.** The console and the rule engine read one
+bucket name for the whole organization; `twin_<code>` at the hub would make
+them read a different bucket per site. The generalisation must therefore *not*
+offer a rename knob in either direction.
+
+(An earlier version of this table said native sourcing needed the server's
+internal `iname`, which nats.go does not expose. That was wrong: same-named
+sources from different domains work. The real blocker is the shared list.)
 
 And the safety property is unchanged: **one writer per bucket.** That is what
 makes the conflict unrepresentable rather than merely unlikely.
@@ -259,11 +261,13 @@ the idea does not get re-derived from scratch:
   not reach the hub" from "the hub said no"; choosing `Discard: Old` versus
   `New`; choosing order versus throughput.
 - **The server may already do it better.** For streams, unlike KV, the name is
-  ours to choose, so `spool_<code>` sidesteps the `iname` problem entirely and a
-  hub-side source does the job with no agent code and a stronger guarantee — a
-  source tracks sequence, so it needs no dedupe window and produces no
-  duplicates at an outage boundary. The config then lives on the receiving side
-  and in the Control Plane, which already knows the fleet.
+  ours to choose, so each site can have its own hub-side stream (`spool_<code>`)
+  with exactly one source. That sidesteps the shared source list that rules out
+  sourcing the twin, and a source does the job with no agent code and a stronger
+  guarantee — it tracks sequence, so it needs no dedupe window and produces no
+  duplicates at an outage boundary. Someone holding a user credential in the
+  org's account still has to create each site's stream; the Control Plane holds
+  none.
 
 If durable store-and-forward is ever genuinely needed, the first question is
 whether a hub-side source answers it. Building the pump requires a reason the
