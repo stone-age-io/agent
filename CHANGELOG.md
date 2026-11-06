@@ -23,6 +23,20 @@ that period, and this file starts where the versioned releases do.
   - A partial write that left a truncated message on the wire closed the
     connection for good instead of reconnecting, which this agent turns into
     an exit and restart through `Lost()`.
+- **The embedded nats-server is v2.15.2** (was v2.15.0), matching the
+  platform's hub. This is the server a gateway hosts with
+  `nats.server_config`. What reaches a site's leaf:
+  - A mirror or source whose flow control has stalled is now reported in
+    stream info and the server log. A missing `$JS.FC.>` permission across the
+    leaf used to look like a mirror that simply never caught up.
+  - A leaf connection checks publish permissions against the subject it
+    actually sends, after any transform, so a role no longer has to allow the
+    original import subject as well.
+  - A partial compressed write could leave the leaf connection's pending bytes
+    miscounted, stalling it and stopping it from reconnecting. Fixed.
+  - Leaf ACLs no longer implicitly allow `$MQTT.>`.
+- The upgrade also moves `golang.org/x/sys`, the other `golang.org/x/*`
+  modules and `klauspost/compress` to the versions nats-server v2.15.2 requires.
 
 ## [0.5.0] - 2026-10-15
 
