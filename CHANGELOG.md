@@ -12,6 +12,18 @@ that period, and this file starts where the versioned releases do.
 
 ### Changed
 
+- **The edge → hub relay no longer waits on the hub for every change.** Each
+  live change used to cost a read from the hub and then a wait for the hub's
+  acknowledgement, which held a relay to about 5 changes a second over a 100 ms
+  link. Live changes are now published without waiting: about 1,300 a second
+  over the same link. The startup replay still compares each key with the hub
+  before writing, so a restart does not rewrite the hub's bucket, and failed
+  writes are still retried with the edge's current value. Each write waits at
+  most 10 seconds for the hub's answer before it counts as failed.
+- `agent_edge_relay_pending{bucket}` now counts every key the hub has not
+  confirmed: writes in flight as well as failed writes waiting to be retried. It
+  is small and moving on a healthy site, and grows during an outage as before.
+
 - nats.go v1.54.0 → v1.55.0, a release made almost entirely of reconnect, drain
   and consumer fixes. Three reach this agent directly:
   - A KV watcher (the relay's, and every other `Watch`) runs on an ordered

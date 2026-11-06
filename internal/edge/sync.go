@@ -20,8 +20,8 @@ import (
 //	        has no part in the data path. The edge never writes it, so reads keep
 //	        serving last-known values while the link is down.
 //
-//	relay   edge -> hub. The agent watches the local bucket and copies each
-//	        change up, retrying while the link is down.
+//	relay   edge -> hub. The agent watches the local bucket and publishes each
+//	        change up without waiting for the answer, retrying what fails.
 //
 // A bucket belongs to exactly one direction. Config refuses to start otherwise
 // (config.validateSyncConfig) — with two built-in buckets that was structural,
@@ -133,7 +133,9 @@ func startSync(ctx context.Context, nc *nats.Conn, cfg *Config, st *state) {
 		failAll(st, entries, "local JetStream: %v", err)
 		return
 	}
-	hubJS, err := jetstream.NewWithDomain(nc, cfg.HubDomain)
+	// The relay's writes are asynchronous, and nats.go gives those no timeout
+	// unless asked: see relayAckTimeout.
+	hubJS, err := jetstream.NewWithDomain(nc, cfg.HubDomain, jetstream.WithPublishAsyncTimeout(relayAckTimeout))
 	if err != nil {
 		failAll(st, entries, "JetStream on hub domain %q: %v", cfg.HubDomain, err)
 		return
@@ -188,7 +190,7 @@ func wireDown(ctx context.Context, localJS, hubJS jetstream.JetStream, cfg *Conf
 			err = ensureMirror(ctx, localJS, hubJS, w.entry, cfg.HubDomain)
 		case directionRelay:
 			h := w.handle
-			err = startRelay(ctx, localJS, hubJS, w.entry, func(p int) { st.setSyncPending(h, p) })
+			err = startRelay(ctx, localJS, hubJS, w.entry, cfg.HubDomain, func(p int) { st.setSyncPending(h, p) })
 		}
 
 		if err != nil {
@@ -372,7 +374,7 @@ func description(e entry) string {
 //
 // It takes a reporting closure rather than the state, so the relay's only tie to
 // readiness is one function of one int.
-func startRelay(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry, report func(pending int)) error {
+func startRelay(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry, hubDomain string, report func(pending int)) error {
 	hub, err := hubBucket(ctx, hubJS, e)
 	if err != nil {
 		return err
@@ -383,7 +385,7 @@ func startRelay(ctx context.Context, localJS, hubJS jetstream.JetStream, e entry
 		return fmt.Errorf("local bucket: %w", err)
 	}
 
-	r := &relay{src: local, dst: hub, keys: e.Keys, report: report}
+	r := &relay{src: local, dst: newHubKV(hub, hubJS, hubDomain), keys: e.Keys, report: report}
 
 	log.Printf("edge: relaying %q edge → hub, keys %q", e.Name, r.watchKeys())
 	go r.supervise(ctx)

@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -89,6 +90,41 @@ type twinSide interface {
 	Watch(ctx context.Context, keys string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
 }
 
+// hubSide is the far end of a relay: everything relayEntry needs, plus the one
+// write jetstream.KeyValue does not offer, an asynchronous one.
+type hubSide interface {
+	twinSide
+	publish(key string, value []byte, deleted bool) (jetstream.PubAckFuture, error)
+}
+
+// hubKV is the hub's bucket with an asynchronous write added.
+//
+// A KV put is a JetStream publish to `$KV.<bucket>.<key>`, and a delete is the
+// same publish with a `KV-Operation: DEL` header -- that is all nats.go's own Put
+// and Delete do. Across a JetStream domain the subject carries the domain's API
+// prefix, `$JS.<domain>.API.`, which the hub maps back to `$KV.`. This builds the
+// subject the same way nats.go does for a KV bucket it reaches through a domain
+// (kv.go, putPre), and TestHubKVPublishLandsInTheHubBucket proves it against real
+// servers.
+type hubKV struct {
+	jetstream.KeyValue
+	js  jetstream.JetStream
+	pre string
+}
+
+func newHubKV(kv jetstream.KeyValue, js jetstream.JetStream, hubDomain string) *hubKV {
+	return &hubKV{KeyValue: kv, js: js, pre: fmt.Sprintf("$JS.%s.API.$KV.%s.", hubDomain, kv.Bucket())}
+}
+
+func (h *hubKV) publish(key string, value []byte, deleted bool) (jetstream.PubAckFuture, error) {
+	m := &nats.Msg{Subject: h.pre + key, Data: value}
+	if deleted {
+		m.Header = nats.Header{}
+		m.Header.Set("KV-Operation", "DEL")
+	}
+	return h.js.PublishMsgAsync(m)
+}
+
 // relayEntry copies one observed change to dst, unless dst already agrees.
 //
 // The equality check is an optimisation, not the safety property: the watcher
@@ -133,19 +169,26 @@ func relayEntry(ctx context.Context, dst twinSide, key string, val []byte, op je
 	return true, nil
 }
 
-// twinRetryInterval is how often the relay re-offers keys whose write to the hub
-// failed. A var, not a const, so a test can shrink it -- the retry path is the
-// whole point of the pending set and a 30s wait would make it untestable.
+// twinRetryInterval is how often the relay checks its unconfirmed writes and
+// re-sends the keys whose write failed. A var, not a const, so a test can shrink
+// it -- the retry path is the whole point of the pending set and a 30s wait would
+// make it untestable.
 var twinRetryInterval = 30 * time.Second
+
+// relayAckTimeout bounds how long one asynchronous write waits for the hub's
+// acknowledgement. It has to be set: nats.go gives async publishes no timeout by
+// default, so an acknowledgement lost to a WAN drop would leave its key
+// unconfirmed for ever and never retried.
+const relayAckTimeout = 10 * time.Second
 
 // relay is one upstream entry: watch a local bucket, copy every change to the
 // same-named bucket at the hub.
 //
 // It carries its own key filter and its own reporting hook so that N of these
-// can run side by side, each answerable for itself in /ready and /metrics. The
-// mechanics below are unchanged from when there was exactly one.
+// can run side by side, each answerable for itself in /ready and /metrics.
 type relay struct {
-	src, dst twinSide
+	src twinSide
+	dst hubSide
 
 	// keys narrows the watcher. Empty means every key, which is what the twin
 	// preset uses; a filter is how a site is made physically unable to relay
@@ -154,6 +197,14 @@ type relay struct {
 
 	// report publishes the current backlog for the collector. May be nil.
 	report func(pending int)
+
+	// Owned by the pump's goroutine; nothing else touches them, so no lock.
+	//
+	// pending holds keys whose last write failed. inflight holds the latest
+	// unconfirmed write per key. A key is in one or the other, never both: a new
+	// write takes it out of pending, and a failed one moves it back.
+	pending  map[string]struct{}
+	inflight map[string]jetstream.PubAckFuture
 }
 
 func (r *relay) watchKeys() string {
@@ -163,9 +214,12 @@ func (r *relay) watchKeys() string {
 	return r.keys
 }
 
-func (r *relay) setPending(n int) {
+// backlog is every key the hub has not yet confirmed.
+func (r *relay) backlog() int { return len(r.pending) + len(r.inflight) }
+
+func (r *relay) reportBacklog() {
 	if r.report != nil {
-		r.report(n)
+		r.report(r.backlog())
 	}
 }
 
@@ -173,19 +227,31 @@ func (r *relay) setPending(n int) {
 // when ctx is cancelled (nil) or the watcher fails (error, for supervise to back
 // off and restart).
 //
-// Keys whose relay fails are held and retried, which is not a refinement but
-// the only thing making this direction reliable at all. The previous version
-// logged a failed write and dropped it, on the stated grounds that "a key
-// missed here is re-offered by the next watcher restart's replay" -- and it was
-// not. This watcher is on the LOCAL bucket, which does not die when the hub or
-// the WAN does, and supervise only restarts the pump when the WATCHER fails. So
-// a value that changed during an outage, failed its hub write, and then never
-// changed again was absent from the hub permanently and silently, in the one
-// direction the platform takes responsibility for delivering.
+// Two phases, because they want different things:
 //
-// Retrying beats returning an error and letting the supervisor replay: a single
-// key the hub will never accept would otherwise tear down the watcher on every
-// replay and block every other key behind it, forever.
+//   - The REPLAY -- every current value, which the watcher sends first, up to a
+//     nil marker -- goes through relayEntry, one key at a time, comparing before
+//     it writes. A restart replays the whole bucket, and without the compare it
+//     would rewrite every key at the hub, burning a revision each and waking every
+//     hub-side watcher for nothing. It is slow over a WAN (a round trip per key),
+//     but it runs once per start.
+//
+//   - LIVE changes are published asynchronously with no compare. Waiting for a
+//     read and then an acknowledgement on every change held a relay to one change
+//     per two round trips -- 5 a second over a 100 ms link. Publishing without
+//     waiting lets them overlap: the same link carried hundreds a second.
+//
+// Order still holds. Every write goes out on one connection, which the server
+// stores in the order sent, so the newest value for a key is the one that lands
+// last.
+//
+// Failures are held and retried, which is not a refinement but the only thing
+// making this direction reliable at all. The watcher is on the LOCAL bucket,
+// which does not die when the hub or the WAN does, so nothing else would ever
+// re-offer a value that failed and then never changed again. Retrying beats
+// returning an error and letting the supervisor replay: a single key the hub
+// will never accept would otherwise tear down the watcher on every replay and
+// block every other key behind it, forever.
 func (r *relay) pump(ctx context.Context) error {
 	w, err := r.src.Watch(ctx, r.watchKeys())
 	if err != nil {
@@ -193,86 +259,123 @@ func (r *relay) pump(ctx context.Context) error {
 	}
 	defer func() { _ = w.Stop() }()
 
-	// One entry per key currently failing, so this is bounded by the size of the
-	// bucket rather than by the length of the outage.
-	pending := make(map[string]struct{})
+	// Bounded by the size of the bucket rather than by the length of an outage:
+	// one entry per key, whatever happened to it in between.
+	r.pending = make(map[string]struct{})
+	r.inflight = make(map[string]jetstream.PubAckFuture)
 	retry := time.NewTicker(twinRetryInterval)
 	defer retry.Stop()
 
-	r.setPending(0)
+	r.reportBacklog()
 
+	live := false
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-retry.C:
-			r.retryPending(ctx, pending)
+			r.retry(ctx)
 		case e, ok := <-w.Updates():
 			if !ok {
 				return errors.New("watcher closed")
 			}
-			// The watcher sends a nil entry to mark the end of the initial
-			// replay. That replay covers everything present when the pump
-			// starts; the pending set above covers everything that fails
-			// afterwards.
-			if e == nil {
+			if e == nil { // the end of the replay
+				live = true
+				continue
+			}
+			deleted := e.Operation() == jetstream.KeyValueDelete || e.Operation() == jetstream.KeyValuePurge
+			if live {
+				r.send(e.Key(), e.Value(), deleted)
 				continue
 			}
 			if _, err := relayEntry(ctx, r.dst, e.Key(), e.Value(), e.Operation()); err != nil {
 				// Fail-soft, like the rest of this agent: log, keep the stream
 				// moving, and come back to this key on the retry tick.
 				log.Printf("⚠️ edge: relay: %v (will retry)", err)
-				pending[e.Key()] = struct{}{}
-				r.setPending(len(pending))
-				continue
+				r.pending[e.Key()] = struct{}{}
+				r.reportBacklog()
 			}
-			delete(pending, e.Key())
-			r.setPending(len(pending))
 		}
 	}
 }
 
-// retryPending re-offers each key whose relay failed earlier.
+// send writes one key to the hub without waiting for the answer.
+//
+// It always sends what it is given and never reads the hub first. A delete is
+// sent even if the hub never had the key; that leaves a tombstone, which is
+// harmless.
+func (r *relay) send(key string, value []byte, deleted bool) {
+	f, err := r.dst.publish(key, value, deleted)
+	if err != nil {
+		// Refused before it left: nats.go's limit on unacknowledged writes is
+		// full, or the connection is closed. Retry it like any other failure.
+		delete(r.inflight, key)
+		r.pending[key] = struct{}{}
+		r.reportBacklog()
+		return
+	}
+	// This write supersedes whatever failed before it, and whatever was still in
+	// flight: only the latest write for a key decides what the hub ends up with.
+	delete(r.pending, key)
+	r.inflight[key] = f
+}
+
+// retry runs on the tick. It collects the answers to the writes in flight, then
+// re-sends every key whose write failed.
 //
 // The value is re-read from the local bucket rather than remembered from the
 // failed attempt, so a retry can never write a stale value over a newer one --
 // the device may have reported twice more while the hub was unreachable, and
 // only the current value is worth sending. A key deleted locally in the
-// meantime is relayed as a delete, which is the same tombstone-not-absence
-// distinction relayEntry already makes.
-func (r *relay) retryPending(ctx context.Context, pending map[string]struct{}) {
-	if len(pending) == 0 {
-		return
-	}
+// meantime is sent as a delete.
+func (r *relay) retry(ctx context.Context) {
+	r.collect()
 
-	before := len(pending)
-	for key := range pending {
+	resent := 0
+	for key := range r.pending {
 		if ctx.Err() != nil {
 			return
 		}
-
 		cur, err := r.src.Get(ctx, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			if _, err := relayEntry(ctx, r.dst, key, nil, jetstream.KeyValueDelete); err != nil {
-				continue // hub still unhappy; leave it pending
-			}
+			r.send(key, nil, true)
 		case err != nil:
 			continue // cannot read locally right now; try again next tick
 		default:
-			if _, err := relayEntry(ctx, r.dst, key, cur.Value(), cur.Operation()); err != nil {
-				continue
-			}
+			r.send(key, cur.Value(), false)
 		}
-		delete(pending, key)
+		resent++
 	}
-	r.setPending(len(pending))
+	r.reportBacklog()
 
-	if recovered := before - len(pending); recovered > 0 {
-		log.Printf("edge: relay caught up on %d key(s)", recovered)
+	if resent > 0 {
+		log.Printf("⚠️ edge: relay re-sent %d key(s) the hub had not accepted", resent)
 	}
-	if len(pending) > 0 {
-		log.Printf("⚠️ edge: relay still behind on %d key(s)", len(pending))
+}
+
+// collect takes the answer to every write that has one. A confirmed write is
+// done with; a failed one goes back to pending for the next retry. A write still
+// waiting is left alone, and relayAckTimeout guarantees it gets an answer.
+func (r *relay) collect() {
+	failed := 0
+	var firstErr error
+	for key, f := range r.inflight {
+		select {
+		case <-f.Ok():
+			delete(r.inflight, key)
+		case err := <-f.Err():
+			delete(r.inflight, key)
+			r.pending[key] = struct{}{}
+			if failed == 0 {
+				firstErr = err
+			}
+			failed++
+		default:
+		}
+	}
+	if failed > 0 {
+		log.Printf("⚠️ edge: relay: the hub did not accept %d write(s), first error: %v (will retry)", failed, firstErr)
 	}
 }
 

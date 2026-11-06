@@ -116,21 +116,31 @@ func TestRelayRetrySendsTheCurrentValueNotTheFailedOne(t *testing.T) {
 	if _, err := relayEntry(context.Background(), hub, "thing.S01.temp", []byte("21"), jetstream.KeyValuePut); err == nil {
 		t.Fatal("expected the relay to fail while the hub is down")
 	}
-	pending := map[string]struct{}{"thing.S01.temp": {}}
+	r := relayWithPending(local, hub, "thing.S01.temp")
 
 	// The device reports again while the hub is still down.
 	local.store["thing.S01.temp"] = []byte("25")
 
 	// Hub recovers; the retry should carry 25.
 	hub.setWriteErr(nil)
-	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
+	r.retry(context.Background())
+	r.collect()
 
 	if v, ok := hub.get("thing.S01.temp"); !ok || v != "25" {
 		t.Errorf("hub has %q (present=%v), want 25 -- a retry replayed the stale failed value", v, ok)
 	}
-	if len(pending) != 0 {
-		t.Errorf("%d key(s) still pending after a successful retry", len(pending))
+	if n := r.backlog(); n != 0 {
+		t.Errorf("%d key(s) still unconfirmed after a successful retry", n)
 	}
+}
+
+// relayWithPending is a relay as the pump leaves it after the given keys failed.
+func relayWithPending(local, hub *fakeTwinKV, keys ...string) *relay {
+	r := &relay{src: local, dst: hub, pending: map[string]struct{}{}, inflight: map[string]jetstream.PubAckFuture{}}
+	for _, k := range keys {
+		r.pending[k] = struct{}{}
+	}
+	return r
 }
 
 // A key deleted locally during the outage must be relayed as a delete, not
@@ -140,14 +150,15 @@ func TestRelayRetryRelaysADeleteForAKeyRemovedDuringTheOutage(t *testing.T) {
 	local := newFakeTwinKV(nil) // already gone locally
 	hub := newFakeTwinKV(map[string][]byte{"thing.S01.temp": []byte("21")})
 
-	pending := map[string]struct{}{"thing.S01.temp": {}}
-	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
+	r := relayWithPending(local, hub, "thing.S01.temp")
+	r.retry(context.Background())
+	r.collect()
 
 	if _, ok := hub.get("thing.S01.temp"); ok {
 		t.Error("hub still holds a key that was deleted at the edge during the outage")
 	}
-	if len(pending) != 0 {
-		t.Errorf("%d key(s) still pending after the delete was relayed", len(pending))
+	if n := r.backlog(); n != 0 {
+		t.Errorf("%d key(s) still unconfirmed after the delete was relayed", n)
 	}
 }
 
@@ -161,11 +172,12 @@ func TestRelayRetryKeepsAPoisonKeyFromBlockingOthers(t *testing.T) {
 
 	// One key the hub refuses, one it accepts. poisonHub fails only the former.
 	hub.setWriteErr(errHubDown)
-	pending := map[string]struct{}{"thing.S01.bad": {}}
 	local.store["thing.S01.bad"] = []byte("nope")
-	(&relay{src: local, dst: hub}).retryPending(context.Background(), pending)
-	if len(pending) != 1 {
-		t.Fatalf("expected the failing key to stay pending, got %d", len(pending))
+	r := relayWithPending(local, hub, "thing.S01.bad")
+	r.retry(context.Background())
+	r.collect()
+	if _, ok := r.pending["thing.S01.bad"]; !ok || r.backlog() != 1 {
+		t.Fatalf("expected the failing key to stay pending, backlog %d", r.backlog())
 	}
 
 	// A healthy key still relays while the other is stuck.

@@ -383,11 +383,21 @@ agent/
       relay. Config rejects a `$KV.` written there, because it would be silently
       doubled.
     - Relay mechanics, boring on purpose: one watcher edge-to-hub so there is no echo;
-      compare-before-write (the watcher replays every current value on start, so without
-      it each restart would burn a revision per key); that replay IS the resync after an
-      outage; deletes are relayed explicitly, because a KV delete is a tombstone rather
-      than an absence and dropping it leaves the key live at the hub forever; upsert and
-      never reconcile, so one site can never purge another site's keys.
+      **live changes are async publishes with no compare** (`hubKV.publish`), so
+      writes overlap instead of costing two round trips each; the **startup replay
+      still compares before it writes** (`relayEntry`), so a restart does not burn a
+      revision per key; failed writes are re-sent on the 30s tick with the CURRENT
+      local value; deletes are relayed explicitly, because a KV delete is a tombstone
+      rather than an absence and dropping it leaves the key live at the hub forever;
+      upsert and never reconcile, so one site can never purge another site's keys.
+    - **The relay's state belongs to the pump goroutine alone** -- `pending` (last
+      write failed) and `inflight` (latest unconfirmed write per key), a key in one
+      or the other, never both. Keep it that way rather than adding a lock or a
+      publish error callback. `relayAckTimeout` must stay set on the hub JetStream
+      context: nats.go gives async publishes no timeout, and an unanswered write is
+      never retried. `hubKV` builds the cross-domain KV subject by hand
+      (`$JS.<domain>.API.$KV.<bucket>.<key>`, as nats.go's kv.go does);
+      `TestHubKVPublishLandsInTheHubBucket` is the only thing that proves it.
     - **The edge creates local buckets, never hub buckets** — except for the two preset
       names, whose shape the platform knows. A typo in one site's YAML that creates a
       local bucket is that site's problem; one that creates a hub bucket is everyone's,

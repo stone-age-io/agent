@@ -52,8 +52,8 @@ var (
 	)
 	descRelayPending = prometheus.NewDesc(
 		"agent_edge_relay_pending",
-		"Keys whose write to the hub failed and are being retried. This is the outage backlog: it grows "+
-			"while the uplink is down and drains when it returns.",
+		"Keys whose latest write the hub has not confirmed: writes in flight plus failed writes waiting to "+
+			"be retried. Small when healthy; it grows while the uplink is down and drains when it returns.",
 		[]string{"bucket"}, nil,
 	)
 )

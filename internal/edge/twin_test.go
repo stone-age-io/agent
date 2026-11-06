@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -51,6 +52,7 @@ type fakeTwinKV struct {
 
 	puts    []string
 	deletes []string
+	gets    int
 	getErr  error
 
 	// writeErr makes Put and Delete fail, modelling an unreachable hub.
@@ -70,6 +72,7 @@ func newFakeTwinKV(seed map[string][]byte) *fakeTwinKV {
 func (f *fakeTwinKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.gets++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -200,6 +203,53 @@ func (f *fakeTwinKV) putCount() int {
 	defer f.mu.Unlock()
 	return len(f.puts)
 }
+
+// set changes a value without telling the watchers, like a write the relay has
+// not seen yet. Locked, so a test can use it while a pump is running.
+func (f *fakeTwinKV) set(key, value string) {
+	f.mu.Lock()
+	f.store[key] = []byte(value)
+	f.mu.Unlock()
+}
+
+func (f *fakeTwinKV) getCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gets
+}
+
+// publish makes fakeTwinKV a hubSide. It applies the write at once and hands
+// back a future that already holds the answer, which is the same thing a real
+// hub does, only without the wait.
+func (f *fakeTwinKV) publish(key string, value []byte, deleted bool) (jetstream.PubAckFuture, error) {
+	var err error
+	if deleted {
+		err = f.Delete(context.Background(), key)
+	} else {
+		_, err = f.Put(context.Background(), key, value)
+	}
+	return answered(err), nil
+}
+
+// fakeFuture is a jetstream.PubAckFuture whose answer is already in.
+type fakeFuture struct {
+	ok  chan *jetstream.PubAck
+	err chan error
+}
+
+func answered(err error) *fakeFuture {
+	f := &fakeFuture{ok: make(chan *jetstream.PubAck, 1), err: make(chan error, 1)}
+	if err != nil {
+		f.err <- err
+	} else {
+		f.ok <- &jetstream.PubAck{}
+	}
+	return f
+}
+
+func (f *fakeFuture) Ok() <-chan *jetstream.PubAck { return f.ok }
+func (f *fakeFuture) Err() <-chan error            { return f.err }
+func (f *fakeFuture) Msg() *nats.Msg               { return nil }
 
 // runRelay starts an upstream pump (edge -> hub) and lets it settle.
 func runRelay(t *testing.T, local, hub *fakeTwinKV, settle time.Duration) {

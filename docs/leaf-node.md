@@ -405,12 +405,25 @@ section blamed the server's internal `iname`; that was wrong.)
 Boring on purpose:
 
 - **One watcher**, edge → hub. There is no reverse pump, so there is no echo.
-- **Compare before write.** A value already equal at the hub is skipped. This is
-  an optimisation, not the safety property — the watcher replays every current
-  value on start, so without it each restart would rewrite the bucket and burn a
-  revision per key.
-- **That replay is also the resync.** Reconnecting after an outage walks every
-  current value, so there is no separate catch-up path to get wrong.
+- **Live changes are published without waiting.** Each change is a JetStream
+  publish to the hub bucket's subject, and the relay moves on without waiting for
+  the hub's answer. Waiting on a read and then an acknowledgement for every change
+  held a relay to one change per two round trips (5 a second over a 100 ms link);
+  publishing ahead lets the writes overlap (about 1,300 a second over the same
+  link). Writes leave on one connection and the server stores them in the order
+  sent, so the last value written for a key is the one the hub keeps.
+- **The replay compares before it writes.** On start the watcher replays every
+  current value, and each one is checked against the hub first, so a restart does
+  not rewrite the bucket, burn a revision per key, and wake every hub-side
+  watcher for nothing. It costs a round trip per key, once per start.
+- **Failures are held and retried.** Every 30 seconds the relay collects the
+  hub's answers. A key whose write failed is re-sent with the value the edge
+  holds *then*, never the one that failed, so a retry cannot overwrite a newer
+  reading. That is the catch-up after an outage: the local watcher does not die
+  when the WAN does, so nothing else would re-offer a value that failed and then
+  never changed. Each write waits at most 10 seconds for an answer
+  (`relayAckTimeout`); nats.go sets no such limit by default, and without one a
+  lost acknowledgement would leave its key unconfirmed for good.
 - **Deletes are relayed explicitly.** A KV delete is a tombstone message, not an
   absence; dropping it would leave the key live at the hub forever, because the
   equality check only compares values that exist. (A purge is relayed as a
@@ -502,7 +515,7 @@ gateway adds:
 | `agent_edge_nats_connections` | Devices actually attached at this site |
 | `agent_edge_jetstream_bytes` | The number to watch on a small edge disk |
 | `agent_edge_sync_up{bucket,direction}` | 0 = declared and not syncing |
-| `agent_edge_relay_pending{bucket}` | The outage backlog: keys waiting on the hub |
+| `agent_edge_relay_pending{bucket}` | Keys the hub has not confirmed yet: writes in flight plus writes waiting to be retried. Small and moving when healthy; grows during an outage |
 
 The server-derived rows come from the leaf's own loopback monitoring port — the
 `http:` line the generated `nats-leaf.conf` carries. It is unauthenticated by
