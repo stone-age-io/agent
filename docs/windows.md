@@ -20,7 +20,7 @@ Complete guide for installing and configuring the agent on Windows systems.
 # Run as Administrator
 
 # Download agent (set the version to the latest release)
-$agentVersion = "0.5.0"
+$agentVersion = "0.6.0"
 $downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent_${agentVersion}_windows_amd64.zip"
 $agentPath = "C:\Program Files\Agent"
 $configPath = "C:\ProgramData\Agent"
@@ -528,7 +528,7 @@ Stop-Service agent
 Copy-Item "C:\Program Files\Agent\agent.exe" -Destination "C:\Program Files\Agent\agent.exe.backup"
 
 # Download and extract the new release archive
-$agentVersion = "0.5.0"
+$agentVersion = "0.6.0"
 $downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent_${agentVersion}_windows_amd64.zip"
 Invoke-WebRequest -Uri $downloadUrl -OutFile "$env:TEMP\agent.zip"
 Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force

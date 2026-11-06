@@ -97,7 +97,7 @@ Choose your platform:
 
 ```powershell
 # 1. Download and extract the release archive
-$version = "0.5.0"
+$version = "0.6.0"
 Invoke-WebRequest -Uri "https://github.com/stone-age-io/agent/releases/download/v$version/agent_${version}_windows_amd64.zip" -OutFile "$env:TEMP\agent.zip"
 Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force
 
@@ -127,7 +127,7 @@ Start-Service agent
 
 ```bash
 # 1. Install agent
-VERSION=0.5.0
+VERSION=0.6.0
 wget https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_linux_amd64.tar.gz
 tar xzf agent_${VERSION}_linux_amd64.tar.gz
 sudo mv agent /usr/local/bin/agent
@@ -154,7 +154,7 @@ sudo systemctl start agent
 
 ```bash
 # 1. Install agent
-VERSION=0.5.0
+VERSION=0.6.0
 fetch https://github.com/stone-age-io/agent/releases/download/v${VERSION}/agent_${VERSION}_freebsd_amd64.tar.gz
 tar xzf agent_${VERSION}_freebsd_amd64.tar.gz
 sudo mv agent /usr/local/bin/agent

@@ -10,6 +10,8 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-05
+
 ### Changed
 
 - **The edge → hub relay no longer waits on the hub for every change.** Each
@@ -23,7 +25,6 @@ that period, and this file starts where the versioned releases do.
 - `agent_edge_relay_pending{bucket}` now counts every key the hub has not
   confirmed: writes in flight as well as failed writes waiting to be retried. It
   is small and moving on a healthy site, and grows during an outage as before.
-
 - nats.go v1.54.0 → v1.55.0, a release made almost entirely of reconnect, drain
   and consumer fixes. Three reach this agent directly:
   - A KV watcher (the relay's, and every other `Watch`) runs on an ordered
@@ -49,6 +50,13 @@ that period, and this file starts where the versioned releases do.
   - Leaf ACLs no longer implicitly allow `$MQTT.>`.
 - The upgrade also moves `golang.org/x/sys`, the other `golang.org/x/*`
   modules and `klauspost/compress` to the versions nats-server v2.15.2 requires.
+
+### Removed
+
+- **`twin.enabled` is no longer refused by name.** The key never worked, and
+  since 0.2.0 the agent refused to start with it so that a config file still
+  carrying it could not silently sync nothing. That check is gone: a config with
+  `twin.enabled` now starts and ignores the key. Write `sync: { twin: true }`.
 
 ## [0.5.0] - 2026-10-15
 
@@ -640,7 +648,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/stone-age-io/agent/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/stone-age-io/agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stone-age-io/agent/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/stone-age-io/agent/compare/v0.3.1...v0.3.2
