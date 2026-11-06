@@ -332,9 +332,7 @@ agent/
     | edge to hub | application **relay** | `sync.relays` |
 
     `sync.twin: true` is a preset expanding to one entry in each direction —
-    `twin_desired` mirrored down, `twin` relayed up. It replaces the former
-    `twin.enabled`, which is now **rejected by name** at config load: it never worked
-    (see below) and viper silently ignores keys it does not know.
+    `twin_desired` mirrored down, `twin` relayed up.
 
     - **One writer per bucket is the whole safety property.** A single bucket written
       from both ends does not pick a loser on a conflict, it *oscillates*: two
@@ -407,8 +405,7 @@ agent/
     - **The hub's JetStream domain is not a config key.** It arrives with the leaf config
       from the platform and is cached in the session file (`platform.Client.HubDomain`),
       so the network is touched at most once. It reached the running agent nowhere at
-      all until this was added, which is why `twin.enabled` disabled itself on every
-      start for the whole of its life. `config.PresetBuckets` duplicates the two preset
+      all until this was added, so the twin never ran before it. `config.PresetBuckets` duplicates the two preset
       names because `config` cannot import `edge` (edge → platform → config would
       cycle); `TestPresetBucketNamesMatchConfig` guards the drift.
 
@@ -598,7 +595,7 @@ sync:                            # KV buckets moved between this leaf's JetStrea
                                  # data-plane traffic, so an upgrade must not start
                                  # doing it silently. Requires the platform block.
                                  # `twin: true` is the preset for the two digital-twin
-                                 # buckets. (The old `twin.enabled` is rejected by name.)
+                                 # buckets.
   mirrors:                       # hub -> edge, server-maintained
     - bucket: "recipes"
       keys: "line-a.>"           # optional key pattern. CANNOT be changed later:

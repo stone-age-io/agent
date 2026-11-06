@@ -29,9 +29,10 @@ import (
 
 // Bucket is one declared sync entry.
 //
-// There is no field for a different name at the far end, deliberately: a bucket
-// having the same name at both ends is the reason the upstream direction is an
-// application relay rather than a native JetStream source.
+// There is no field for a different name at the far end, deliberately: the
+// console and the rule engine read one bucket name for the whole organization.
+// Why the upstream direction is a relay rather than a native source is a
+// separate question, answered in twin.go.
 type Bucket struct {
 	Name string
 
@@ -200,10 +201,11 @@ func wireDown(ctx context.Context, localJS, hubJS jetstream.JetStream, cfg *Conf
 
 // retryWiring re-attempts the entries that are down, until they are not.
 //
-// It runs even when everything came up first time: a bucket can be deleted at
-// the hub while the agent runs, and this is what brings it back when it is
-// recreated. The loop is cheap — it does nothing at all once every entry is up,
-// because wireDown skips them.
+// It only ever looks at entries that are DOWN; wireDown skips the rest, so the
+// loop costs nothing once everything is up. That also means it never notices a
+// hub bucket deleted under an entry that is already up. It does not need to: a
+// mirror recovers by itself when its source is recreated (nats-server 2.15), and
+// a relay's failed writes sit in its pending set until the hub accepts them.
 func retryWiring(ctx context.Context, localJS, hubJS jetstream.JetStream, cfg *Config, st *state, ws []wiring) {
 	ticker := time.NewTicker(syncRetryInterval)
 	defer ticker.Stop()

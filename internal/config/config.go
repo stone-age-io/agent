@@ -25,7 +25,6 @@ type Config struct {
 	Platform      PlatformConfig      `mapstructure:"platform"`
 	NATS          NATSConfig          `mapstructure:"nats"`
 	Nebula        NebulaConfig        `mapstructure:"nebula"`
-	Twin          TwinConfig          `mapstructure:"twin"` // rejected on sight; see TwinConfig
 	Sync          SyncConfig          `mapstructure:"sync"`
 	Observability ObservabilityConfig `mapstructure:"observability"`
 	Tasks         TasksConfig         `mapstructure:"tasks"`
@@ -111,7 +110,7 @@ type PlatformConfig struct {
 // check instead. See validateSyncConfig.
 type SyncConfig struct {
 	// Twin is the preset: the two digital-twin buckets, with the retention the
-	// console agrees on. Replaces the former twin.enabled.
+	// console agrees on.
 	Twin bool `mapstructure:"twin"`
 
 	Mirrors []SyncBucket `mapstructure:"mirrors"`
@@ -144,15 +143,6 @@ type SyncBucket struct {
 	// so narrowing an existing mirror means deleting and recreating the bucket
 	// on every site by hand.
 	Keys string `mapstructure:"keys"`
-}
-
-// TwinConfig is retained only to catch the key it used to carry. twin.enabled
-// never worked — the hub domain never reached the running agent — so there is
-// nothing to be compatible with, but a config file still carrying it would
-// otherwise be silently ignored by viper. Rejecting it by name costs four lines
-// and saves an afternoon.
-type TwinConfig struct {
-	Enabled bool `mapstructure:"enabled"`
 }
 
 // ObservabilityConfig serves /ready and /metrics on this box.
@@ -772,14 +762,6 @@ var PresetBuckets = []string{"twin", "twin_desired"}
 // ~170,000 writes to one key in 300 ms. With two built-in buckets going opposite
 // directions that was unrepresentable. With a list it is one comparison away.
 func validateSyncConfig(cfg *Config) error {
-	// twin.enabled never worked: the hub's JetStream domain never reached the
-	// running agent, so the feature disabled itself on every start. Nothing can
-	// be relying on it, but viper ignores unknown keys, so a config file still
-	// carrying it would silently sync nothing at all.
-	if cfg.Twin.Enabled {
-		return fmt.Errorf("twin.enabled has been replaced by sync.twin - move it to:\n  sync:\n    twin: true")
-	}
-
 	if !cfg.Sync.Any() {
 		return nil
 	}

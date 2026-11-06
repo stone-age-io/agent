@@ -123,8 +123,7 @@ tasks:
 # Relays declared buckets up to the hub and mirrors declared buckets down.
 # Off by default because it moves data-plane traffic -- an upgrade must not
 # silently start doing it. Requires the platform block. `twin: true` is a
-# preset for the two digital-twin buckets. (The old `twin.enabled` key is
-# refused by name.)
+# preset for the two digital-twin buckets.
 # sync:
 #   twin: true                 # preset: the two digital-twin buckets
 #   mirrors:                   # hub -> edge, maintained by the server

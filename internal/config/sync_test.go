@@ -60,23 +60,6 @@ func TestSyncRejectsADuplicateWithinOneDirection(t *testing.T) {
 	}
 }
 
-// twin.enabled never worked — the hub's JetStream domain never reached the
-// running agent — so there is nothing to stay compatible with. But viper ignores
-// keys it does not know, so a config file still carrying it would sync nothing
-// and say nothing.
-func TestTwinEnabledIsRejectedByName(t *testing.T) {
-	cfg := &Config{}
-	cfg.Twin.Enabled = true
-
-	err := validateSyncConfig(cfg)
-	if err == nil {
-		t.Fatal("twin.enabled was ignored rather than rejected; the agent would silently sync nothing")
-	}
-	if !strings.Contains(err.Error(), "sync.twin") {
-		t.Errorf("the error should name the replacement key, got: %v", err)
-	}
-}
-
 // The hub's domain arrives with the leaf config from the platform and is
 // reachable no other way, so sync without platform auth can never work.
 func TestSyncRequiresPlatformAuth(t *testing.T) {

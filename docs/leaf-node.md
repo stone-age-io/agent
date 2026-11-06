@@ -309,12 +309,6 @@ The point is edge autonomy: a site whose uplink drops keeps writing reported sta
 locally and catches the hub up when the link returns, while still reading the
 last-known desired state from its local mirror.
 
-> **`twin.enabled` is gone.** It is rejected by name at config load. It never
-> worked — the hub's JetStream domain never reached the running agent, so it
-> disabled itself on every start — so there is nothing to migrate, but a config
-> file still carrying it would otherwise be silently ignored. Write
-> `sync: { twin: true }`.
-
 ### A bucket belongs to one list
 
 A bucket named in both directions has two writers, and two writers oscillate
