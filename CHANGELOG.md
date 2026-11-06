@@ -10,6 +10,20 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Changed
+
+- nats.go v1.54.0 → v1.55.0, a release made almost entirely of reconnect, drain
+  and consumer fixes. Three reach this agent directly:
+  - A KV watcher (the relay's, and every other `Watch`) runs on an ordered
+    consumer, which used the 15s pull heartbeat instead of the 5s ordered one,
+    so a stalled watcher was reset after about 30s rather than 10s.
+  - `ForceReconnect()` called while the connection was already reconnecting
+    disabled `ReconnectWait` and dialed in a tight loop. The scheduler and the
+    reconnect command both call it.
+  - A partial write that left a truncated message on the wire closed the
+    connection for good instead of reconnecting, which this agent turns into
+    an exit and restart through `Lost()`.
+
 ## [0.5.0] - 2026-10-15
 
 > **Upgrading a gateway: restart the leaf once.** The generated
