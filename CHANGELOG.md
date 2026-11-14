@@ -10,6 +10,8 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-14
+
 ### Fixed
 
 - **The edge waits for a leaf that is not up yet.** Its connection to the
