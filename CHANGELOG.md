@@ -10,6 +10,17 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The edge waits for a leaf that is not up yet.** Its connection to the
+  local leaf did not retry a failed first connect. A separately supervised leaf
+  reads the conf the agent writes, so it is normally not listening when the
+  agent starts: `nats.Connect` failed, the edge stopped, and the agent logged it
+  once and never ran it again. KV sync stayed down and `nats_local` failed until
+  the agent was restarted. The edge connection now retries until the leaf is
+  up, like the agent's own NATS client (`internal/edge/run.go`,
+  `TestLocalConnectionWaitsForALeafThatIsNotUpYet`).
+
 ## [0.6.0] - 2026-11-05
 
 ### Changed

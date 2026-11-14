@@ -124,6 +124,15 @@ func (e *Edge) setServer(srv *natsd.Server) {
 // dead connection and reporting nothing. An edge box outlives its own bus
 // restarting, so it retries forever.
 //
+// RetryOnFailedConnect(true) is the same fix for the FIRST connection, and was
+// also a bug. Without it, a leaf that is not listening yet fails nats.Connect,
+// Run returns, and the agent logs it once and never runs the edge again: no
+// sync, `nats_local` down, until someone restarts the agent. That is the normal
+// start order for a separately supervised leaf, which reads the conf the agent
+// writes. With it, Connect returns a connection that keeps dialling, and
+// startSync's wiring retry takes care of buckets it could not reach meanwhile.
+// TestLocalConnectionWaitsForALeafThatIsNotUpYet pins it.
+//
 // The credential is a .creds file because a leaf node's own identity always is:
 // `agent -leaf-config` writes one, and a gateway authenticates to its local leaf
 // with it. There is no token or userpass branch here for that reason — and this
@@ -133,6 +142,7 @@ func localConnectOptions(cfg *Config) []nats.Option {
 	return []nats.Option{
 		nats.UserCredentials(cfg.CredsFile),
 		nats.Name("agent-edge"),
+		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2 * time.Second),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
@@ -142,9 +152,10 @@ func localConnectOptions(cfg *Config) []nats.Option {
 			log.Printf("agent: reconnected to local NATS at %s", c.ConnectedUrl())
 		}),
 		nats.ClosedHandler(func(_ *nats.Conn) {
-			// Unreachable while MaxReconnects is -1 unless something calls
-			// Close(), which is Run's deferred shutdown. If it ever fires for
-			// another reason, say so rather than spinning in silence.
+			// Run's deferred shutdown is the expected caller. The other one is
+			// nats.go giving up after repeated authorization failures, which
+			// MaxReconnects does not prevent and which is what a revoked edge
+			// credential looks like. Say so rather than spinning in silence.
 			log.Printf("⚠️ agent: local NATS connection closed permanently")
 		}),
 	}
