@@ -10,6 +10,21 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-14
+
+### Fixed
+
+- **Stopping the agent no longer waits 12 seconds and logs a scheduler
+  error.** Every stop called the agent's shutdown twice at once: under systemd,
+  SIGTERM reaches both the agent's signal handler and the service library's,
+  and on Windows the service stop wakes the agent's run loop, which shut down
+  again. The scheduler hands its stop result to only one caller, so the other
+  waited out its 12-second timeout and logged `gocron: timed out waiting for
+  scheduler to stop` about a scheduler that had stopped cleanly; the NATS
+  drain and the Nebula stop also ran twice, concurrently. Shutdown now runs
+  once and every other caller waits for it (`internal/agent/agent.go`,
+  `TestConcurrentShutdownIsQuick`).
+
 ## [0.6.1] - 2026-11-14
 
 ### Fixed
@@ -661,7 +676,9 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/stone-age-io/agent/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/stone-age-io/agent/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/stone-age-io/agent/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/stone-age-io/agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stone-age-io/agent/compare/v0.3.2...v0.4.0
