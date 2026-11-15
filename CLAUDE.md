@@ -130,6 +130,14 @@ agent/
 └── go.mod                     # Go 1.26+ required (Nebula sets the floor)
 ```
 
+**`go.mod`'s `go` line is also the exact toolchain every release is built with.**
+CI and the release workflow both run `setup-go` with `go-version-file: go.mod`,
+which installs that version and nothing newer. It sat at `go 1.26.0`, so every
+release through 0.6.2 shipped Go 1.26.0's standard library -- 30 known
+vulnerabilities the agent's code reaches (net/http, crypto/tls, crypto/x509).
+Keep it on the latest patch of the minor version. `govulncheck` in CI fails
+when it falls behind; that is the reminder.
+
 ## Architecture
 
 ### Communication Flow

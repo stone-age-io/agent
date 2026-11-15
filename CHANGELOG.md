@@ -10,6 +10,15 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Security
+
+- **Built with Go 1.26.11.** Releases through 0.6.2 were built with Go 1.26.0,
+  because `go.mod` said `go 1.26.0` and the release build installs exactly
+  that. Its standard library has 30 known vulnerabilities the agent's code can
+  reach, in `net/http`, `crypto/tls`, `crypto/x509`, `net/url` and others, all
+  fixed by 1.26.11. Upgrade every agent. CI now runs `govulncheck`, which is
+  what found it.
+
 ### Changed
 
 - **The agent's NATS connections are named after its code.** The main

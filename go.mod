@@ -1,6 +1,6 @@
 module github.com/stone-age-io/agent
 
-go 1.26.0
+go 1.26.11
 
 require (
 	github.com/go-co-op/gocron/v2 v2.18.0
