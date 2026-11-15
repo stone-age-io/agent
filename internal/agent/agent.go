@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,6 +44,9 @@ type Agent struct {
 	version   string
 	ctx       context.Context // root context, cancelled on shutdown
 	cancel    context.CancelFunc
+
+	shutdownOnce sync.Once // see Shutdown: it is called twice on every stop
+	shutdownErr  error
 }
 
 // New creates a new agent instance
@@ -315,8 +319,23 @@ func (a *Agent) Run() error {
 	return runErr
 }
 
-// Shutdown gracefully shuts down the agent
+// Shutdown gracefully shuts down the agent. The first call does the work; every
+// other call, concurrent or later, waits for it and returns what it returned.
+//
+// It is called twice on every stop, so this is not defensive. Under systemd,
+// SIGTERM reaches both Run's signal.Notify and the service library's, and Run
+// and program.Stop each call Shutdown at the same instant; on Windows, Stop's
+// cancel wakes Run, which calls it again. gocron's Shutdown hands its single
+// result to whichever caller receives it first, so the other waited out
+// StopTimeout + 2s and logged "timed out waiting for scheduler to stop" about a
+// scheduler that had stopped cleanly -- after the NATS drain and the Nebula
+// stop had also run twice, concurrently.
 func (a *Agent) Shutdown() error {
+	a.shutdownOnce.Do(func() { a.shutdownErr = a.shutdown() })
+	return a.shutdownErr
+}
+
+func (a *Agent) shutdown() error {
 	a.logger.Info("Shutting down agent gracefully")
 
 	// Cancel the root context to signal all operations to stop
