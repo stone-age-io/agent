@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stone-age-io/agent/internal/config"
 	"go.uber.org/zap"
@@ -45,7 +46,7 @@ func unreachableConfig(t *testing.T) *config.NATSConfig {
 // never start: the connect would fail, the process would exit, and the overlay
 // that would have made the connect succeed never got the chance to come up.
 func TestNewClientSucceedsWhenServerUnreachable(t *testing.T) {
-	client, err := NewClient(unreachableConfig(t), zap.NewNop())
+	client, err := NewClient(unreachableConfig(t), "agent-test", zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewClient() returned an error for an unreachable server: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestNewClientFailsOnBadAuthType(t *testing.T) {
 	cfg := unreachableConfig(t)
 	cfg.Auth.Type = "not-a-real-auth-type"
 
-	client, err := NewClient(cfg, zap.NewNop())
+	client, err := NewClient(cfg, "agent-test", zap.NewNop())
 	if err == nil {
 		client.Close()
 		t.Fatal("NewClient() returned no error for an invalid auth type")
@@ -81,7 +82,7 @@ func TestNewClientFailsOnBadAuthType(t *testing.T) {
 // nothing recovers. The handler must survive both. A refusal is also kept for
 // the nats_permissions check; an error that is not a refusal is only logged.
 func TestAsyncErrorWithNoSubscription(t *testing.T) {
-	client, err := NewClient(unreachableConfig(t), zap.NewNop())
+	client, err := NewClient(unreachableConfig(t), "agent-test", zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewClient() error: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestAsyncErrorWithNoSubscription(t *testing.T) {
 // an orderly shutdown would turn every clean stop into a failure the service
 // manager tries to recover from.
 func TestLostStaysOpenOnDeliberateClose(t *testing.T) {
-	client, err := NewClient(unreachableConfig(t), zap.NewNop())
+	client, err := NewClient(unreachableConfig(t), "agent-test", zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewClient() error: %v", err)
 	}
@@ -117,5 +118,54 @@ func TestLostStaysOpenOnDeliberateClose(t *testing.T) {
 	case <-client.Lost():
 		t.Error("Lost() fired for a connection the agent closed itself")
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// The connection name is what connz and the console show for this agent. It
+// was the constant "win-agent" on every platform, so a fleet listed as one
+// Windows box many times over; it must be whatever the caller passed.
+func TestConnectionNameReachesTheServer(t *testing.T) {
+	s, err := server.NewServer(&server.Options{
+		Host:   "127.0.0.1",
+		Port:   -1,
+		NoLog:  true,
+		NoSigs: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create nats-server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatal("nats-server did not start")
+	}
+	t.Cleanup(s.Shutdown)
+
+	cfg := &config.NATSConfig{
+		URLs:          []string{s.ClientURL()},
+		Auth:          config.AuthConfig{Type: "none"},
+		MaxReconnects: -1,
+		ReconnectWait: time.Second,
+		DrainTimeout:  time.Second,
+	}
+	client, err := NewClient(cfg, "agent-AGT-M7H-5UY", zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient() error: %v", err)
+	}
+	t.Cleanup(client.Close)
+
+	// The server has processed CONNECT, name included, once a flush round-trips.
+	if err := client.Flush(); err != nil {
+		t.Fatalf("Flush() error: %v", err)
+	}
+
+	connz, err := s.Connz(nil)
+	if err != nil {
+		t.Fatalf("Connz() error: %v", err)
+	}
+	if len(connz.Conns) != 1 {
+		t.Fatalf("server has %d connections, want 1", len(connz.Conns))
+	}
+	if got := connz.Conns[0].Name; got != "agent-AGT-M7H-5UY" {
+		t.Errorf("connection name = %q, want %q", got, "agent-AGT-M7H-5UY")
 	}
 }

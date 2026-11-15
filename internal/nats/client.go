@@ -47,8 +47,14 @@ type Refusal struct {
 	At      time.Time // when the agent heard about it
 }
 
-// NewClient creates a new NATS client with the specified configuration
-func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
+// NewClient creates a new NATS client with the specified configuration.
+//
+// name is the connection name the server reports in connz and the console.
+// The agent passes "agent-<code>", the same <app>-<code> shape atv-bridge and
+// the kiosk use, so a fleet's connections can be told apart. It used to be the
+// constant "win-agent" on every platform, which made every agent in an account
+// look like the same Windows box.
+func NewClient(cfg *config.NATSConfig, name string, logger *zap.Logger) (*Client, error) {
 	// The client exists before the connection does, because the connect and
 	// reconnect callbacks below close over it.
 	c := &Client{
@@ -58,7 +64,7 @@ func NewClient(cfg *config.NATSConfig, logger *zap.Logger) (*Client, error) {
 	}
 
 	opts := []nats.Option{
-		nats.Name("win-agent"),
+		nats.Name(name),
 
 		// RETRY RATHER THAN REFUSE TO START. Without this, nats.Connect fails
 		// immediately when nothing is listening and the agent exits before it has

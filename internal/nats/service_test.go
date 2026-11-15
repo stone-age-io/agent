@@ -74,7 +74,7 @@ func startAgent(t *testing.T, url string) *Client {
 		Commands: config.CommandsConfig{Timeout: 5 * time.Second},
 	}
 
-	client, err := NewClient(&cfg.NATS, zap.NewNop())
+	client, err := NewClient(&cfg.NATS, "agent-"+cfg.Code, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewClient() error: %v", err)
 	}

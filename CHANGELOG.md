@@ -10,6 +10,14 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent's NATS connection is named `agent-<code>`**, the `<app>-<code>`
+  shape atv-bridge and the kiosk already use. It was the constant `win-agent`
+  on every platform, so in `connz` and the console every agent in an account
+  looked like the same Windows box. Anything that matches connections by the
+  old name needs updating.
+
 ## [0.6.2] - 2026-11-14
 
 ### Fixed

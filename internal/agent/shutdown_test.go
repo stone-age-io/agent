@@ -118,7 +118,7 @@ func newShutdownAgent(t *testing.T) *Agent {
 
 	logger := zap.NewNop()
 
-	client, err := natsclient.NewClient(&cfg.NATS, logger)
+	client, err := natsclient.NewClient(&cfg.NATS, "agent-"+cfg.Code, logger)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

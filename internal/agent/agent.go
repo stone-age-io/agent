@@ -157,7 +157,7 @@ func New(configPath string, version string) (*Agent, error) {
 
 	// Connect to NATS
 	logger.Info("Connecting to NATS...")
-	natsClient, err := natsclient.NewClient(&cfg.NATS, logger)
+	natsClient, err := natsclient.NewClient(&cfg.NATS, "agent-"+cfg.Code, logger)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
