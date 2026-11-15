@@ -18,6 +18,11 @@ type Config struct {
 	// LocalNatsURL is the local leaf this agent connects to at run time.
 	LocalNatsURL string
 
+	// ConnName is the name the local connection reports in connz:
+	// "agent-edge-<code>", beside the agent's own "agent-<code>". It was the
+	// constant "agent-edge", so every gateway's edge looked the same.
+	ConnName string
+
 	// CredsFile is the creds filename written beside the generated conf and
 	// referenced from it.
 	CredsFile string

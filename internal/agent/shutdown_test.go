@@ -15,14 +15,15 @@ import (
 	"github.com/stone-age-io/agent/internal/tasks"
 )
 
-// Every stop calls Shutdown twice, at the same instant, and the second call
-// must not be the one that reports an error.
+// Two callers can reach Shutdown at the same instant -- program.Stop, and Run
+// when NATS is lost -- and the second must not be the one that reports an
+// error.
 //
-// Under systemd, SIGTERM reaches both Run's signal.Notify and the service
-// library's, so Run and program.Stop each call Shutdown. gocron's Shutdown
-// gives its one result to whichever caller receives it first; the other
-// waited out StopTimeout + 2s (12s) and logged "gocron: timed out waiting for
-// scheduler to stop" about a scheduler that had stopped cleanly.
+// gocron's Shutdown gives its one result to whichever caller receives it
+// first; the other waited out StopTimeout + 2s (12s) and logged "gocron: timed
+// out waiting for scheduler to stop" about a scheduler that had stopped
+// cleanly. Until 0.6.2 that happened on every stop, because Run also listened
+// for SIGTERM beside the service library.
 func TestConcurrentShutdownIsQuick(t *testing.T) {
 	a := newShutdownAgent(t)
 	a.scheduler.Start()
@@ -58,6 +59,30 @@ func TestConcurrentShutdownIsQuick(t *testing.T) {
 		if err != nil {
 			t.Errorf("Shutdown call %d returned %v", i, err)
 		}
+	}
+}
+
+// A stop is program.Stop calling Shutdown; Run owns no signal handling of its
+// own. It must notice the shutdown, return without an error -- an error makes
+// main exit non-zero, which the service manager treats as a crash -- and not
+// hold the stop up.
+func TestRunReturnsCleanlyWhenStopped(t *testing.T) {
+	a := newShutdownAgent(t)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.Run() }()
+
+	if err := a.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Errorf("Run returned %v after an orderly stop; main would exit non-zero", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run is still running after Shutdown")
 	}
 }
 

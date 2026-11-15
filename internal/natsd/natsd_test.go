@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,5 +119,26 @@ func TestReloadOnNoServer(t *testing.T) {
 	}
 	if err := (&Server{}).Reload(); err == nil {
 		t.Error("Reload on a zero Server should return an error")
+	}
+}
+
+// A missing config names the agent's way to make one. This package is copied
+// from the platform, whose copy names the Control Plane's `stone-age nats
+// export` and `--nats-config` here -- commands an agent operator does not have.
+// The agent's copy shipped that wording through 0.6.2; a fresh copy would bring
+// it back.
+func TestMissingConfigNamesTheAgentsCommand(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "nats-leaf.conf")
+
+	_, err := Start(conf, "nats://127.0.0.1:4222", "nats.urls")
+	if err == nil {
+		t.Fatal("Start succeeded with no config file")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "agent -leaf-config") || !strings.Contains(msg, "nats.server_config") {
+		t.Errorf("error should name `agent -leaf-config` and nats.server_config, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "stone-age") || strings.Contains(msg, "--nats-config") {
+		t.Errorf("error names the Control Plane's commands, got:\n%s", msg)
 	}
 }

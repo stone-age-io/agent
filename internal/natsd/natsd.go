@@ -40,13 +40,6 @@ const (
 	// before giving up. Generous: JetStream recovers its store on startup, and
 	// a large store on slow disk is not an error.
 	readyTimeout = 30 * time.Second
-
-	// defaultConfigDir is the output directory the docs use for `nats export`.
-	defaultConfigDir = "./nats-config"
-
-	// DefaultConfigFile is the config --nats loads unless --nats-config says
-	// otherwise. It is what `nats export --output ./nats-config/` produces.
-	DefaultConfigFile = defaultConfigDir + "/nats.conf"
 )
 
 // Server wraps an embedded nats-server.
@@ -69,12 +62,14 @@ type Server struct {
 // state where every credential it issues points at nothing.
 func Start(confPath, clientURL, clientURLSetting string) (*Server, error) {
 	if _, err := os.Stat(confPath); err != nil {
+		// The agent's own wording. This package is a copy of the platform's, and
+		// the copy it came from names the Control Plane's commands here.
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf(
 				"NATS config not found at %s\n"+
-					"       Generate it first:  ./stone-age nats export --output %s\n"+
-					"       Or point at an existing config with --nats-config",
-				confPath, defaultConfigDir)
+					"       Generate a leaf config first:  agent -leaf-config\n"+
+					"       Or set nats.server_config to an existing nats-server config",
+				confPath)
 		}
 		return nil, fmt.Errorf("cannot read NATS config %s: %w", confPath, err)
 	}

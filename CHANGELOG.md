@@ -12,11 +12,24 @@ that period, and this file starts where the versioned releases do.
 
 ### Changed
 
-- **The agent's NATS connection is named `agent-<code>`**, the `<app>-<code>`
-  shape atv-bridge and the kiosk already use. It was the constant `win-agent`
-  on every platform, so in `connz` and the console every agent in an account
-  looked like the same Windows box. Anything that matches connections by the
-  old name needs updating.
+- **The agent's NATS connections are named after its code.** The main
+  connection is `agent-<code>`, the `<app>-<code>` shape atv-bridge and the
+  kiosk already use, and a gateway's edge connection is `agent-edge-<code>`.
+  They were the constants `win-agent` and `agent-edge` on every platform, so in
+  `connz` and the console every agent in an account looked like the same
+  Windows box. Anything that matches connections by the old names needs
+  updating.
+- **A scheduled task no longer overlaps itself.** One still running when its
+  next tick comes skips that tick instead of starting a second copy. A Nebula
+  sync can wait up to `verify_timeout` (5 minutes at most) on a 1-minute
+  interval; the extra runs used to queue behind it and then run back to back.
+
+### Fixed
+
+- **A missing `nats.server_config` file names the agent's command.** The error
+  told the operator to run the Control Plane's `stone-age nats export` or pass
+  `--nats-config`, neither of which an agent has. It now says to run
+  `agent -leaf-config`, or to point `nats.server_config` at an existing config.
 
 ## [0.6.2] - 2026-11-14
 

@@ -55,6 +55,7 @@ func edgeConfig(cfg *config.Config, hubDomain string) *edge.Config {
 		// actually binds — getting them out of step leaves the process dialling
 		// a server only it is hosting.
 		LocalNatsURL: firstURL(cfg.NATS.URLs),
+		ConnName:     "agent-edge-" + cfg.Code,
 		CredsFile:    cfg.NATS.Auth.CredsFile,
 
 		// Where the one-shot writes nats-leaf.conf and the creds. Derived from

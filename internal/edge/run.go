@@ -141,7 +141,7 @@ func (e *Edge) setServer(srv *natsd.Server) {
 func localConnectOptions(cfg *Config) []nats.Option {
 	return []nats.Option{
 		nats.UserCredentials(cfg.CredsFile),
-		nats.Name("agent-edge"),
+		nats.Name(cfg.ConnName),
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2 * time.Second),

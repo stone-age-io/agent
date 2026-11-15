@@ -72,8 +72,15 @@ func New(
 	leafRefresher LeafRefresher,
 	ctx context.Context,
 ) (*Scheduler, error) {
-	// Create gocron scheduler
-	s, err := gocron.NewScheduler()
+	// No job overlaps itself. gocron otherwise starts a job on schedule even
+	// while its last run is still going, and some can outlast their interval:
+	// a Nebula sync waits up to verify_timeout (5m at most) on a 1m minimum
+	// interval. The syncs hold locks, so extra runs did not corrupt anything --
+	// they queued behind the lock and then ran back to back. Reschedule skips
+	// the tick instead.
+	s, err := gocron.NewScheduler(
+		gocron.WithGlobalJobOptions(gocron.WithSingletonMode(gocron.LimitModeReschedule)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scheduler: %w", err)
 	}
@@ -100,7 +107,10 @@ func New(
 	return scheduler, nil
 }
 
-// wrapTaskWithRecovery wraps a task function with panic recovery AND context checking
+// wrapTaskWithRecovery wraps a task function with panic recovery AND context checking.
+//
+// Every task runs through this, so this is the one place that skips a task once
+// shutdown has begun; the task functions below do not repeat the check.
 func (s *Scheduler) wrapTaskWithRecovery(taskName string, taskFunc func()) func() {
 	return func() {
 		// Skip the task once shutdown has begun
@@ -328,12 +338,6 @@ func (s *Scheduler) Shutdown() error {
 // consumers care about, so last-write-wins semantics are correct and a
 // backlog of stale beats after a reconnect would be actively harmful.
 func (s *Scheduler) publishHeartbeat(code string) {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	subject := fmt.Sprintf("%s.%s.heartbeat", s.subjectPrefix, code)
 
 	heartbeat := s.executor.CreateHeartbeat(code, s.config.Location)
@@ -364,12 +368,6 @@ func (s *Scheduler) publishHeartbeat(code string) {
 // run will retry, and the platform being unreachable is not the agent's problem
 // to escalate.
 func (s *Scheduler) syncCredentials() {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	changed, err := s.credsSyncer.Sync()
 	if err != nil {
 		s.logger.Warn("Platform credential sync failed", zap.Error(err))
@@ -389,12 +387,6 @@ func (s *Scheduler) syncCredentials() {
 
 // publishMetrics scrapes and publishes system metrics
 func (s *Scheduler) publishMetrics(code string) {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	subject := fmt.Sprintf("%s.%s.telemetry.system", s.subjectPrefix, code)
 
 	metrics, err := s.executor.ScrapeMetrics()
@@ -457,12 +449,6 @@ func (s *Scheduler) publishMetrics(code string) {
 
 // publishServiceStatus checks and publishes service status
 func (s *Scheduler) publishServiceStatus(code string) {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	subject := fmt.Sprintf("%s.%s.telemetry.service", s.subjectPrefix, code)
 
 	statuses, err := s.executor.GetServiceStatuses(s.config.Tasks.ServiceCheck.Services)
@@ -514,12 +500,6 @@ func (s *Scheduler) publishServiceStatus(code string) {
 
 // publishInventory collects and publishes system inventory
 func (s *Scheduler) publishInventory(code string) {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	subject := fmt.Sprintf("%s.%s.telemetry.inventory", s.subjectPrefix, code)
 
 	inventory, err := s.executor.CollectInventory(s.version)
@@ -559,12 +539,6 @@ func (s *Scheduler) publishInventory(code string) {
 // for the common case, which is a platform that is briefly unreachable — quite
 // possibly because the overlay this is trying to maintain is down.
 func (s *Scheduler) syncNebula() {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	changed, err := s.nebulaSyncer.Sync()
 	if err != nil {
 		s.logger.Warn("Nebula config sync failed", zap.Error(err))
@@ -590,12 +564,6 @@ func (s *Scheduler) syncNebula() {
 // what stopped it (a leaf that cannot be signalled, a changed operator). The
 // leaf_preload check reports the same thing for as long as it is true.
 func (s *Scheduler) refreshLeaf() {
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
 	// No error with changed true always means reloaded true, so the second
 	// result adds nothing here; cmd.leaf_refresh reports it to its caller.
 	changed, _, err := s.leafRefresher.Refresh()

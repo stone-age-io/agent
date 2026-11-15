@@ -53,6 +53,41 @@ func TestLocalConnectionWaitsForALeafThatIsNotUpYet(t *testing.T) {
 	}
 }
 
+// The edge's connection reports the name the agent gave it, so a fleet's
+// gateways can be told apart in connz. It was the constant "agent-edge".
+func TestLocalConnectionCarriesItsName(t *testing.T) {
+	srv, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	t.Cleanup(srv.Shutdown)
+	if !srv.ReadyForConnections(10 * time.Second) {
+		t.Fatal("nats-server did not become ready")
+	}
+
+	cfg := &Config{CredsFile: writeTestCreds(t), ConnName: "agent-edge-AGT-M7H-5UY"}
+	nc, err := nats.Connect(srv.ClientURL(), localConnectOptions(cfg)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	connz, err := srv.Connz(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connz.Conns) != 1 {
+		t.Fatalf("server has %d connections, want 1", len(connz.Conns))
+	}
+	if got := connz.Conns[0].Name; got != cfg.ConnName {
+		t.Errorf("connection name = %q, want %q", got, cfg.ConnName)
+	}
+}
+
 func freeLocalPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

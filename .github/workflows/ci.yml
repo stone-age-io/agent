@@ -40,6 +40,18 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Known vulnerabilities in code the agent actually calls, in its own
+      # dependencies and in the Go standard library it is built with. Per GOOS,
+      # like vet below: a call path that exists only in the Windows or FreeBSD
+      # files is invisible to a Linux-only run.
+      - name: Check for known vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          for goos in linux windows freebsd; do
+            echo "==> $goos"
+            GOOS=$goos govulncheck ./...
+          done
+
       # Per-GOOS, for the reason at the top of this file.
       - name: Vet and build every supported OS
         run: |

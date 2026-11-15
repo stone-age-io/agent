@@ -141,7 +141,11 @@ agent/
 
 ### Key Components
 
-1. **Agent** (`internal/agent/agent.go`): Main orchestrator - initializes config, logger, NATS, scheduler, and handlers
+1. **Agent** (`internal/agent/agent.go`): Main orchestrator - initializes config, logger, NATS, scheduler, and handlers.
+   Stop signals belong to the service library (kardianos handles them on every platform and
+   calls `program.Stop`); `Run` does not listen for any. It once did, which ran `Shutdown`
+   twice on every stop. `Shutdown` runs once however many callers arrive
+
 
 2. **Config** (`internal/config/`):
    - Validates code (alphanumeric, dash, underscore only; legacy key `device_id` accepted as fallback)
@@ -215,8 +219,10 @@ agent/
 
 6. **Scheduler** (`internal/scheduler/scheduler.go`):
    - Uses gocron/v2 for interval-based scheduling
-   - Context-aware cancellation for clean shutdown
+   - Context-aware cancellation for clean shutdown, checked once in `wrapTaskWithRecovery`
    - Panic recovery for all tasks
+   - No job overlaps itself (`WithSingletonMode(LimitModeReschedule)` for every job): a run
+     still going when its tick comes skips that tick. `TestJobsDoNotOverlapThemselves`
    - The internal `creds_sync` job is scheduled only when a CredsSyncer is supplied
      (platform auth). Its cadence is `platform.sync_interval` -- there is no longer a
      `tasks.creds_sync` config key, because the cadence of a platform conversation

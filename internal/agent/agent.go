@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -265,8 +263,8 @@ func (a *Agent) Run() error {
 
 	// The edge subsystems, on a box that hosts a NATS leaf or syncs KV buckets.
 	// Started like the Nebula manager and stopped by the same cancel: it owns no
-	// signal handling and no ticker of its own, because this function already
-	// has both. Its readiness checks were registered in New and are already
+	// signal handling of its own, because Shutdown's cancel already stops it.
+	// Its readiness checks were registered in New and are already
 	// being probed — they report it as not connected until this comes up, which
 	// is exactly what is true.
 	//
@@ -286,50 +284,42 @@ func (a *Agent) Run() error {
 		zap.String("code", a.config.Code),
 		zap.String("version", a.version))
 
-	// Wait for shutdown signal
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	// runErr is non-nil only when the agent is stopping because something went
-	// wrong, which is what tells main to exit non-zero and the service manager to
-	// restart us. A signal or a cancelled context is an orderly stop.
-	var runErr error
-
+	// Stop signals are not handled here. The service library listens for them
+	// on every platform -- systemd, rc.d, the Windows SCM, and a terminal's
+	// Ctrl+C -- and calls program.Stop, which calls Shutdown. This used to
+	// listen for SIGTERM as well, which made every stop run Shutdown twice at
+	// the same instant (see Shutdown).
 	select {
-	case <-sigChan:
-		a.logger.Info("Received shutdown signal")
-
+	// Shutdown has begun, from program.Stop. It owns the stop; nothing to do.
 	case <-a.ctx.Done():
-		a.logger.Info("Context cancelled")
+		return nil
 
 	// nats.go has given up on the connection for good — a revoked credential is
 	// the usual way that happens. There is no path back to the bus from here, and
 	// a restart is what re-runs the startup credential sync that can heal it. See
 	// the ClosedHandler in internal/nats/client.go, and the OnFailure options in
 	// cmd/agent/main.go that make the restart actually happen.
+	//
+	// The error is what tells main to exit non-zero, and the service manager to
+	// restart us.
 	case <-a.nats.Lost():
 		a.logger.Error("NATS connection lost permanently, exiting for restart")
-		runErr = fmt.Errorf("NATS connection closed permanently")
+		if err := a.Shutdown(); err != nil {
+			return err
+		}
+		return fmt.Errorf("NATS connection closed permanently")
 	}
-
-	if err := a.Shutdown(); err != nil {
-		return err
-	}
-
-	return runErr
 }
 
 // Shutdown gracefully shuts down the agent. The first call does the work; every
 // other call, concurrent or later, waits for it and returns what it returned.
 //
-// It is called twice on every stop, so this is not defensive. Under systemd,
-// SIGTERM reaches both Run's signal.Notify and the service library's, and Run
-// and program.Stop each call Shutdown at the same instant; on Windows, Stop's
-// cancel wakes Run, which calls it again. gocron's Shutdown hands its single
-// result to whichever caller receives it first, so the other waited out
-// StopTimeout + 2s and logged "timed out waiting for scheduler to stop" about a
-// scheduler that had stopped cleanly -- after the NATS drain and the Nebula
-// stop had also run twice, concurrently.
+// Two callers can arrive together: program.Stop on a service stop, and Run when
+// NATS is lost for good. gocron's Shutdown hands its single result to whichever
+// caller receives it first, so without this the other waited out StopTimeout +
+// 2s and logged "timed out waiting for scheduler to stop" about a scheduler
+// that had stopped cleanly. Until 0.6.2 that happened on every stop, because
+// Run also listened for SIGTERM.
 func (a *Agent) Shutdown() error {
 	a.shutdownOnce.Do(func() { a.shutdownErr = a.shutdown() })
 	return a.shutdownErr
