@@ -10,6 +10,8 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-14
+
 ### Security
 
 - **Built with Go 1.26.11.** Releases through 0.6.2 were built with Go 1.26.0,
@@ -706,7 +708,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/stone-age-io/agent/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/stone-age-io/agent/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/stone-age-io/agent/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/stone-age-io/agent/compare/v0.5.0...v0.6.0
