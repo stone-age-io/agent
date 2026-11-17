@@ -1,114 +1,115 @@
-# FreeBSD Agent Configuration Example
-
-# Agent Identity
-code: "device-12345"  # Identity token used in NATS subjects (legacy key: device_id)
-location: "hq"        # Optional deployment location, carried in heartbeat/telemetry payloads
-
-# NATS Subject Prefix (optional)
-subject_prefix: "agents"
-
-# stone-age.io Platform (optional)
+# Agent configuration example ("freebsd")
 #
-# One home for the platform relationship. Three subsystems read it: the NATS
-# credential lifecycle (nats.auth.type: "platform"), the Nebula config source
-# (nebula.source: "platform"), and the leaf bootstrap (agent -leaf-config).
-# Leave the block out entirely and none of them are available.
+# Copy this file, set the three values marked EDIT, and start the agent. Every
+# other setting is optional: a commented-out key shows its default, and a
+# commented-out block is a feature that is off until you uncomment it.
+#
+# The three example files (linux, freebsd, windows) are identical apart from
+# what is inside double quotes. A test enforces that, so edit all three.
+
+code: "device-12345"            # EDIT: this agent's identity; used in NATS subjects
+# location: "hq"                # optional single token, carried in telemetry
+# subject_prefix: "agents"      # subjects are {prefix}.{code}.{type}
+
+nats:
+  urls:
+    - "nats://nats.example.com:4222"   # EDIT
+
+  auth:                         # EDIT: pick one
+    type: "creds"
+    creds_file: "/usr/local/etc/agent/device.creds"
+
+    # The stone-age.io platform fetches and maintains the .creds file. The
+    # agent logs in as its own Thing; configure the `platform:` block below.
+    # type: "platform"
+    # creds_file: "/usr/local/etc/agent/device.creds"
+
+    # type: "token"
+    # token: "your-token-here"
+
+    # type: "userpass"
+    # username: "user"
+    # password: "pass"
+
+    # type: "none"
+
+  # tls:
+  #   enabled: true
+  #   ca_file: "/usr/local/etc/agent/ca-cert.pem"            # omit to use the system pool
+  #   cert_file: "/usr/local/etc/agent/client-cert.pem"      # mutual TLS only
+  #   key_file: "/usr/local/etc/agent/client-key.pem"        # mutual TLS only
+  #   insecure_skip_verify: false               # development only
+
+  # Host a nats-server in this process. On a gateway that is the file
+  # `agent -leaf-config` wrote; any nats-server config works, so this is also
+  # how to run a plain embedded broker. nats.urls must name the port it
+  # listens on -- startup refuses the pair if they disagree. Leave it unset
+  # where nats-server runs as its own service: the bus then survives an agent
+  # restart, which is what you want when upgrading the agent on a live site.
+  # server_config: "/usr/local/etc/agent/nats-leaf.conf"
+
+  # max_reconnects: -1          # -1 = for ever
+  # reconnect_wait: "2s"
+  # drain_timeout: "30s"
+
+# stone-age.io platform (optional)
+#
+# One home for the platform relationship. Three things read it: the NATS
+# credential lifecycle (auth type "platform"), the Nebula config source
+# (nebula.source "platform"), and the leaf bootstrap (agent -leaf-config).
 #
 # platform:
 #   url: "https://platform.example.com"
 #   identity: "thing@example.com"                 # the thing's login email
-#   password_env: "AGENT_PLATFORM_PASSWORD"       # reads the password from this env var
+#   password_env: "AGENT_PLATFORM_PASSWORD"       # env var holding the password;
+#                                                 # optional after first boot
 #   sync_interval: "24h"                          # credential refresh, 1h-72h
-#   leaf_refresh_interval: "5m"                   # gateways: re-read the leaf's account JWT (revocations)
-#                                                 # and reload the leaf. 0 = off, else 30s-1h
+#   leaf_refresh_interval: "5m"                   # gateways: re-read the leaf's
+#                                                 # account JWT (revocations) and
+#                                                 # reload the leaf. 0 = off, else
+#                                                 # 30s-1h. THIS IS THE SITE'S
+#                                                 # REVOCATION LATENCY
 #   # session_file: default is beside nats.auth.creds_file
-#   # allow_insecure_url: false                   # http:// platform URL, development only
+#   # allow_insecure_url: false                   # http:// URL, development only
 
-# NATS Connection
-nats:
-  urls: 
-    - "nats://connect.your-service.com:4222"
-  
-  # Host a nats-server in this process (optional)
-  #
-  # Non-empty means the agent runs the server from this config file. On a
-  # gateway that is the file `agent -leaf-config` wrote; it works equally with
-  # any hand-written nats-server config, so this is also how you run a plain
-  # embedded broker on a box with no platform. nats.urls must name the port it
-  # listens on -- startup refuses the pair if they disagree.
-  #
-  # Leave it unset where systemd or Docker already supervises nats-server: the
-  # bus then survives an agent restart, which is what you want when upgrading
-  # the agent on a live site.
-  #
-  # server_config: "/usr/local/etc/agent/nats-leaf.conf"
+# Scheduled tasks. Each shows its default.
+# tasks:
+#   heartbeat:                  # Core NATS liveness beacon
+#     enabled: true
+#     interval: "1m"            # minimum 10s
+#   system_metrics:             # CPU, memory, disk
+#     enabled: true
+#     interval: "5m"            # minimum 30s
+#   inventory:                  # hardware/software inventory, also at startup
+#     enabled: true
+#     interval: "24h"
+#   service_check:              # runs only when services are listed
+#     interval: "1m"
+#     services:                 # names as "rc.d" knows them
+#       - "nginx"
 
-  # Authentication (choose one method)
-  auth:
-    # Option 1: Credentials file (RECOMMENDED for production)
-    type: "creds"
-    creds_file: "/usr/local/etc/agent/device.creds"
-
-    # Option 2: stone-age.io platform (fetches and maintains .creds).
-    # The agent is a Thing on the platform: it logs in as itself against the
-    # things collection and its credential lives on its nats_user relation.
-    # Configure the platform itself in the top-level `platform:` block.
-    # type: "platform"
-    # creds_file: "/usr/local/etc/agent/device.creds"
-
-    # Option 3: Token authentication
-    # type: "token"
-    # token: "your-token-here"
-
-    # Option 4: Username/Password authentication
-    # type: "userpass"
-    # username: "user"
-    # password: "pass"
-  
-  # TLS Configuration (optional but recommended for production)
-  tls:
-    enabled: false
-    cert_file: "/usr/local/etc/agent/client-cert.pem"
-    key_file: "/usr/local/etc/agent/client-key.pem"
-    ca_file: "/usr/local/etc/agent/ca-cert.pem"
-    insecure_skip_verify: false
-  
-  max_reconnects: -1
-  reconnect_wait: "2s"
-  drain_timeout: "30s"
-
-# Scheduled Tasks
-tasks:
-  # Heartbeat - Periodic "I'm alive" message
-  heartbeat:
-    enabled: true
-    interval: "1m"
-  
-  # System Metrics - CPU, memory, disk
-  system_metrics:
-    enabled: true
-    interval: "5m"
-  
-  # Service Check - Monitor rc.d services
-  service_check:
-    enabled: true
-    interval: "1m"
-    services:
-      - "nginx"
-      - "postgresql"
-      - "redis"
-  
-  # Inventory - System hardware/software inventory
-  inventory:
-    enabled: true
-    interval: "24h"
+# Commands the control plane may run. Everything is refused unless listed.
+# commands:
+#   timeout: "30s"              # 5s-5m
+#
+#   # Scripts are requested by bare filename (e.g. "deploy.sh") and must sit
+#   # directly in this directory. Unset = no scripts. If set, it must exist.
+#   scripts_directory: "/usr/local/etc/agent/scripts"
+#
+#   allowed_services:           # start/stop/restart/status
+#     - "nginx"
+#
+#   allowed_commands:           # exact match, run through "/bin/sh"
+#     - "uptime"
+#
+#   allowed_log_paths:          # glob patterns
+#     - "/var/log/nginx/*.log"
 
 # KV sync (optional, off by default)
 #
 # Relays declared buckets up to the hub and mirrors declared buckets down.
 # Off by default because it moves data-plane traffic -- an upgrade must not
-# silently start doing it. Requires the platform block. `twin: true` is a
-# preset for the two digital-twin buckets.
+# silently start doing it. Requires the platform block.
 # sync:
 #   twin: true                 # preset: the two digital-twin buckets
 #   mirrors:                   # hub -> edge, maintained by the server
@@ -118,82 +119,37 @@ tasks:
 #     - bucket: "events"
 #       keys: "site.S01.>"     # optional. A bucket belongs to ONE list.
 
-# Readiness and metrics on this box (optional)
+# Readiness and metrics on this box: /ready and /metrics
 #
-# /ready and /metrics, served locally. This exists because cmd.health travels
-# over NATS, which is the link that breaks: a box whose uplink is down is
-# exactly the one you want to ask, and that is when it goes quiet.
+# This exists because cmd.health travels over NATS, which is the link that
+# breaks: a box whose uplink is down is exactly the one you want to ask.
 #
 # ON by default, on loopback. Set addr to "" to serve neither -- the checks
 # still run and still log either way. A bind failure is logged, not fatal.
-#
 # NOTE: 9100 is also node_exporter's default port. If you run node_exporter on
-# this box, move one of the two or neither will bind reliably.
-observability:
-  addr: "127.0.0.1:9100"
-  metrics_token: ""
-  interval: "15s"
+# this box, move one of the two.
+# observability:
+#   addr: "127.0.0.1:9100"
+#   metrics_token: ""           # empty = open; Bearer or Basic when set
+#   interval: "15s"
 
-# Nebula Overlay Network (optional, disabled by default)
+# Nebula overlay network (optional, off by default)
 #
-# Runs a Nebula mesh host inside the agent. The config is generated by the
-# platform for this agent's thing and re-read on an interval, which is what
-# makes certificate revocation, renewal and CA rotation actually reach the
-# device: Nebula has no CRL, so a revoked certificate is only refused once
-# each peer has re-read its own config.
-#
-# Requires root (Linux/FreeBSD) or, on Windows, wintun.dll beside the agent
-# executable. See docs/nebula.md.
-nebula:
-  enabled: false
+# Runs a Nebula mesh host inside the agent. Nebula has no CRL, so a revoked
+# certificate is only refused once each peer re-reads its own config; the
+# agent re-reads its config on sync_interval. Requires root, or wintun.dll
+# beside the agent executable on Windows. See docs/nebula.md.
+# nebula:
+#   enabled: true
+#   source: "platform"          # "platform" (needs the platform block) or "file"
+#   # config_file: "/usr/local/etc/agent/nebula.yaml"         # only for source "file"
+#   cache_file: "/var/db/agent/nebula-cache.yaml"     # last config that reached the
+#                                                # mesh; holds the private key
+#   sync_interval: "10m"        # 1m-1h. THIS IS THE REVOCATION LATENCY
+#   verify_timeout: "30s"       # 5s-5m before restart, then rollback
 
-  # "platform" reads this agent's nebula_host record (requires platform auth).
-  # "file" reads a config from disk. An edit is picked up within sync_interval;
-  # an unchanged file is left alone.
-  source: "platform"
-  # config_file: "/usr/local/etc/agent/nebula.yaml"   # only for source: "file"
-
-  # Last config known to have reached the mesh. Contains the host private key
-  # and is written 0600. Lets a device that reboots while the platform is
-  # unreachable still come up on the overlay.
-  cache_file: "/var/db/agent/nebula-cache.yaml"
-
-  # How often to check the platform for a new config. THIS IS THE REVOCATION
-  # LATENCY for this device, not a tuning knob. 1m-1h.
-  sync_interval: "10m"
-
-  # How long a newly applied config has to reach a lighthouse before it is
-  # restarted and then rolled back to the last one that worked. 5s-5m.
-  verify_timeout: "30s"
-# Command Execution
-commands:
-  # Scripts Directory (optional). It must exist, or the agent refuses to start;
-  # set it to "" to run no scripts.
-  scripts_directory: "/usr/local/etc/agent/scripts"
-  
-  # Whitelist of services that can be controlled
-  allowed_services:
-    - "nginx"
-    - "postgresql"
-    - "redis"
-  
-  # Whitelist of allowed shell commands
-  allowed_commands:
-    - "df -h | grep -E '^/dev/'"
-    - "uptime"
-    - "ps aux | sort -rk 3 | head -10"
-  
-  # Allowed log file paths (glob patterns supported)
-  allowed_log_paths:
-    - "/var/log/nginx/*.log"
-    - "/usr/local/www/app/*.log"
-  
-  # Command execution timeout
-  timeout: "30s"
-
-# Logging
-logging:
-  level: "info"  # debug, info, warn, error
-  file: "/var/log/agent/agent.log"
-  max_size_mb: 100
-  max_backups: 3
+# logging:
+#   level: "info"               # debug, info, warn, error
+#   file: "/var/log/agent/agent.log"
+#   max_size_mb: 100
+#   max_backups: 3

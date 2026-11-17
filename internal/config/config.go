@@ -389,9 +389,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nebula.sync_interval", "10m")
 	v.SetDefault("nebula.verify_timeout", "30s")
 
-	// Command defaults with platform-specific scripts directory
+	// No scripts unless a directory is named. Scripts are opt-in like every
+	// other way to run something on the box; a default path that had to exist
+	// made every config without a commands block refuse to start.
 	v.SetDefault("commands.timeout", "30s")
-	v.SetDefault("commands.scripts_directory", defaults.ScriptsDirectory)
+	v.SetDefault("commands.scripts_directory", "")
 
 	// Logging defaults with platform-specific log file path
 	v.SetDefault("logging.level", "info")
@@ -407,6 +409,14 @@ func applyDerivedDefaults(cfg *Config) {
 	if cfg.NATS.Auth.Type == authPlatform && cfg.Platform.SessionFile == "" && cfg.NATS.Auth.CredsFile != "" {
 		cfg.Platform.SessionFile = filepath.Join(
 			filepath.Dir(cfg.NATS.Auth.CredsFile), "platform-session.json")
+	}
+
+	// A service check with nothing to check is off. It is enabled by default,
+	// and refusing to start until somebody listed a service (or wrote
+	// enabled: false) made every minimal config fail. Settling it here keeps
+	// the scheduler and cmd.health's task list in agreement.
+	if len(cfg.Tasks.ServiceCheck.Services) == 0 {
+		cfg.Tasks.ServiceCheck.Enabled = false
 	}
 }
 
@@ -544,10 +554,6 @@ func validate(cfg *Config) error {
 		}
 	}
 
-	// Validate service check has services if enabled
-	if cfg.Tasks.ServiceCheck.Enabled && len(cfg.Tasks.ServiceCheck.Services) == 0 {
-		return fmt.Errorf("at least one service must be specified when service_check is enabled")
-	}
 
 	// Validate task intervals are sensible
 	if cfg.Tasks.Heartbeat.Enabled && cfg.Tasks.Heartbeat.Interval < 10*time.Second {

@@ -10,6 +10,22 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Changed
+
+- **A minimal config starts.** `code`, `nats.urls` and `nats.auth` are now
+  enough. Two defaults used to stop it:
+  - `tasks.service_check` with no `services` listed is off, where it used to
+    refuse to start.
+  - `commands.scripts_directory` defaults to empty (no scripts). It used to
+    default to a per-OS path that had to exist. **If you run scripts and never
+    set this key, set it now**, or `cmd.exec` will refuse them.
+- **The example configs are short and ship with nothing allowed.** Only the
+  identity and the NATS connection are live; everything else is commented out
+  and shows its default. The old examples had placeholder services, commands
+  and log paths enabled, so a copied file allowed things nobody chose. The
+  three per-OS files now differ only inside quoted strings, and a test keeps
+  them that way.
+
 ## [0.7.0] - 2026-11-14
 
 ### Security

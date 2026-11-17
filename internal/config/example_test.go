@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,43 @@ func TestExampleConfigsParse(t *testing.T) {
 			}
 			t.Logf("parsed; validation reported: %v", err)
 		})
+	}
+}
+
+// TestExampleConfigsAgree keeps the three example configs in step: they may
+// differ only inside double-quoted strings (paths, service names, commands).
+// Comments, keys and layout must match line for line. They had drifted -- the
+// Windows file had comments the others lacked and was missing a port note --
+// because nothing said they were meant to be one file.
+func TestExampleConfigsAgree(t *testing.T) {
+	quoted := regexp.MustCompile(`"[^"]*"`)
+	read := func(goos string) []string {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "configs", goos, "config.yaml.example"))
+		if err != nil {
+			t.Fatalf("read %s example: %v", goos, err)
+		}
+		lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+		for i, l := range lines {
+			lines[i] = quoted.ReplaceAllString(l, `""`)
+		}
+		return lines
+	}
+
+	want := read("linux")
+	for _, goos := range []string{"freebsd", "windows"} {
+		got := read(goos)
+		for i := 0; i < len(want) || i < len(got); i++ {
+			var w, g string
+			if i < len(want) {
+				w = want[i]
+			}
+			if i < len(got) {
+				g = got[i]
+			}
+			if w != g {
+				t.Errorf("%s example differs from linux at line %d outside quotes:\n linux: %s\n %s: %s", goos, i+1, w, goos, g)
+				break
+			}
+		}
 	}
 }

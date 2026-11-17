@@ -52,10 +52,7 @@ nats:
     creds_file: "/etc/agent/device.creds"
 ```
 
-That is the platform part only; the rest of the file still applies. In
-particular `tasks.service_check` is on by default and refuses to start with no
-`services` listed, and the default `commands.scripts_directory` has to exist
-(the install guides create it).
+That is the platform part only; the rest of the file still applies.
 
 The `platform:` block is **top level**, not nested under `nats.auth`. Three
 subsystems read it — the NATS credential lifecycle here, the

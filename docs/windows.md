@@ -151,7 +151,7 @@ notepad "$configPath\config.yaml"
 1. Set unique `code` (and optionally `location`)
 2. Update `nats.urls` with your NATS server
 3. Configure authentication (credentials file, stone-age.io platform, token, or userpass)
-4. Adjust monitored services in `tasks.service_check.services`
+4. List services to monitor in `tasks.service_check.services` (none listed = the check is off)
 
 **Copy NATS credentials (if using creds auth):**
 

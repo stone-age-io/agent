@@ -103,7 +103,7 @@ Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -F
 
 # 2. Install (the archive carries the per-OS example configs under configs\)
 New-Item -ItemType Directory -Force -Path "C:\Program Files\Agent"
-New-Item -ItemType Directory -Force -Path "C:\ProgramData\Agent\Scripts"  # scripts_directory must exist
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\Agent"
 Copy-Item "$env:TEMP\agent\agent.exe" "C:\Program Files\Agent\"
 Copy-Item "$env:TEMP\agent\configs\windows\config.yaml.example" "C:\ProgramData\Agent\config.yaml"
 
@@ -134,7 +134,7 @@ sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # 2. Configure (the example config ships in the archive)
-sudo mkdir -p /etc/agent /opt/agent/scripts   # scripts_directory must exist
+sudo mkdir -p /etc/agent
 sudo cp configs/linux/config.yaml.example /etc/agent/config.yaml
 sudo nano /etc/agent/config.yaml
 
@@ -161,7 +161,7 @@ sudo mv agent /usr/local/bin/agent
 sudo chmod +x /usr/local/bin/agent
 
 # 2. Configure (the example config ships in the archive)
-sudo mkdir -p /usr/local/etc/agent/scripts   # scripts_directory must exist
+sudo mkdir -p /usr/local/etc/agent
 sudo cp configs/freebsd/config.yaml.example /usr/local/etc/agent/config.yaml
 sudo ee /usr/local/etc/agent/config.yaml
 

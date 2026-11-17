@@ -1340,3 +1340,32 @@ func TestValidateNebula(t *testing.T) {
 		})
 	}
 }
+
+// The smallest config an operator can write -- identity and a bus -- starts.
+// It once did not: service_check is on by default and demanded a service list,
+// and scripts_directory defaulted to a path that had to exist, so a new install
+// failed until somebody listed a service and made a directory it never used.
+func TestLoadMinimalConfig(t *testing.T) {
+	yaml := `
+code: "server-01"
+nats:
+  urls: ["nats://localhost:4222"]
+  auth:
+    type: "none"
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Tasks.ServiceCheck.Enabled {
+		t.Error("service_check with no services should be off")
+	}
+	if cfg.Commands.ScriptsDirectory != "" {
+		t.Errorf("scripts_directory = %q, want empty (no scripts)", cfg.Commands.ScriptsDirectory)
+	}
+}

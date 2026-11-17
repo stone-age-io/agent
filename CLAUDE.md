@@ -585,6 +585,15 @@ Default config paths:
 - Linux: `/etc/agent/config.yaml`
 - FreeBSD: `/usr/local/etc/agent/config.yaml`
 
+**The example configs (`configs/<os>/config.yaml.example`) are three copies of
+one file.** They may differ only inside double-quoted strings, and
+`TestExampleConfigsAgree` enforces that, so edit all three. Only the identity and the
+NATS connection are live in them; every other key is commented out at its default.
+Allowlists ship empty, because a copied example is a running config and a
+placeholder entry is a permission nobody chose. **A config with only `code`,
+`nats.urls` and `nats.auth` must start** (`TestLoadMinimalConfig`): a default that
+needs a list filled in or a directory created turns itself off instead.
+
 Key config sections:
 ```yaml
 code: "unique-id"                # Required, alphanumeric/dash/underscore (legacy key: device_id)

@@ -552,13 +552,7 @@ a clean bill of health.
      twin: true
    observability:
      addr: "127.0.0.1:9100"
-   tasks:
-     service_check:
-       enabled: false   # on by default, and refuses to start with no services listed
    ```
-
-   The default `commands.scripts_directory` has to exist too; the install
-   guides create it.
 
 3. `agent -leaf-config` → writes `/etc/agent/nats-leaf.conf` and the creds.
 4. Start the leaf: either `nats-server -c /etc/agent/nats-leaf.conf` under your
