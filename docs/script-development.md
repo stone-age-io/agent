@@ -15,6 +15,10 @@ The agent's extensibility comes from **scripts**, not built-in features. This ke
 
 ## Script Types
 
+Scripts are off until `commands.scripts_directory` names a directory, and the
+agent refuses to start if that directory does not exist. There is no default.
+The locations below are the conventional ones the install guides use.
+
 ### PowerShell Scripts (Windows)
 
 **Extension:** `.ps1`

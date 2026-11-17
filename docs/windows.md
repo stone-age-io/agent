@@ -20,7 +20,7 @@ Complete guide for installing and configuring the agent on Windows systems.
 # Run as Administrator
 
 # Download agent (set the version to the latest release)
-$agentVersion = "0.7.0"
+$agentVersion = "0.8.0"
 $downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent_${agentVersion}_windows_amd64.zip"
 $agentPath = "C:\Program Files\Agent"
 $configPath = "C:\ProgramData\Agent"
@@ -28,7 +28,6 @@ $configPath = "C:\ProgramData\Agent"
 # Create directories
 New-Item -ItemType Directory -Force -Path $agentPath
 New-Item -ItemType Directory -Force -Path $configPath
-New-Item -ItemType Directory -Force -Path "$configPath\Scripts"
 
 # Download and extract the release archive. It also carries LICENSE,
 # README.md, the per-OS example configs under configs\, and these guides
@@ -51,94 +50,12 @@ Set-Acl $agentPath $acl
 
 ### 2. Configure Agent
 
-Create configuration file:
+Start from the example config in the release archive. Only the identity and
+the NATS connection are live in it; every other setting is commented out at
+its default, and nothing is allowed until you list it.
 
 ```powershell
-# Create configuration
-$configContent = @'
-# Agent Configuration for Windows
-
-# Agent identity: code is the NATS subject token (legacy key: device_id),
-# location is optional and carried in heartbeat/telemetry payloads
-code: "windows-server-01"
-location: "hq"
-
-# NATS subject prefix (optional)
-subject_prefix: "agents"
-
-# NATS Connection
-nats:
-  urls: 
-    - "nats://nats.example.com:4222"
-  
-  # Authentication (choose one method)
-  auth:
-    type: "creds"
-    creds_file: "C:\\ProgramData\\Agent\\device.creds"
-  
-  # TLS Configuration (optional)
-  tls:
-    enabled: false
-    cert_file: "C:\\ProgramData\\Agent\\client-cert.pem"
-    key_file: "C:\\ProgramData\\Agent\\client-key.pem"
-    ca_file: "C:\\ProgramData\\Agent\\ca-cert.pem"
-  
-  max_reconnects: -1
-  reconnect_wait: "2s"
-  drain_timeout: "30s"
-
-# Scheduled Tasks
-tasks:
-  heartbeat:
-    enabled: true
-    interval: "1m"
-  
-  system_metrics:
-    enabled: true
-    interval: "5m"
-    # Built-in (gopsutil). You can still run windows_exporter for Prometheus to
-    # scrape directly; the agent does not read it.
-  
-  service_check:
-    enabled: true
-    interval: "1m"
-    services:
-      - "W3SVC"         # IIS
-      - "MSSQLSERVER"   # SQL Server
-      - "WinRM"         # Windows Remote Management
-  
-  inventory:
-    enabled: true
-    interval: "24h"
-
-# Command Execution
-commands:
-  scripts_directory: "C:\\ProgramData\\Agent\\Scripts"
-  
-  allowed_services:
-    - "W3SVC"
-    - "MSSQLSERVER"
-    - "WinRM"
-  
-  allowed_commands:
-    - "Get-ComputerInfo | Select-Object WindowsVersion, OsHardwareAbstractionLayer"
-    - "Get-Disk | Select-Object Number, FriendlyName, Size, HealthStatus"
-  
-  allowed_log_paths:
-    - "C:\\inetpub\\logs\\LogFiles\\*\\*.log"
-    - "C:\\Logs\\*.log"
-  
-  timeout: "30s"
-
-# Logging
-logging:
-  level: "info"
-  file: "C:\\ProgramData\\Agent\\agent.log"
-  max_size_mb: 100
-  max_backups: 3
-'@
-
-$configContent | Out-File -FilePath "$configPath\config.yaml" -Encoding UTF8
+Copy-Item "$env:TEMP\agent\configs\windows\config.yaml.example" "$configPath\config.yaml"
 ```
 
 **Edit configuration:**
@@ -151,7 +68,9 @@ notepad "$configPath\config.yaml"
 1. Set unique `code` (and optionally `location`)
 2. Update `nats.urls` with your NATS server
 3. Configure authentication (credentials file, stone-age.io platform, token, or userpass)
-4. List services to monitor in `tasks.service_check.services` (none listed = the check is off)
+
+Everything else is optional: uncomment a block to turn it on. The sections below
+cover services, commands, log paths and scripts.
 
 **Copy NATS credentials (if using creds auth):**
 
@@ -318,6 +237,13 @@ Event logs (`.evtx`) are binary and can't be tailed by line. Read them with
 ---
 
 ## Example Scripts
+
+Scripts are off until `commands.scripts_directory` names a directory that
+exists. Set it to `C:\ProgramData\Agent\Scripts` and create it:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$configPath\Scripts"
+```
 
 Create custom PowerShell scripts in `C:\ProgramData\Agent\Scripts\`:
 
@@ -528,7 +454,7 @@ Stop-Service agent
 Copy-Item "C:\Program Files\Agent\agent.exe" -Destination "C:\Program Files\Agent\agent.exe.backup"
 
 # Download and extract the new release archive
-$agentVersion = "0.7.0"
+$agentVersion = "0.8.0"
 $downloadUrl = "https://github.com/stone-age-io/agent/releases/download/v$agentVersion/agent_${agentVersion}_windows_amd64.zip"
 Invoke-WebRequest -Uri $downloadUrl -OutFile "$env:TEMP\agent.zip"
 Expand-Archive -Path "$env:TEMP\agent.zip" -DestinationPath "$env:TEMP\agent" -Force
