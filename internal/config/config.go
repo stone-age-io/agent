@@ -379,7 +379,10 @@ func setDefaults(v *viper.Viper) {
 	// Off unless asked for. Each is one capability, not a role.
 	v.SetDefault("nats.server_config", "")
 	v.SetDefault("sync.twin", false)
-	v.SetDefault("observability.addr", "127.0.0.1:9100")
+	// 10063, not 9100: 9100 is node_exporter's, so on a box running both, one
+	// failed to bind. 9100-9999 is fully allocated in Prometheus's port list;
+	// 10063 was its next free entry.
+	v.SetDefault("observability.addr", "127.0.0.1:10063")
 	v.SetDefault("observability.metrics_token", "")
 	v.SetDefault("observability.interval", "15s")
 

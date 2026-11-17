@@ -118,7 +118,7 @@ the first.
 - Make decisions (stateless)
 - Expose HTTP endpoints, **except** `/ready` and `/metrics` on
   `observability.addr`, which is set by default — to loopback,
-  `127.0.0.1:9100`, for exactly this reason: opening a port beyond the box
+  `127.0.0.1:10063`, for exactly this reason: opening a port beyond the box
   should be a decision. Set it empty to serve neither. The
   justification for having it at all is that `cmd.health` travels over NATS,
   which is the link that breaks — the box you most need to ask is the one whose
@@ -468,7 +468,7 @@ credential is fixed.
 - Outbound HTTPS to the Control Plane when the `platform:` block is set
   (credentials, Nebula config, leaf bootstrap)
 - `/ready` and `/metrics` are served over plain HTTP on `observability.addr`,
-  `127.0.0.1:9100` by default. Loopback is not a permission boundary if other
+  `127.0.0.1:10063` by default. Loopback is not a permission boundary if other
   users share the box -- set `observability.metrics_token`, or set `addr` empty,
   before moving it off loopback
 - A gateway's embedded `nats-server` listens per its own config, which is the

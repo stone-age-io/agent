@@ -23,7 +23,7 @@ Worth being exact, because it decides your firewall rules:
 |---|---|---|
 | NATS (telemetry, commands, heartbeats) | **outbound** to your hub | always |
 | Platform HTTPS (credentials, Nebula config, leaf bootstrap) | **outbound** to the Control Plane | when the `platform:` block is set |
-| `/ready` + `/metrics` | **listens**, `127.0.0.1:9100` by default | unless `observability.addr` is empty |
+| `/ready` + `/metrics` | **listens**, `127.0.0.1:10063` by default | unless `observability.addr` is empty |
 | Nebula overlay (UDP) | **outbound** to a lighthouse | when `nebula.enabled` |
 | Embedded `nats-server` | **listens**, per its own config | only when `nats.server_config` is set |
 
@@ -73,7 +73,7 @@ to reach the leaf server it hosts.
 - **Nebula mesh host**, run in-process rather than as a separate service. The config is re-read on an interval, which is what makes revocation, renewal and CA rotation actually reach the device -- Nebula has no CRL, so `nebula.sync_interval` **is** this device's revocation latency. A newly applied config that cannot reach a lighthouse is rolled back to the last one known to work.
 
 ### Local health (on by default)
-- **`/ready` and `/metrics`** on `127.0.0.1:9100`. This is not a gateway feature: any agent can say whether it is healthy, and `cmd.health` travels over NATS, which is the link that breaks. The box you most need to ask is the one whose uplink is down, and that is exactly when it goes quiet over the bus.
+- **`/ready` and `/metrics`** on `127.0.0.1:10063`. This is not a gateway feature: any agent can say whether it is healthy, and `cmd.health` travels over NATS, which is the link that breaks. The box you most need to ask is the one whose uplink is down, and that is exactly when it goes quiet over the bus.
 
 ### Site gateway (all optional)
 - **NATS leaf node**: bootstrap a site's `nats-leaf.conf` from the platform (`agent -leaf-config`) and, if you want, host that server in this process
@@ -277,11 +277,8 @@ tasks:
 
 # /ready and /metrics on this box. ON by default, on loopback -- set addr to ""
 # to serve neither. The checks still run and still log either way.
-#
-# NOTE on Linux and FreeBSD: 9100 is also node_exporter's default port. If you
-# run the exporter on this box, move one of them.
 observability:
-  addr: "127.0.0.1:9100"
+  addr: "127.0.0.1:10063"
 
 # Nebula overlay (optional, off by default). sync_interval is a security number,
 # not a tuning knob: Nebula has no CRL, so it is this device's revocation

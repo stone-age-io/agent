@@ -15,7 +15,7 @@ import (
 // A plain device must not start the edge subsystem.
 //
 // This is the regression that matters most here. `observability.addr` defaults
-// to 127.0.0.1:9100, and it used to be one of the disjuncts in edgeEnabled — so
+// to 127.0.0.1:10063, and it used to be one of the disjuncts in edgeEnabled — so
 // every agent ever deployed started the edge, dialled a second NATS connection
 // built from nothing but a .creds file (ignoring token and userpass auth and
 // the whole nats.tls block), and registered three checks about a leaf node the
@@ -23,7 +23,7 @@ import (
 // while its real connection was fine.
 func TestEdgeIsNotEnabledByObservabilityAlone(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Observability.Addr = "127.0.0.1:9100"
+	cfg.Observability.Addr = "127.0.0.1:10063"
 
 	if edgeEnabled(cfg) {
 		t.Error("serving /ready must not make a box a leaf node: observability is the agent's, " +

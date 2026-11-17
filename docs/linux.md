@@ -88,8 +88,7 @@ tasks:
     enabled: true
     interval: "5m"
     # Built-in (gopsutil). You can still run node_exporter for Prometheus to
-    # scrape directly; the agent does not read it. Its port, 9100, is also the
-    # default observability.addr, so move one of them.
+    # scrape directly; the agent does not read it.
   
   service_check:
     enabled: true
@@ -531,7 +530,7 @@ sudo rm -rf /var/log/agent
    # Credentials, Nebula config and leaf bootstrap: outbound HTTPS (443) to the
    # Control Plane, when the `platform:` block is set.
    #
-   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:10063, which
    # is not reachable off the box. A SITE GATEWAY is the exception: local
    # devices connect in to the nats-server it hosts (4222 by default).
    ```

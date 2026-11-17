@@ -455,14 +455,14 @@ so nothing can enforce that they agree.
 
 ```yaml
 observability:
-  addr: "127.0.0.1:9100"    # 0.0.0.0:9100 to scrape from elsewhere
+  addr: "127.0.0.1:10063"    # 0.0.0.0:10063 to scrape from elsewhere
   metrics_token: ""         # empty = open; Bearer or Basic when set
   interval: "15s"
 ```
 
 ```sh
-curl -s localhost:9100/ready
-curl -s localhost:9100/metrics
+curl -s localhost:10063/ready
+curl -s localhost:10063/metrics
 ```
 
 The same report is also in `cmd.health`, under `checks`, so a fleet dashboard
@@ -551,7 +551,7 @@ a clean bill of health.
    sync:
      twin: true
    observability:
-     addr: "127.0.0.1:9100"
+     addr: "127.0.0.1:10063"
    ```
 
 3. `agent -leaf-config` → writes `/etc/agent/nats-leaf.conf` and the creds.

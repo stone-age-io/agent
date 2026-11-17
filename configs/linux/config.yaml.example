@@ -126,10 +126,8 @@ nats:
 #
 # ON by default, on loopback. Set addr to "" to serve neither -- the checks
 # still run and still log either way. A bind failure is logged, not fatal.
-# NOTE: 9100 is also node_exporter's default port. If you run node_exporter on
-# this box, move one of the two.
 # observability:
-#   addr: "127.0.0.1:9100"
+#   addr: "127.0.0.1:10063"
 #   metrics_token: ""           # empty = open; Bearer or Basic when set
 #   interval: "15s"
 

@@ -14,11 +14,12 @@ A lightweight, NATS-native system management and observability agent for Windows
 **What listens.** "No listening ports" was true once and is not any more; say it
 precisely instead. Nothing can *instruct* the agent except over its own
 authenticated NATS connection, which it dials outbound -- that is the property
-worth claiming. But `observability.addr` defaults to `127.0.0.1:9100`, so every
+worth claiming. But `observability.addr` defaults to `127.0.0.1:10063`, so every
 agent serves `/ready` and `/metrics` unless the key is set empty; the platform
 block talks outbound HTTPS to the Control Plane; and `nats.server_config` makes
-a gateway host a nats-server that local devices connect *in* to. Note the
-readiness default collides with node_exporter's own 9100 on Linux and FreeBSD.
+a gateway host a nats-server that local devices connect *in* to. The port was
+9100 until it was moved for colliding with node_exporter; do not move it back
+into 9100-9999, which Prometheus's port list has fully allocated.
 
 **Observability belongs to the agent, not to the edge.** It reads as an edge
 feature because the whole `observe`/`health`/`metrics` stack arrived with the
@@ -638,7 +639,7 @@ sync:                            # KV buckets moved between this leaf's JetStrea
       keys: "site.S01.>"         # optional; a site cannot relay keys outside it
                                  # A bucket may appear in ONE list, never both.
 observability:                   # /ready and /metrics on this box
-  addr: "127.0.0.1:9100"         # empty serves neither; checks still run and log
+  addr: "127.0.0.1:10063"         # empty serves neither; checks still run and log
   metrics_token: ""              # empty = open; Bearer or Basic when set
   interval: "15s"
 nebula:                          # Embedded overlay host, off by default

@@ -12,6 +12,12 @@ that period, and this file starts where the versioned releases do.
 
 ### Changed
 
+- **`/ready` and `/metrics` default to `127.0.0.1:10063`, not `:9100`.** 9100
+  is node_exporter's port, so on a box running both, one of them failed to
+  bind. **Anything that scrapes or probes the agent on 9100 must move**, or pin
+  the old port with `observability.addr: "127.0.0.1:9100"`. 10063 was the next
+  free entry in Prometheus's default port allocation list; 9100-9999 is full.
+
 - **A minimal config starts.** `code`, `nats.urls` and `nats.auth` are now
   enough. Two defaults used to stop it:
   - `tasks.service_check` with no `services` listed is off, where it used to

@@ -25,7 +25,7 @@ import (
 // no correct behaviour.
 //
 // OBSERVABILITY IS NOT IN THIS LIST, and used to be. `observability.addr`
-// defaults to 127.0.0.1:9100, so every agent ever deployed satisfied this
+// defaults to 127.0.0.1:10063, so every agent ever deployed satisfied this
 // predicate and started the edge subsystem — which dials its own second NATS
 // connection using nothing but a .creds file, ignoring token and userpass auth
 // and the whole nats.tls block, and registers three checks about a leaf node

@@ -584,7 +584,7 @@ Remove-Item "C:\ProgramData\Agent" -Recurse -Force
 
 3. **Firewall**: Outbound NATS, plus outbound HTTPS if the platform block is set
    ```powershell
-   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:9100, which
+   # Inbound: none by default -- /ready and /metrics bind 127.0.0.1:10063, which
    # is not reachable off the box. A SITE GATEWAY is the exception: local
    # devices connect in to the nats-server it hosts (4222 by default).
 
