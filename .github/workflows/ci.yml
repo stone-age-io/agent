@@ -37,8 +37,19 @@ jobs:
             exit 1
           fi
 
+      # -race, as `make test` does. This runner is the only place the race
+      # detector runs (it needs cgo), and the relay pump, the platform client's
+      # session lock and the once-only Shutdown are all concurrency claims.
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
+
+      # release.yml runs only on a tag, so without this a broken
+      # .goreleaser.yaml is found on release day. Same pin as release.yml.
+      - name: Check release config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
 
       # Known vulnerabilities in code the agent actually calls, in its own
       # dependencies and in the Go standard library it is built with. Per GOOS,

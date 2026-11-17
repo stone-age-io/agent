@@ -25,12 +25,12 @@ const LeafConfName = "nats-leaf.conf"
 // The creds file is written 0600: it embeds the nkey seed. The conf is 0644 —
 // it carries only public trust material and a path to the creds.
 //
-// The conf goes through a temp file and a rename. It used to be a plain
-// os.WriteFile, which was harmless while the only reader was a server started
-// by hand afterwards; now a running agent rewrites the same file on a timer and
+// Both files go through a temp file and a rename, like every other secret the
+// agent writes. The conf has to: a running agent rewrites it on a timer and
 // reloads the leaf from it, and a reload that catches a half-written file is
-// refused. The creds write is unchanged: it is a one-shot's in-place write, and
-// keeping the credential current afterwards is the credential sync's job.
+// refused. The creds were once an in-place os.WriteFile, the one exception to
+// that rule; a crash mid-write left a truncated credential where a running
+// leaf or agent would re-read it on its next reconnect.
 func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile string) (confPath, credsPath string, err error) {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", "", err
@@ -44,7 +44,7 @@ func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile string) (conf
 	// re-run `agent -leaf-config` there (or let a running agent's refresh
 	// rewrite the conf).
 	credsPath = filepath.Join(outputDir, filepath.Base(credsFile))
-	if err := os.WriteFile(credsPath, []byte(lc.Creds), 0o600); err != nil {
+	if err := utils.WriteFileAtomic(credsPath, []byte(lc.Creds), 0o600); err != nil {
 		return "", "", fmt.Errorf("write creds: %w", err)
 	}
 

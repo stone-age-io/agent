@@ -682,9 +682,9 @@ commands:
   exception: it runs `sysctl -n` and `mount` (the latter under a 30s timeout)
 - Command execution uses context with timeout
 - Secrets on disk (.creds, platform session, Nebula config cache) are written 0600
-  through a temp file + rename (`utils.WriteFileAtomic`, one copy) -- except by
-  `agent -leaf-config`, a one-shot that writes its creds in place with
-  `os.WriteFile`. nats-leaf.conf goes through the same helper at 0644, because
+  through a temp file + rename (`utils.WriteFileAtomic`, one copy), with no
+  exceptions -- `agent -leaf-config` used to be one, and was brought in line.
+  nats-leaf.conf goes through the same helper at 0644, because
   the refresh rewrites it under a running leaf. A Nebula config embeds the host private key inline,
   because Nebula's PKI requires it there — treat `config_yaml` as key material
 - `nebula.sync_interval` is a security setting: Nebula has no CRL, so a revoked

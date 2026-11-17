@@ -10,6 +10,17 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **nats-server 2.15.3** for an embedded leaf. Its leaf node fixes include
+  account JWT updates no longer losing leaf interest or resetting permissions
+  (what the leaf preload refresh does), reloads waiting for startup to finish,
+  and stale leaf connections and inflated leaf counts. Brings `nats-io/jwt`
+  2.8.3 and `nkeys` 0.4.17.
+- **`agent -leaf-config` writes the creds atomically**, through the same temp
+  file and rename as every other secret. It wrote them in place, so a crash
+  mid-write could leave a truncated credential.
+
 ### Changed
 
 - **`/ready` and `/metrics` default to `127.0.0.1:10063`, not `:9100`.** 9100

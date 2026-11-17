@@ -31,9 +31,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Pinned to the major version .goreleaser.yaml is written for. `latest`
+      # would pick up a v3 on the day it ships and fail the tag mid-release.
+      # Keep in step with the check in ci.yml.
       - uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
