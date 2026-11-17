@@ -10,16 +10,10 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
-### Fixed
+## [0.8.0] - 2026-11-16
 
-- **nats-server 2.15.3** for an embedded leaf. Its leaf node fixes include
-  account JWT updates no longer losing leaf interest or resetting permissions
-  (what the leaf preload refresh does), reloads waiting for startup to finish,
-  and stale leaf connections and inflated leaf counts. Brings `nats-io/jwt`
-  2.8.3 and `nkeys` 0.4.17.
-- **`agent -leaf-config` writes the creds atomically**, through the same temp
-  file and rename as every other secret. It wrote them in place, so a crash
-  mid-write could leave a truncated credential.
+Two defaults changed, which is why this is a minor release. Check both before
+upgrading: the `/ready` + `/metrics` port, and `commands.scripts_directory`.
 
 ### Changed
 
@@ -28,7 +22,6 @@ that period, and this file starts where the versioned releases do.
   bind. **Anything that scrapes or probes the agent on 9100 must move**, or pin
   the old port with `observability.addr: "127.0.0.1:9100"`. 10063 was the next
   free entry in Prometheus's default port allocation list; 9100-9999 is full.
-
 - **A minimal config starts.** `code`, `nats.urls` and `nats.auth` are now
   enough. Two defaults used to stop it:
   - `tasks.service_check` with no `services` listed is off, where it used to
@@ -41,7 +34,22 @@ that period, and this file starts where the versioned releases do.
   and shows its default. The old examples had placeholder services, commands
   and log paths enabled, so a copied file allowed things nobody chose. The
   three per-OS files now differ only inside quoted strings, and a test keeps
-  them that way.
+  them that way. The Linux, FreeBSD and Windows install guides copy the
+  example instead of writing out a full config of their own.
+- **CI runs the tests under the race detector and validates
+  `.goreleaser.yaml` on every push**, and releases pin goreleaser to v2. The
+  workflow actions moved to v7 (Node 24).
+
+### Fixed
+
+- **nats-server 2.15.3** for an embedded leaf. Its leaf node fixes include
+  account JWT updates no longer losing leaf interest or resetting permissions
+  (what the leaf preload refresh does), reloads waiting for startup to finish,
+  and stale leaf connections and inflated leaf counts. Brings `nats-io/jwt`
+  2.8.3 and `nkeys` 0.4.17.
+- **`agent -leaf-config` writes the creds atomically**, through the same temp
+  file and rename as every other secret. It wrote them in place, so a crash
+  mid-write could leave a truncated credential.
 
 ## [0.7.0] - 2026-11-14
 
@@ -741,7 +749,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/stone-age-io/agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/stone-age-io/agent/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/stone-age-io/agent/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/stone-age-io/agent/compare/v0.6.0...v0.6.1
