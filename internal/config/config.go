@@ -554,7 +554,6 @@ func validate(cfg *Config) error {
 		}
 	}
 
-
 	// Validate task intervals are sensible
 	if cfg.Tasks.Heartbeat.Enabled && cfg.Tasks.Heartbeat.Interval < 10*time.Second {
 		return fmt.Errorf("heartbeat interval must be at least 10 seconds (got: %v)", cfg.Tasks.Heartbeat.Interval)
