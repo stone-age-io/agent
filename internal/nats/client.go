@@ -13,14 +13,23 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stone-age-io/agent/internal/config"
 	"go.uber.org/zap"
 )
 
+// telemetryAckTimeout bounds how long an async telemetry publish waits for its
+// ack. Without it a publish whose ack never comes (the connection dropped while
+// it was in flight) stays pending forever and is never reported.
+const telemetryAckTimeout = 10 * time.Second
+
+// jetStreamCheckTimeout bounds the AccountInfo round trip in checkJetStream.
+const jetStreamCheckTimeout = 5 * time.Second
+
 // Client manages the NATS connection and provides methods for publishing and subscribing
 type Client struct {
 	conn   *nats.Conn
-	js     nats.JetStreamContext
+	js     jetstream.JetStream
 	logger *zap.Logger
 	config *config.NATSConfig
 
@@ -193,12 +202,21 @@ func NewClient(cfg *config.NATSConfig, name string, logger *zap.Logger) (*Client
 	}
 	c.conn = conn
 
-	// Creating the context performs no I/O, so it is safe before the connection
-	// is established.
-	js, err := conn.JetStream()
+	// Creating the JetStream handle performs no I/O, so it is safe before the
+	// connection is established.
+	//
+	// Ack failures arrive in one handler instead of in a goroutine per publish.
+	js, err := jetstream.New(conn,
+		jetstream.WithPublishAsyncTimeout(telemetryAckTimeout),
+		jetstream.WithPublishAsyncErrHandler(func(_ jetstream.JetStream, msg *nats.Msg, err error) {
+			logger.Warn("Failed to publish telemetry",
+				zap.String("subject", msg.Subject),
+				zap.Error(err))
+		}),
+	)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
+		return nil, fmt.Errorf("failed to create JetStream handle: %w", err)
 	}
 	c.js = js
 
@@ -218,15 +236,20 @@ func NewClient(cfg *config.NATSConfig, name string, logger *zap.Logger) (*Client
 // It runs in its own goroutine because nats.go dispatches these callbacks on a
 // single shared goroutine, and AccountInfo is a round trip: doing it inline would
 // stall every other callback for the length of that request.
+//
+// It makes its own handle from nc rather than using c.js, because the first
+// connect callback can run before NewClient has assigned c.js.
 func (c *Client) checkJetStream(nc *nats.Conn) {
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
 		c.jsAvailable.Store(false)
-		c.logger.Error("Failed to create JetStream context", zap.Error(err))
+		c.logger.Error("Failed to create JetStream handle", zap.Error(err))
 		return
 	}
 
-	if _, err := js.AccountInfo(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), jetStreamCheckTimeout)
+	defer cancel()
+	if _, err := js.AccountInfo(ctx); err != nil {
 		c.jsAvailable.Store(false)
 		c.logger.Error("JetStream not available on NATS server (is JetStream enabled for this account?)",
 			zap.Error(err),
@@ -351,68 +374,25 @@ func (c *Client) Publish(subject string, data []byte) error {
 	return nil
 }
 
-// PublishTelemetry publishes a message to JetStream asynchronously (fire-and-forget)
-// This is used for metrics, service status, and inventory
-// Uses PublishAsync for better performance and built-in retry handling
+// PublishTelemetry publishes a message to JetStream asynchronously
+// (fire-and-forget). It is used for metrics, service status and inventory.
+//
+// It returns as soon as the message is queued. A publish the server rejects, or
+// whose ack does not arrive within telemetryAckTimeout, is logged by the error
+// handler set in NewClient. nats.go retries a publish that gets no responders.
 func (c *Client) PublishTelemetry(subject string, data []byte) error {
-	// PublishAsync returns a PubAckFuture immediately (non-blocking)
-	// The actual publish happens in the background with automatic retries
-	pubAckFuture, err := c.js.PublishAsync(subject, data)
-	if err != nil {
-		// This only fails if we can't queue the message (very rare)
+	if _, err := c.js.PublishAsync(subject, data); err != nil {
+		// Queueing usually fails because too many publishes are in flight.
 		c.logger.Error("Failed to queue telemetry publish",
 			zap.String("subject", subject),
 			zap.Error(err))
 		return fmt.Errorf("failed to queue publish to %s: %w", subject, err)
 	}
 
-	// Handle the acknowledgment asynchronously
-	// This doesn't block the caller - it runs in a goroutine managed by NATS
-	go func() {
-		select {
-		case <-pubAckFuture.Ok():
-			// Message was acknowledged by JetStream
-			c.logger.Debug("Published telemetry",
-				zap.String("subject", subject),
-				zap.Int("bytes", len(data)))
-
-		case err := <-pubAckFuture.Err():
-			// Publication failed after retries
-			// Log but don't crash - telemetry is fire-and-forget
-			c.logger.Warn("Failed to publish telemetry after retries",
-				zap.String("subject", subject),
-				zap.Error(err))
-		}
-	}()
-
+	c.logger.Debug("Queued telemetry",
+		zap.String("subject", subject),
+		zap.Int("bytes", len(data)))
 	return nil
-}
-
-// PublishTelemetrySync is a synchronous version for cases where you need to know
-// if the publish succeeded (e.g., during shutdown or critical operations)
-func (c *Client) PublishTelemetrySync(subject string, data []byte, timeout time.Duration) error {
-	pubAckFuture, err := c.js.PublishAsync(subject, data)
-	if err != nil {
-		return fmt.Errorf("failed to queue publish to %s: %w", subject, err)
-	}
-
-	// Wait for acknowledgment with timeout
-	select {
-	case <-pubAckFuture.Ok():
-		c.logger.Debug("Published telemetry (sync)",
-			zap.String("subject", subject),
-			zap.Int("bytes", len(data)))
-		return nil
-
-	case err := <-pubAckFuture.Err():
-		c.logger.Error("Failed to publish telemetry (sync)",
-			zap.String("subject", subject),
-			zap.Error(err))
-		return fmt.Errorf("failed to publish to %s: %w", subject, err)
-
-	case <-time.After(timeout):
-		return fmt.Errorf("publish timeout after %v", timeout)
-	}
 }
 
 // Drain gracefully closes the connection by draining all subscriptions

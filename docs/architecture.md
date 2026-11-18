@@ -768,14 +768,21 @@ requested by its bare filename. See [Script Development](script-development.md).
 Process telemetry without agent changes:
 
 ```go
-// Custom consumer example
-js, _ := nc.JetStream()
-sub, _ := js.Subscribe("agents.*.telemetry.system", func(msg *nats.Msg) {
+// Custom consumer example. "TELEMETRY" is the stream that stores the
+// telemetry subjects in your account.
+js, _ := jetstream.New(nc)
+cons, _ := js.CreateOrUpdateConsumer(ctx, "TELEMETRY", jetstream.ConsumerConfig{
+    Durable:       "metrics-writer",
+    FilterSubject: "agents.*.telemetry.system",
+})
+cc, _ := cons.Consume(func(msg jetstream.Msg) {
     // Parse metrics
     // Store in database
     // Check thresholds
     // Send alerts
+    msg.Ack()
 })
+defer cc.Stop()
 ```
 
 ### 3. Rule Router Integration
