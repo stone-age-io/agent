@@ -146,7 +146,9 @@ func (s *Server) Start(ctx context.Context) {
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// ctx is already cancelled here; WithoutCancel keeps its values but not
+		// its cancellation, so Shutdown gets its full two seconds.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		_ = s.srv.Shutdown(shutdownCtx)
 	}()

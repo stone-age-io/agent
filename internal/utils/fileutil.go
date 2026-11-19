@@ -37,11 +37,11 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	defer os.Remove(tmpName) //nolint:errcheck // no-op once the rename succeeds
 
 	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close() //nolint:errcheck // chmod error is the one that matters
+		_ = tmp.Close() // the chmod error is the one that matters
 		return fmt.Errorf("failed to set mode on %s: %w", tmpName, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close() //nolint:errcheck // write error is the one that matters
+		_ = tmp.Close() // the write error is the one that matters
 		return fmt.Errorf("failed to write %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {

@@ -66,8 +66,8 @@ func newFakePlatform(t *testing.T) *fakePlatform {
 func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	switch {
-	case r.URL.Path == "/api/collections/things/auth-with-password":
+	switch r.URL.Path {
+	case "/api/collections/things/auth-with-password":
 		f.passwordAuths++
 
 		var body struct {
@@ -85,7 +85,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.writeAuth(w, r.URL.Query().Get("expand"))
 
-	case r.URL.Path == "/api/collections/things/auth-refresh":
+	case "/api/collections/things/auth-refresh":
 		f.refreshes++
 		f.lastRefreshExpand = r.URL.Query().Get("expand")
 
@@ -96,7 +96,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.writeAuth(w, r.URL.Query().Get("expand"))
 
-	case r.URL.Path == "/api/collections/nats_users/records/"+f.natsUserID:
+	case "/api/collections/nats_users/records/" + f.natsUserID:
 		if !f.authorized(w, r) {
 			return
 		}
@@ -113,7 +113,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"updated":    f.revision,
 		})
 
-	case r.URL.Path == rotatePath:
+	case rotatePath:
 		f.rotates++
 		if !f.authorized(w, r) {
 			return

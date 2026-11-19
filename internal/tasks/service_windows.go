@@ -49,7 +49,7 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 			return "", fmt.Errorf("failed to stop service: %w", err)
 		}
 		// Wait for service to stop (with timeout)
-		timeout := time.Now().Add(30 * time.Second)
+		timeout := time.Now().Add(serviceCommandTimeout)
 		for status.State != svc.Stopped {
 			if time.Now().After(timeout) {
 				return "", fmt.Errorf("timeout waiting for service to stop")
@@ -67,7 +67,7 @@ func (e *Executor) ControlService(name, action string, allowedServices []string)
 			return "", fmt.Errorf("failed to stop service for restart: %w", err)
 		}
 		// Wait for service to stop
-		timeout := time.Now().Add(30 * time.Second)
+		timeout := time.Now().Add(serviceCommandTimeout)
 		for status.State != svc.Stopped {
 			if time.Now().After(timeout) {
 				return "", fmt.Errorf("timeout waiting for service to stop during restart")

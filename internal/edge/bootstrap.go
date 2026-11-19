@@ -32,7 +32,9 @@ const LeafConfName = "nats-leaf.conf"
 // that rule; a crash mid-write left a truncated credential where a running
 // leaf or agent would re-read it on its next reconnect.
 func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile string) (confPath, credsPath string, err error) {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	// 0755 matches the conf's 0644: it holds only public trust material. The
+	// creds are the secret, and they are written 0600.
+	if err := os.MkdirAll(outputDir, 0o755); err != nil { //nolint:gosec // G301, see above
 		return "", "", err
 	}
 

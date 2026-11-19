@@ -59,8 +59,8 @@ func (tt *testTrust) accountJWT(t *testing.T, revoke ...string) string {
 	t.Helper()
 	ac := njwt.NewAccountClaims(tt.apub)
 	ac.Name = "acme"
-	ac.Limits.JetStreamLimits.DiskStorage = -1
-	ac.Limits.JetStreamLimits.MemoryStorage = -1
+	ac.Limits.DiskStorage = -1
+	ac.Limits.MemoryStorage = -1
 	for _, pub := range revoke {
 		ac.Revoke(pub)
 	}
