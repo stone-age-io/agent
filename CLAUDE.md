@@ -128,7 +128,7 @@ agent/
 ├── docs/                      # Install guides, credentials, Nebula (+ nebula-design.md and
 │                              # edge-sync-design.md, design records not guides)
 ├── makefile                   # Build automation (lowercase; `make` finds it)
-└── go.mod                     # Go 1.26+ required (Nebula sets the floor)
+└── go.mod                     # Go 1.27.3+ required (Nebula sets the floor)
 ```
 
 **`go.mod`'s `go` line is also the exact toolchain every release is built with.**
@@ -198,7 +198,10 @@ when it falls behind; that is the reminder.
    - Applying is a ladder of OUTCOMES, never a table of config keys: reload → (if the
      overlay does not come back) restart → (still not) roll back to the cached config.
      Nebula already classifies its own reloads internally, and a duplicate table here
-     would drift from it on every upgrade
+     would drift from it on every upgrade. Since Nebula 1.12 the reload reports that
+     classification (`config.ReloadResult`): a parse error, a callback that could not
+     apply its part, or a key that applies only on a restart each go straight to the
+     restart step, before verification
    - Verification waits for a lighthouse handshake only when the config names a
      lighthouse to reach. A lighthouse has no peer to hand shake with, and a false
      positive would cause the outage the rollback prevents
@@ -718,7 +721,7 @@ Key dependencies (from go.mod):
 - `go.uber.org/zap` - Structured logging
 - `github.com/shirou/gopsutil/v3` - Cross-platform system metrics (CPU, memory, disk)
 - `github.com/slackhq/nebula` - Embedded overlay host. Sets the module's Go floor
-  (v1.11 needs Go 1.26) and roughly half the binary size; pinned to the same
+  (v1.12 needs Go 1.27.3) and roughly half the binary size; pinned to the same
   version `pb-nebula` uses, so the library generating the configs and the one
   reading them cannot disagree
 - `github.com/prometheus/client_golang` - The `/metrics` exposition (`internal/metrics`), on a

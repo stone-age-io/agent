@@ -249,6 +249,15 @@ reloads `listen.read_buffer` and nothing else — and a device agent can never h
 it: `pb-nebula`'s `extractPort` returns `0` for any host that is neither a
 lighthouse nor a relay, so the port is always `0` and never changes.
 
+*Since Nebula 1.12:* the reload reports its own outcome, so the agent no longer
+has to infer one. `ReloadConfigString` returns a `config.ReloadResult` with `Err`
+(the config did not parse), `Failed` (a callback could not apply its part) and
+`RestartRequired` with `RestartKeys` (a changed key applies only on a restart).
+Any of the three sends the ladder to its restart step without waiting on
+verification. Before 1.12 only a parse failure was reported: a callback that
+refused its part logged it and left the old setting running, which only the
+verify step could catch.
+
 That is why the ladder above is stated in terms of *outcomes* rather than fields.
 Reload, and if the mesh does not come back, restart; if it still does not, roll
 back. No knowledge of Nebula's internals, nothing to keep in sync, and the same
@@ -455,7 +464,7 @@ the network.
 - **Binary size.** 19 MB before, **30.5 MB** after — better than the 35–40 MB this
   document first estimated. Nebula pulls in gvisor, `miekg/dns`, `gopacket`,
   `prometheus/client_golang` and `go-metrics`.
-- **Go version.** Nebula v1.11 requires Go 1.26, so the agent module does too.
+- **Go version.** Nebula v1.11 required Go 1.26 and v1.12 requires 1.27.3, so the agent module does too.
   Every Nebula release new enough to issue v2 certificates needs at least 1.25, so
   this was not avoidable by pinning an older one. CI and goreleaser read
   `go-version-file: go.mod` and follow automatically.

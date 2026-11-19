@@ -125,7 +125,7 @@ the first.
   uplink is down, and that is when it goes quiet
 
 **Technology:**
-- **Language**: Go 1.26+ (Nebula sets the floor)
+- **Language**: Go 1.27.3+ (Nebula sets the floor)
 - **Service Management**: kardianos/service (cross-platform)
 - **Messaging**: NATS Core + JetStream
 - **Metrics Collection**: gopsutil

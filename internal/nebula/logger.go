@@ -10,7 +10,7 @@ import (
 
 // zapHandler routes Nebula's log/slog output into the agent's zap logger.
 //
-// Nebula v1.11 logs through log/slog, and nebula.Main requires a *slog.Logger.
+// Since v1.11 Nebula logs through log/slog, and nebula.Main requires a *slog.Logger.
 // Handing it a handler of its own would put Nebula's output somewhere other than
 // the agent's log file, outside the rotation configured in internal/agent — so
 // everything Nebula says arrives as an ordinary agent log line instead, tagged

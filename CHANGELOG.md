@@ -20,6 +20,12 @@ that period, and this file starts where the versioned releases do.
 - **`golang.org/x/net` 0.63.0 and `golang.org/x/crypto` 0.59.0.** govulncheck
   found three known vulnerabilities in the old versions, none in code the
   agent calls. Scanners that check the binary report them anyway.
+- **Nebula 1.12.0, built with Go 1.27.4.** It includes Nebula 1.11.1's fix for
+  an IPv6 firewall bypass: an IPv6 packet carrying a protocol Nebula does not
+  parse (SCTP, GRE, IP-in-IP) could be read as TCP or UDP and match a TCP/UDP
+  rule. It also enforces the per-tunnel message counter limit, so a tunnel
+  rehandshakes before its nonce could wrap. Go 1.27.4 is the latest patch;
+  Nebula 1.12 needs at least 1.27.3.
 
 ### Changed
 
@@ -32,7 +38,28 @@ that period, and this file starts where the versioned releases do.
   several bugs in singleton rescheduling, the mode every scheduled task here
   runs in. `/metrics` output is unchanged. The binary now includes
   `pandatix/go-abnf`, which `prometheus/common` uses for its OpenMetrics
-  parser. Nebula stays at 1.11.0, the version `pb-nebula` is pinned to.
+  parser.
+- **Nebula 1.12.0** (from 1.11.0), the same version pb-nebula now uses. On an
+  agent with `nebula.enabled`, check these before upgrading:
+  - **A firewall rule's `group` must be a string.** A number like `1.10`, or a
+    `null` group with no `host`, other group or `cidr` beside it, is now
+    refused. A host given such a rule keeps running its last good config.
+    1.11 accepted both, and quietly turned `1.10` into the group `1.1`.
+  - **IPv6 traffic in protocols Nebula does not parse** (SCTP, GRE, IP-in-IP)
+    now needs a `proto: any` rule. It may have been passing only through the
+    bypass fixed above.
+  - **On Linux, Nebula refuses a `tun.dev` that already exists**, such as one
+    created ahead of time with `ip tuntap add`. Remove it and let Nebula create
+    it.
+  - **On Windows, an IPv6 overlay with `tun.mtu` below 1280 refuses to start**,
+    as it already did on the other platforms.
+
+  The agent now restarts Nebula straight after a reload that Nebula reports
+  as needing it: a config that did not parse, a part of the new config that
+  could not be applied, or a key that applies only on a restart. Before, only
+  a parse failure was reported, and anything else waited on the verify step.
+  The embedded agent opens none of Nebula 1.12's new local control sockets;
+  only the `nebula` command does.
 - **CI runs golangci-lint for Linux, Windows and FreeBSD**, pinned to v2.15.0.
   `make install-tools` installs the same version. It used to install the v1
   linter, which cannot read this repo's v2 config.

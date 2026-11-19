@@ -234,16 +234,33 @@ func (m *Manager) Stop() {
 //
 // So the ladder below is expressed in outcomes instead: reload, and if the
 // overlay does not come back, restart; the caller rolls back if that fails too.
-// The one field that genuinely cannot hot-reload is listen.port, and a device
-// agent never hits it — pb-nebula issues port 0 to any host that is neither a
-// lighthouse nor a relay.
+//
+// Since Nebula 1.12 the reload reports its own outcome, and every bad one means
+// restart: the config did not parse (Err), a callback could not apply its part
+// (Failed), or a changed key only takes effect on a restart (RestartRequired,
+// naming RestartKeys). Before 1.12 only a parse failure was reported; a callback
+// that refused its part logged and left the old setting running.
+// RestartRequired sticks to a config.C until the process restarts, and a
+// restart here builds a new one, so it cannot force a restart on every later
+// reload.
 func (m *Manager) applyLocked(yaml, revision string) error {
 	if m.control == nil {
 		return m.startLocked(yaml, revision)
 	}
 
-	if err := m.nebCfg.ReloadConfigString(yaml); err != nil {
-		m.logger.Warn("Nebula config reload failed, restarting instead", zap.Error(err))
+	res := m.nebCfg.ReloadConfigString(yaml)
+	switch {
+	case res.Err != nil:
+		m.logger.Warn("Nebula config reload failed, restarting instead", zap.Error(res.Err))
+		m.stopLocked()
+		return m.startLocked(yaml, revision)
+	case res.Failed:
+		m.logger.Warn("Nebula could not apply part of the new config, restarting instead")
+		m.stopLocked()
+		return m.startLocked(yaml, revision)
+	case res.RestartRequired:
+		m.logger.Info("The new Nebula config changes keys that apply only on a restart, restarting",
+			zap.Strings("keys", res.RestartKeys))
 		m.stopLocked()
 		return m.startLocked(yaml, revision)
 	}
