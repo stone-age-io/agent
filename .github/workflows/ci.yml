@@ -74,6 +74,17 @@ jobs:
           echo "==> linux/arm64"
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/agent
 
+      # `make lint` existed but nothing ran it, so findings piled up unseen.
+      # Per GOOS for the same reason as vet. Pinned, unlike govulncheck: a new
+      # linter release adds checks, and that should not fail an unrelated PR.
+      - name: Lint every supported OS
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          for goos in linux windows freebsd; do
+            echo "==> $goos"
+            GOOS=$goos golangci-lint run ./...
+          done
+
       # darwin is not a release target. It is here because the *_stub.go files
       # (the `!windows && !linux && !freebsd` build) compile nowhere else, and
       # they had drifted: GetOSInfo and isServiceAllowed were missing, so the

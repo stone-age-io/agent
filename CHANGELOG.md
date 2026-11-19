@@ -10,6 +10,33 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Security
+
+- **nats.go 1.56.0.** A security release for how the client picks servers
+  and decides to use TLS. Credentials embedded in a server's `connect_urls`
+  entry are no longer used for that server, and over TLS the client no longer
+  adds servers it learned before the handshake. The agent turns TLS on only
+  through `tls.enabled`, which its breaking changes do not affect.
+- **`golang.org/x/net` 0.63.0 and `golang.org/x/crypto` 0.59.0.** govulncheck
+  found three known vulnerabilities in the old versions, none in code the
+  agent calls. Scanners that check the binary report them anyway.
+
+### Changed
+
+- **Telemetry uses the same JetStream API as KV sync.** A publish whose ack
+  does not arrive within 10 seconds is logged as failed. It used to wait
+  forever, one goroutine per publish. Failed publishes are now logged from
+  one place, as `Failed to publish telemetry`.
+- **Dependency updates:** gocron 2.23.2, zap 1.28.0, `prometheus/client_golang`
+  1.25.0 and `prometheus/common` 0.74.0. gocron's releases since 2.18 fix
+  several bugs in singleton rescheduling, the mode every scheduled task here
+  runs in. `/metrics` output is unchanged. The binary now includes
+  `pandatix/go-abnf`, which `prometheus/common` uses for its OpenMetrics
+  parser. Nebula stays at 1.11.0, the version `pb-nebula` is pinned to.
+- **CI runs golangci-lint for Linux, Windows and FreeBSD**, pinned to v2.15.0.
+  `make install-tools` installs the same version. It used to install the v1
+  linter, which cannot read this repo's v2 config.
+
 ## [0.8.0] - 2026-11-16
 
 Two defaults changed, which is why this is a minor release. Check both before

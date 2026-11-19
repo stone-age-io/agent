@@ -110,8 +110,8 @@ func TestBuildLeafConfIsAcceptedByNATSServer(t *testing.T) {
 	apub, _ := akp.PublicKey()
 	ac := njwt.NewAccountClaims(apub)
 	ac.Name = "acme"
-	ac.Limits.JetStreamLimits.DiskStorage = -1
-	ac.Limits.JetStreamLimits.MemoryStorage = -1
+	ac.Limits.DiskStorage = -1
+	ac.Limits.MemoryStorage = -1
 	accJWT, err := ac.Encode(okp)
 	if err != nil {
 		t.Fatalf("encode account: %v", err)

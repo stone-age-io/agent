@@ -27,9 +27,10 @@ linters:
       # NATS msg.Respond is fire-and-forget
       - linters: [errcheck, gosec]
         source: "msg\\.Respond"
-      # defer .Close() is idiomatic Go — errors on close of read-only resources are not actionable
+      # defer .Close() is idiomatic Go — errors on close of read-only resources are not actionable.
+      # Disconnect is the same for the Windows service manager handle.
       - linters: [errcheck]
-        source: "defer .+\\.Close\\(\\)"
+        source: "defer .+\\.(Close|Disconnect)\\(\\)"
       # zap logger.Sync() can fail on stderr/stdout and is called during shutdown
       - linters: [errcheck, gosec]
         source: "\\.Sync\\(\\)"
@@ -47,6 +48,10 @@ linters:
       - linters: [gosec]
         path: internal/tasks/inventory_linux.go
         text: "G115"
+      # G103 unsafe: Windows inventory passes struct sizes and pointers to kernel32 calls
+      - linters: [gosec]
+        path: internal/tasks/inventory_windows.go
+        text: "G103"
       # G704 SSRF: the platform URL comes from user config, not untrusted input
       - linters: [gosec]
         path: internal/platform/

@@ -7,7 +7,7 @@ import (
 
 // serviceCommandTimeout bounds external service-control commands (systemctl,
 // rc.d) so a hung service manager cannot block the NATS command handler
-// indefinitely. Matches the 30s wait used by the Windows SCM implementation.
+// indefinitely. The Windows SCM implementation uses it as its stop wait.
 const serviceCommandTimeout = 30 * time.Second
 
 // checkServiceRequest is the cmd.service gate: the service must be allowlisted
