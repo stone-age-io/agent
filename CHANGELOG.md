@@ -10,6 +10,14 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+Nebula 1.12, which is why this is a minor release: it refuses some configs
+1.11 accepted. On an agent with `nebula.enabled`, read the Nebula entry under
+Changed before upgrading. Builds now use Go 1.27.4. nats.go, `golang.org/x/net`
+and `golang.org/x/crypto` carry security fixes. CI runs golangci-lint. Nothing
+to change in the agent's own config.
+
 ### Security
 
 - **nats.go 1.56.0.** A security release for how the client picks servers
@@ -803,7 +811,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/stone-age-io/agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/stone-age-io/agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/stone-age-io/agent/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/stone-age-io/agent/compare/v0.6.1...v0.6.2
