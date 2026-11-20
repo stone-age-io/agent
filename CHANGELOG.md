@@ -10,9 +10,11 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-20
+
 Device-held keys: a Thing whose NATS identity or Nebula host was made with
 "Key held by device" on the platform keeps its own private keys. Needs
-pb-nats v0.5.0, pb-nebula v0.8.0 and a platform with `POST /api/me/keys`.
+platform v0.21.0 (pb-nats v0.5.0, pb-nebula v0.8.0).
 Nothing to change in the agent's config.
 
 ### Added
@@ -866,7 +868,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/stone-age-io/agent/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/stone-age-io/agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/stone-age-io/agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/stone-age-io/agent/compare/v0.7.0...v0.8.0
