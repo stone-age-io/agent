@@ -39,6 +39,11 @@ type LeafConfig struct {
 
 	Creds string `json:"creds"`
 
+	// JWT is the user JWT inside Creds. For a device-held key the platform
+	// serves it with an empty Creds, and LeafConfig builds Creds from it and the
+	// local seed (devicekeys.go).
+	JWT string `json:"jwt"`
+
 	AccountJWT string `json:"account_jwt"`
 	AccountPub string `json:"account_pub"`
 
@@ -80,15 +85,29 @@ func (c *Client) LeafConfig() (*LeafConfig, error) {
 		return nil, err
 	}
 
-	req, err := c.newRequest(http.MethodGet, c.url(leafConfigPath, "", ""), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req, token)
+	cfg, err := c.fetchLeafConfig(token)
 
-	var cfg LeafConfig
-	if err := c.do(req, &cfg); err != nil {
+	// 409: this Thing's NATS key is held by the device and has not been
+	// enrolled (first boot, or an operator revoked the last one). Enroll one
+	// now and ask again, so `agent -leaf-config` works on a box that has never
+	// run the credential sync.
+	var he *httpError
+	if errors.As(err, &he) && he.status == http.StatusConflict {
+		if err := c.enrollNATSKey(token); err != nil {
+			return nil, err
+		}
+		cfg, err = c.fetchLeafConfig(token)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("failed to read leaf config: %w", err)
+	}
+
+	// A device-held key: the platform served the JWT and no creds, because
+	// the seed never left this device.
+	if cfg.Creds == "" && cfg.JWT != "" {
+		if cfg.Creds, err = c.credsFromJWT(cfg.JWT); err != nil {
+			return nil, err
+		}
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -98,6 +117,21 @@ func (c *Client) LeafConfig() (*LeafConfig, error) {
 	prev.HubDomain = cfg.HubDomain
 	c.saveSession(prev)
 
+	return cfg, nil
+}
+
+// fetchLeafConfig makes the leaf-config request. The caller holds c.mu.
+func (c *Client) fetchLeafConfig(token string) (*LeafConfig, error) {
+	req, err := c.newRequest(http.MethodGet, c.url(leafConfigPath, "", ""), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req, token)
+
+	var cfg LeafConfig
+	if err := c.do(req, &cfg); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

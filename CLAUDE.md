@@ -83,6 +83,7 @@ agent/
 │   ├── platform/              # stone-age.io platform credential lifecycle
 │   │   ├── platform.go        # EnsureCredentials, Sync, Rotate
 │   │   ├── nebula.go          # NebulaSource: this thing's nebula_host config
+│   │   ├── devicekeys.go      # Device-held keys: generate, enroll, build .creds, pki.key
 │   │   ├── leafconfig.go      # LeafConfig + its AccountJWT probe (/api/me/...)
 │   │   └── session.go         # Session file (token, revisions, hub domain)
 │   ├── edge/                  # Leaf-node duties, on a box that runs one
@@ -191,6 +192,19 @@ when it falls behind; that is the reminder.
      lock and delegate to a `...Locked` variant — Go mutexes are not reentrant, and
      `EnsureCredentials` calls `syncLocked`
    - Never logs response bodies — one of them is a private key
+   - **Device-held keys** (`devicekeys.go`): a nats_user or nebula_host made with
+     `device_key` has no creds_file and no private key on the platform. One rule: **if the
+     platform has no key for me, make a new one** (write it 0600, then
+     `POST /api/me/keys`); never send again a key the platform dropped; a key that is not
+     mine is `ErrForeignKey` and the agent stops. `credsFor` is the one place that turns
+     a nats_user record into .creds content, for both key kinds, and `EnsureCredentials`,
+     `Sync` and `Rotate` all go through it. The NATS seed is the creds path with a `.nk`
+     extension; the Nebula key is `nebula-host.key` beside `nebula.cache_file`, and
+     `deviceNebulaConfig` rewrites `pki.key` to it. `LeafConfig` builds the leaf's .creds
+     from the served `jwt` and the same seed, and enrolls on a 409
+   - **Every session writer is a read-modify-write.** `EnsureCredentials` and `syncLocked`
+     used to save a fresh `session{Token, CredsRevision}`, dropping the Nebula revision and
+     the hub domain on every credential sync (`TestCredentialSyncKeepsTheRestOfTheSession`)
 
 4. **Nebula** (`internal/nebula/`): embedded overlay host, opt-in via `nebula.enabled`
    - Free of HTTP on purpose. Fetching is a `Source`; the platform one lives in

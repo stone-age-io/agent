@@ -209,6 +209,31 @@ No manual step is needed on the device itself. The sync path never touches NATS,
 
 ---
 
+## Device-Held Keys
+
+A Thing created on the platform with **Key held by device** keeps its own private keys. The platform holds only the public halves, so a stolen platform database holds no working credential for the device. Nothing changes in the agent's config.
+
+| | NATS | Nebula |
+|---|---|---|
+| Private key on disk | the creds path with a `.nk` extension, e.g. `/etc/agent/device.nk` | `nebula-host.key` beside `nebula.cache_file` |
+| Made with | an nkey user pair (`nk -gen user`) | an X25519 pair (`nebula-cert keygen`) |
+| What the platform returns | a JWT signed for the enrolled key; the agent builds the `.creds` | a config whose `pki.key` the agent points at its key file |
+
+One rule decides what the agent does at every sync:
+
+| The platform's public key | The agent |
+|---|---|
+| empty | generates a pair, writes it (0600), then enrolls it with `POST /api/me/keys` |
+| the same as mine | runs |
+| something else | stops, with an error saying an owner or admin enrolled a different key |
+
+- **First boot** enrolls before the first `.creds` is written, so the startup sync is the only step.
+- **Revoke on the platform** empties the key. On its next sync the agent makes and enrolls a **new** one; it never re-sends the revoked key, which the platform refuses anyway. If the device itself is compromised, reset the Thing's password on the platform too: whoever can sign in as the Thing enrolls the next key.
+- **Lost the key file?** The platform still has a key this device cannot use. Revoke it on the platform (NATS), or deactivate the host and attach a new one (Nebula, which has no key reset).
+- **Back up nothing.** A device-held key is replaced, not restored: revoke and let the device enroll.
+
+---
+
 ## Troubleshooting
 
 ### "environment variable AGENT_PLATFORM_PASSWORD is not set or empty"

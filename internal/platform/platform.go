@@ -37,6 +37,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,9 +74,12 @@ type Client struct {
 	code      string
 	location  string
 	credsPath string
-	auth      config.PlatformConfig
-	http      *http.Client
-	logger    *zap.Logger
+	// nebulaKeyPath is where a device-held Nebula private key lives, beside
+	// nebula.cache_file (devicekeys.go). Empty when no cache file is set.
+	nebulaKeyPath string
+	auth          config.PlatformConfig
+	http          *http.Client
+	logger        *zap.Logger
 
 	// lastSync is when the platform conversation last succeeded, for the
 	// readiness check. Its own atomic rather than a field under mu: a readiness
@@ -109,7 +113,7 @@ func (c *Client) markSynced() {
 // config.validate() so a misconfigured agent fails at load rather than on the
 // first request.
 func NewClient(cfg *config.Config, logger *zap.Logger) *Client {
-	return &Client{
+	c := &Client{
 		code:      cfg.Code,
 		location:  cfg.Location,
 		credsPath: cfg.NATS.Auth.CredsFile,
@@ -117,6 +121,10 @@ func NewClient(cfg *config.Config, logger *zap.Logger) *Client {
 		http:      &http.Client{Timeout: httpTimeout},
 		logger:    logger,
 	}
+	if cfg.Nebula.CacheFile != "" {
+		c.nebulaKeyPath = filepath.Join(filepath.Dir(cfg.Nebula.CacheFile), "nebula-host.key")
+	}
+	return c
 }
 
 // thingRecord is the authenticated thing, narrowed to the fields the agent uses.
@@ -139,9 +147,16 @@ type thingRecord struct {
 
 // natsUserRecord is the NATS identity. Updated is the drift signal; CredsFile is
 // the credential itself and is only ever requested once Updated says it moved.
+//
+// For a device-held key (DeviceKey) CredsFile is always empty: the platform has
+// only PublicKey and signs JWT for it, and credsFor builds the .creds from JWT
+// and the local seed.
 type natsUserRecord struct {
 	CredsFile string `json:"creds_file"`
 	Updated   string `json:"updated"`
+	DeviceKey bool   `json:"device_key"`
+	PublicKey string `json:"public_key"`
+	JWT       string `json:"jwt"`
 }
 
 type authResponse struct {
@@ -194,9 +209,13 @@ func (c *Client) EnsureCredentials() error {
 			zap.String("platform_location", platformLoc))
 	}
 
-	creds := record.Expand.NATSUser.CredsFile
-	if creds == "" {
+	if record.NATSUserID == "" {
 		return errors.New("bootstrap: thing record has no NATS credentials (is a nats_user assigned to this thing, and does it have creds generated?)")
+	}
+	// A device-held key is enrolled here on first boot (devicekeys.go).
+	user, creds, err := c.credsFor(token, record.NATSUserID, &record.Expand.NATSUser)
+	if err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
 	}
 
 	if _, err := c.writeCreds(creds); err != nil {
@@ -205,8 +224,12 @@ func (c *Client) EnsureCredentials() error {
 	c.logger.Info("Credentials file written", zap.String("path", c.credsPath))
 
 	// Record the revision just taken so the first Sync has something to compare
-	// against and doesn't re-fetch a key it already holds.
-	c.saveSession(session{Token: token, CredsRevision: record.Expand.NATSUser.Updated})
+	// against and doesn't re-fetch a key it already holds. Read-modify-write,
+	// like every other session writer, so the Nebula revision and hub domain
+	// survive.
+	s := c.loadSession()
+	s.Token, s.CredsRevision = token, user.Updated
+	c.saveSession(s)
 
 	return nil
 }
@@ -248,21 +271,29 @@ func (c *Client) syncLocked() (bool, error) {
 	// check matters — without it a deleted .creds would never be restored,
 	// because its revision on the platform has not moved.
 	if revision != "" && revision == prev.CredsRevision && c.credsFileExists() {
-		c.saveSession(session{Token: token, CredsRevision: revision})
+		prev.Token, prev.CredsRevision = token, revision
+		c.saveSession(prev)
 		c.markSynced()
 		return false, nil
 	}
 
-	user, err := c.fetchCreds(token, record.NATSUserID)
+	user, err := c.fetchUser(token, record.NATSUserID)
+	if err != nil {
+		return false, err
+	}
+	// For a device-held key this enrolls a new one if an operator revoked the
+	// last (the platform emptied public_key, which moved the revision).
+	user, creds, err := c.credsFor(token, record.NATSUserID, user)
 	if err != nil {
 		return false, err
 	}
 
-	changed, err := c.writeCreds(user.CredsFile)
+	changed, err := c.writeCreds(creds)
 	if err != nil {
 		return false, err
 	}
-	c.saveSession(session{Token: token, CredsRevision: user.Updated})
+	prev.Token, prev.CredsRevision = token, user.Updated
+	c.saveSession(prev)
 	c.markSynced()
 
 	return changed, nil
@@ -300,16 +331,22 @@ func (c *Client) Rotate() (bool, error) {
 	// (pb-nats internal/sync/manager.go). The new credential is therefore
 	// already durable by the time the route answered — this read needs no
 	// polling, and adding a retry loop here would only hide a real failure.
-	user, err := c.fetchCreds(token, natsUserID)
+	user, err := c.fetchUser(token, natsUserID)
+	if err != nil {
+		return false, err
+	}
+	// A device-held key keeps its key: regenerate re-signed a JWT for it.
+	user, creds, err := c.credsFor(token, natsUserID, user)
 	if err != nil {
 		return false, err
 	}
 
-	changed, err := c.writeCreds(user.CredsFile)
+	changed, err := c.writeCreds(creds)
 	if err != nil {
 		return false, err
 	}
-	c.saveSession(session{Token: token, CredsRevision: user.Updated})
+	prev.Token, prev.CredsRevision = token, user.Updated
+	c.saveSession(prev)
 	c.markSynced()
 
 	return changed, nil
@@ -428,8 +465,9 @@ func (c *Client) probeCredsRevision(token, natsUserID string) (string, error) {
 	return user.Updated, nil
 }
 
-// fetchCreds reads the full NATS identity, including the credential.
-func (c *Client) fetchCreds(token, natsUserID string) (*natsUserRecord, error) {
+// fetchUser reads the full NATS identity, including the credential. Whether
+// the credential is usable is credsFor's question: a device-held key has none.
+func (c *Client) fetchUser(token, natsUserID string) (*natsUserRecord, error) {
 	req, err := c.newRequest(http.MethodGet,
 		c.url("/api/collections/"+natsUsersCollection+"/records/"+natsUserID, "", ""), nil)
 	if err != nil {
@@ -440,9 +478,6 @@ func (c *Client) fetchCreds(token, natsUserID string) (*natsUserRecord, error) {
 	var user natsUserRecord
 	if err := c.do(req, &user); err != nil {
 		return nil, fmt.Errorf("failed to read credential: %w", err)
-	}
-	if user.CredsFile == "" {
-		return nil, errors.New("NATS identity has no credentials (does it have creds generated on the platform?)")
 	}
 
 	return &user, nil

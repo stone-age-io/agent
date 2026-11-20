@@ -18,9 +18,15 @@ const nebulaHostsCollection = "nebula_hosts"
 // nebulaHostRecord is this agent's Nebula identity. Updated is the drift signal;
 // ConfigYAML is the config itself, which embeds the host's private key and is
 // therefore only ever requested once Updated says it moved.
+//
+// For a device-held key (DeviceKey) the config embeds no key: pki.key is a path,
+// which deviceNebulaConfig points at the local key, and PublicKey is what the
+// platform signed.
 type nebulaHostRecord struct {
 	ConfigYAML string `json:"config_yaml"`
 	Updated    string `json:"updated"`
+	DeviceKey  bool   `json:"device_key"`
+	PublicKey  string `json:"public_key"`
 }
 
 // NebulaSource reads this agent's Nebula config from the platform.
@@ -84,9 +90,19 @@ func (s *NebulaSource) Fetch(knownRevision string) (nebula.Fetched, error) {
 		}
 	}
 
-	host, err := c.fetchNebulaConfig(token, record.NebulaHostID)
+	host, err := c.fetchNebulaHost(token, record.NebulaHostID)
 	if err != nil {
 		return nebula.Fetched{}, err
+	}
+	// A device-held key: enroll one if the platform has none, and point
+	// pki.key at the local key file (devicekeys.go).
+	if host.DeviceKey {
+		if host, err = c.deviceNebulaConfig(token, record.NebulaHostID, host); err != nil {
+			return nebula.Fetched{}, err
+		}
+	}
+	if host.ConfigYAML == "" {
+		return nebula.Fetched{}, errors.New("nebula host has no config (is the host active and its network configured on the platform?)")
 	}
 
 	// The session is only updated once the config is in hand. Recording a revision
@@ -124,8 +140,10 @@ func (c *Client) probeNebulaRevision(token, nebulaHostID string) (string, error)
 	return host.Updated, nil
 }
 
-// fetchNebulaConfig reads the full Nebula host record, including the config.
-func (c *Client) fetchNebulaConfig(token, nebulaHostID string) (*nebulaHostRecord, error) {
+// fetchNebulaHost reads the full Nebula host record, including the config.
+// An empty config is Fetch's to refuse: a device-held key has none until it is
+// enrolled.
+func (c *Client) fetchNebulaHost(token, nebulaHostID string) (*nebulaHostRecord, error) {
 	req, err := c.newRequest(http.MethodGet,
 		c.url("/api/collections/"+nebulaHostsCollection+"/records/"+nebulaHostID, "", ""), nil)
 	if err != nil {
@@ -136,9 +154,6 @@ func (c *Client) fetchNebulaConfig(token, nebulaHostID string) (*nebulaHostRecor
 	var host nebulaHostRecord
 	if err := c.do(req, &host); err != nil {
 		return nil, fmt.Errorf("failed to read nebula config: %w", err)
-	}
-	if host.ConfigYAML == "" {
-		return nil, errors.New("nebula host has no config (is the host active and its network configured on the platform?)")
 	}
 
 	return &host, nil

@@ -10,6 +10,34 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+Device-held keys: a Thing whose NATS identity or Nebula host was made with
+"Key held by device" on the platform keeps its own private keys. Needs
+pb-nats v0.5.0, pb-nebula v0.8.0 and a platform with `POST /api/me/keys`.
+Nothing to change in the agent's config.
+
+### Added
+
+- **Device-held NATS keys.** When the platform has no key for this Thing the
+  agent generates an nkey pair, writes the seed beside `nats.auth.creds_file`
+  (same name, `.nk` extension, 0600), enrolls the public key, and builds the
+  `.creds` from the JWT the platform signs. The seed never leaves the box.
+  After an operator revokes the key the agent enrolls a new one on its next
+  sync; it never re-sends a revoked key. A key on the platform that is not
+  this device's stops the sync with an error naming the fix.
+- **Device-held Nebula keys.** The same for the Nebula host: an X25519 pair
+  as `nebula-cert keygen` makes it, kept as `nebula-host.key` beside
+  `nebula.cache_file`, with `pki.key` in the fetched config pointed at it.
+- **`agent -leaf-config` on a device-held key** builds the leaf's `.creds`
+  from the served `jwt` and the local seed, enrolling the key first if the
+  platform answers 409.
+
+### Fixed
+
+- **The credential sync no longer drops the rest of the session file.** It
+  saved only the token and its own revision, so every credential sync erased
+  the Nebula revision (the next Nebula sync then re-read its config, private
+  key included) and the cached hub domain.
+
 ## [0.10.0] - 2026-11-20
 
 MQTT at a site's leaf, off by default: set `platform.leaf_mqtt` and restart
