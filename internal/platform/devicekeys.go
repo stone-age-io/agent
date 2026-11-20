@@ -192,7 +192,7 @@ func (c *Client) deviceNebulaConfig(token, nebulaHostID string, host *nebulaHost
 		return nil, fmt.Errorf("the platform's Nebula public key does not parse: %w", err)
 	}
 	if !bytes.Equal(mine, theirs) {
-		return nil, fmt.Errorf("Nebula: %w", ErrForeignKey)
+		return nil, fmt.Errorf("nebula: %w", ErrForeignKey)
 	}
 
 	if host.ConfigYAML == "" {
