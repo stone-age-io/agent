@@ -10,6 +10,12 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-20
+
+MQTT at a site's leaf, off by default: set `platform.leaf_mqtt` and restart
+the leaf. Also fixes a hang when a stop arrived as the agent started. Nothing
+to change in the agent's own config unless you want MQTT at a site.
+
 ### Added
 
 - **MQTT at a site's leaf: `platform.leaf_mqtt`.** Set it to a `host:port`
@@ -832,7 +838,8 @@ Summarising the state at first tag rather than the path to it:
 - Releases are cut by goreleaser from a pushed `v*` tag. The makefile remains for
   local and development builds.
 
-[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/stone-age-io/agent/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/stone-age-io/agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/stone-age-io/agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/stone-age-io/agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/stone-age-io/agent/compare/v0.6.2...v0.7.0
