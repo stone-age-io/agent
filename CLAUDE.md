@@ -610,6 +610,8 @@ platform:                        # The platform relationship. TOP-LEVEL: three
   sync_interval: "24h"           # 1h-72h; credential refresh. Was tasks.creds_sync.interval
   leaf_refresh_interval: "5m"    # 0 or 30s-1h; a gateway's leaf preload refresh.
                                  # THIS IS THE SITE'S REVOCATION LATENCY
+  leaf_mqtt: ""                  # host:port for MQTT at a gateway's leaf; empty = none.
+                                 # Both leafConf callers pass it. Not reloadable: restart the leaf
   session_file: "/path/to/platform-session.json"  # default: beside nats.auth.creds_file
   allow_insecure_url: false      # http:// platform URL, development only
 nats:

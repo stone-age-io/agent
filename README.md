@@ -223,6 +223,8 @@ location: "hq"            # Optional deployment location, carried in telemetry p
 #   sync_interval: "24h"                       # credential refresh, 1h-72h
 #   leaf_refresh_interval: "5m"                # gateways: keep the leaf's account JWT, and so
 #                                              # its revocations, current. 0 = off, else 30s-1h
+#   leaf_mqtt: "0.0.0.0:1883"                  # gateways: MQTT for site devices at the leaf.
+#                                              # Empty = off. Restart the leaf after changing it
 
 # NATS Connection
 nats:

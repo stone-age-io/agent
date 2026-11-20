@@ -46,7 +46,7 @@ func writeLeafConfig(configPath string) error {
 	}
 
 	outputDir := filepath.Dir(cfg.NATS.Auth.CredsFile)
-	confPath, credsPath, err := edge.WriteLeafConfig(lc, outputDir, cfg.NATS.Auth.CredsFile)
+	confPath, credsPath, err := edge.WriteLeafConfig(lc, outputDir, cfg.NATS.Auth.CredsFile, cfg.Platform.LeafMQTT)
 	if err != nil {
 		return err
 	}

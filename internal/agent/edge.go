@@ -144,7 +144,7 @@ func leafRefresher(cfg *config.Config, client *platform.Client, edgeNode *edge.E
 			"The leaf_preload check reports when it is behind.")
 	}
 
-	return edge.NewLeafRefresher(credsFile, client, reload, logger)
+	return edge.NewLeafRefresher(credsFile, cfg.Platform.LeafMQTT, client, reload, logger)
 }
 
 func syncBuckets(in []config.SyncBucket) []edge.Bucket {

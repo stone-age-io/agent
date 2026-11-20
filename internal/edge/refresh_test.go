@@ -120,6 +120,36 @@ func readFile(t *testing.T, path string) string {
 // says; after that an unchanged probe reads nothing more, and a re-signed
 // account reads it exactly once, writes the conf once and reloads once. The
 // reload is counted through the injected function, which is the only seam.
+// platform.leaf_mqtt reaches the file through two callers, the one-shot and the
+// refresh. If they disagreed, the refresh would rewrite the conf on every pass
+// (or drop MQTT from it), so a conf written with MQTT must be left alone by a
+// refresher given the same key.
+func TestLeafRefreshKeepsTheMQTTBlock(t *testing.T) {
+	_, client, credsFile := newFakeLeafPlatform(t)
+	lc, err := client.LeafConfig()
+	if err != nil {
+		t.Fatalf("LeafConfig: %v", err)
+	}
+	confPath, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile, "0.0.0.0:1883")
+	if err != nil {
+		t.Fatalf("WriteLeafConfig: %v", err)
+	}
+	original := readFile(t, confPath)
+	if !strings.Contains(original, `listen: "0.0.0.0:1883"`) {
+		t.Fatalf("-leaf-config wrote no mqtt block\n---\n%s", original)
+	}
+
+	reloads := 0
+	r := NewLeafRefresher(credsFile, "0.0.0.0:1883", client, func() error { reloads++; return nil }, zap.NewNop())
+	changed, reloaded, err := r.Refresh()
+	if err != nil || changed || reloaded || reloads != 0 {
+		t.Fatalf("refresh = (%v, %v, %v), %d reloads; want no change: both callers must build the same bytes", changed, reloaded, err, reloads)
+	}
+	if readFile(t, confPath) != original {
+		t.Fatal("the refresh rewrote a conf the one-shot had just written")
+	}
+}
+
 func TestLeafRefreshWritesAndReloadsOnlyOnChange(t *testing.T) {
 	fake, client, credsFile := newFakeLeafPlatform(t)
 
@@ -128,14 +158,14 @@ func TestLeafRefreshWritesAndReloadsOnlyOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LeafConfig: %v", err)
 	}
-	confPath, credsPath, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile)
+	confPath, credsPath, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile, "")
 	if err != nil {
 		t.Fatalf("WriteLeafConfig: %v", err)
 	}
 	original := readFile(t, confPath)
 
 	reloads := 0
-	r := NewLeafRefresher(credsFile, client, func() error { reloads++; return nil }, zap.NewNop())
+	r := NewLeafRefresher(credsFile, "", client, func() error { reloads++; return nil }, zap.NewNop())
 	if r.ConfPath() != confPath {
 		t.Fatalf("refresher watches %s, -leaf-config wrote %s", r.ConfPath(), confPath)
 	}
@@ -202,13 +232,13 @@ func TestLeafRefreshFallsBackWithoutTheProbeRoute(t *testing.T) {
 	fake, client, credsFile := newFakeLeafPlatform(t)
 	fake.noProbe = true
 	lc, _ := client.LeafConfig()
-	if _, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile); err != nil {
+	if _, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile, ""); err != nil {
 		t.Fatal(err)
 	}
 
 	core, logs := observer.New(zap.WarnLevel)
 	reloads := 0
-	r := NewLeafRefresher(credsFile, client, func() error { reloads++; return nil }, zap.New(core))
+	r := NewLeafRefresher(credsFile, "", client, func() error { reloads++; return nil }, zap.New(core))
 
 	for i := 0; i < 2; i++ {
 		if changed, _, err := r.Refresh(); err != nil || changed {
@@ -231,7 +261,7 @@ func TestLeafRefreshFallsBackWithoutTheProbeRoute(t *testing.T) {
 // Any other probe failure is a failed refresh like any other: no full read.
 func TestLeafRefreshStopsOnAProbeError(t *testing.T) {
 	fake, client, credsFile := newFakeLeafPlatform(t)
-	r := NewLeafRefresher(credsFile, client, func() error { return nil }, zap.NewNop())
+	r := NewLeafRefresher(credsFile, "", client, func() error { return nil }, zap.NewNop())
 	fake.set(func(lc *platform.LeafConfig) { lc.AccountJWT = "" }) // an incomplete probe answer
 
 	if _, _, err := r.Refresh(); err == nil || !strings.Contains(err.Error(), "account_jwt") {
@@ -247,7 +277,7 @@ func TestLeafRefreshStopsOnAProbeError(t *testing.T) {
 func TestLeafRefreshRefusesAnOperatorChange(t *testing.T) {
 	fake, client, credsFile := newFakeLeafPlatform(t)
 	lc, _ := client.LeafConfig()
-	confPath, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile)
+	confPath, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +293,7 @@ func TestLeafRefreshRefusesAnOperatorChange(t *testing.T) {
 			fake.set(func(lc *platform.LeafConfig) { lc.AccountJWT = "ACCJWT-2" })
 
 			reloads := 0
-			r := NewLeafRefresher(credsFile, client, func() error { reloads++; return nil }, zap.NewNop())
+			r := NewLeafRefresher(credsFile, "", client, func() error { reloads++; return nil }, zap.NewNop())
 			changed, reloaded, err := r.Refresh()
 			if err == nil || !strings.Contains(err.Error(), "agent -leaf-config") {
 				t.Errorf("err = %v, want it to say to re-run agent -leaf-config", err)
@@ -283,12 +313,12 @@ func TestLeafRefreshRefusesAnOperatorChange(t *testing.T) {
 func TestLeafRefreshReportsAFailedReload(t *testing.T) {
 	fake, client, credsFile := newFakeLeafPlatform(t)
 	lc, _ := client.LeafConfig()
-	if _, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile); err != nil {
+	if _, _, err := WriteLeafConfig(lc, filepath.Dir(credsFile), credsFile, ""); err != nil {
 		t.Fatal(err)
 	}
 	fake.set(func(lc *platform.LeafConfig) { lc.AccountJWT = "ACCJWT-2" })
 
-	r := NewLeafRefresher(credsFile, client, func() error { return errors.New("no pid file") }, zap.NewNop())
+	r := NewLeafRefresher(credsFile, "", client, func() error { return errors.New("no pid file") }, zap.NewNop())
 	changed, reloaded, err := r.Refresh()
 	if !changed || reloaded || err == nil || !strings.Contains(err.Error(), "no pid file") {
 		t.Errorf("refresh = (%v, %v, %v), want changed, not reloaded, and the reload's error", changed, reloaded, err)

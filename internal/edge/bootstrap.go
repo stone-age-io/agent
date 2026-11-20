@@ -31,7 +31,7 @@ const LeafConfName = "nats-leaf.conf"
 // refused. The creds were once an in-place os.WriteFile, the one exception to
 // that rule; a crash mid-write left a truncated credential where a running
 // leaf or agent would re-read it on its next reconnect.
-func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile string) (confPath, credsPath string, err error) {
+func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile, mqttListen string) (confPath, credsPath string, err error) {
 	// 0755 matches the conf's 0644: it holds only public trust material. The
 	// creds are the secret, and they are written 0600.
 	if err := os.MkdirAll(outputDir, 0o755); err != nil { //nolint:gosec // G301, see above
@@ -50,7 +50,7 @@ func WriteLeafConfig(lc *platform.LeafConfig, outputDir, credsFile string) (conf
 		return "", "", fmt.Errorf("write creds: %w", err)
 	}
 
-	conf, err := leafConf(lc, outputDir, credsFile)
+	conf, err := leafConf(lc, outputDir, credsFile, mqttListen)
 	if err != nil {
 		return "", "", err
 	}

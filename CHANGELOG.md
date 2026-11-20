@@ -10,6 +10,18 @@ that period, and this file starts where the versioned releases do.
 
 ## [Unreleased]
 
+### Added
+
+- **MQTT at a site's leaf: `platform.leaf_mqtt`.** Set it to a `host:port`
+  and the generated `nats-leaf.conf` gets an `mqtt` block, so a site's MQTT
+  3.1.1 devices connect to their own leaf and keep working while the WAN is
+  down. It works in-process and separately supervised. Empty, the default,
+  leaves the file byte-for-byte as before, so an upgrade rewrites and reloads
+  nothing. `nats-server` cannot reload an `mqtt` block: **restart the leaf
+  after setting or changing it.** Sessions and retained messages stay in the
+  leaf's JetStream domain, so a client at the hub does not see a value
+  retained at a site. See [Leaf Nodes](docs/leaf-node.md#mqtt-for-site-devices).
+
 ## [0.9.0] - 2026-11-18
 
 Nebula 1.12, which is why this is a minor release: it refuses some configs

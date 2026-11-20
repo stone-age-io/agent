@@ -108,7 +108,7 @@ func (tt *testTrust) leafConfig(accountJWT string) *platform.LeafConfig {
 // the generator's output untouched.
 func runnable(t *testing.T, lc *platform.LeafConfig, dir, credsFile string) string {
 	t.Helper()
-	conf, err := leafConf(lc, dir, credsFile)
+	conf, err := leafConf(lc, dir, credsFile, "")
 	if err != nil {
 		t.Fatal(err)
 	}

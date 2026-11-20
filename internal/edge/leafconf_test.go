@@ -60,7 +60,7 @@ func TestLeafConfPathsAreAbsoluteIntoTheConfDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf, err := leafConf(&platform.LeafConfig{AccountPub: "ACCOUNTPUB"}, "gw", filepath.Join("elsewhere", "gw.creds"))
+	conf, err := leafConf(&platform.LeafConfig{AccountPub: "ACCOUNTPUB"}, "gw", filepath.Join("elsewhere", "gw.creds"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,47 +120,76 @@ func TestBuildLeafConfIsAcceptedByNATSServer(t *testing.T) {
 	// absolute ones in a real directory, written through %q -- on Windows that
 	// means backslashes the config lexer has to unescape, which is exactly the
 	// kind of thing only the real parser can vouch for.
-	dir := t.TempDir()
-	conf, err := leafConf(&platform.LeafConfig{
-		OperatorJWT:   opJWT,
-		AccountPub:    apub,
-		AccountJWT:    accJWT,
-		SysAccountPub: sysPub,
-		SysAccountJWT: sysJWT,
-		Domain:        "edge-warehouse",
-		HubLeafURL:    "nats-leaf://hub.example.com:7422",
-	}, dir, filepath.Join(dir, "edge.creds"))
-	if err != nil {
-		t.Fatal(err)
+	//
+	// Once without MQTT and once with it: NewServer is also where nats-server
+	// checks that MQTT has the server_name and JetStream it needs.
+	for _, mqtt := range []string{"", "127.0.0.1:1883"} {
+		t.Run("mqtt="+mqtt, func(t *testing.T) {
+			dir := t.TempDir()
+			conf, err := leafConf(&platform.LeafConfig{
+				OperatorJWT:   opJWT,
+				AccountPub:    apub,
+				AccountJWT:    accJWT,
+				SysAccountPub: sysPub,
+				SysAccountJWT: sysJWT,
+				Domain:        "edge-warehouse",
+				HubLeafURL:    "nats-leaf://hub.example.com:7422",
+			}, dir, filepath.Join(dir, "edge.creds"), mqtt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, LeafConfName)
+			if err := os.WriteFile(path, []byte(conf), 0o644); err != nil {
+				t.Fatalf("write conf: %v", err)
+			}
+			opts, err := natsserver.ProcessConfigFile(path)
+			if err != nil {
+				t.Fatalf("nats-server rejected the generated config: %v\n---\n%s", err, conf)
+			}
+			// Every path the server will open resolves into the conf's directory.
+			if len(opts.LeafNode.Remotes) != 1 {
+				t.Fatalf("parsed %d leaf remotes, want 1", len(opts.LeafNode.Remotes))
+			}
+			for _, p := range []struct{ name, got, want string }{
+				{"pid_file", opts.PidFile, filepath.Join(dir, LeafPidName)},
+				{"store_dir", opts.StoreDir, filepath.Join(dir, LeafStoreDirName)},
+				{"credentials", opts.LeafNode.Remotes[0].Credentials, filepath.Join(dir, "edge.creds")},
+			} {
+				if p.got != p.want {
+					t.Errorf("%s parsed as %q, want %q", p.name, p.got, p.want)
+				}
+			}
+			// 0 is nats-server's "no MQTT listener".
+			wantPort := 0
+			if mqtt != "" {
+				wantPort = 1883
+			}
+			if opts.MQTT.Port != wantPort {
+				t.Errorf("mqtt port parsed as %d, want %d", opts.MQTT.Port, wantPort)
+			}
+			// NewServer is where operator-mode validation runs (remote account keys,
+			// system account resolution). It binds no ports, so this stays hermetic.
+			srv, err := natsserver.NewServer(opts)
+			if err != nil {
+				t.Fatalf("nats-server could not build a server from the generated config: %v\n---\n%s", err, conf)
+			}
+			srv.Shutdown()
+		})
 	}
-	path := filepath.Join(dir, LeafConfName)
-	if err := os.WriteFile(path, []byte(conf), 0o644); err != nil {
-		t.Fatalf("write conf: %v", err)
+}
+
+// A leaf without MQTT must get exactly the bytes it got before the key
+// existed: the refresh compares bytes, so any difference would rewrite and
+// reload every gateway in the fleet on upgrade.
+func TestBuildLeafConfWritesMQTTOnlyWhenSet(t *testing.T) {
+	base := leafConfParams{Domain: "edge-warehouse", StoreDir: "/s", PidFile: "/p", CredsFile: "/c"}
+	if conf := buildLeafConf(base); strings.Contains(conf, "mqtt") {
+		t.Errorf("no leaf_mqtt, but the conf mentions mqtt\n---\n%s", conf)
 	}
-	opts, err := natsserver.ProcessConfigFile(path)
-	if err != nil {
-		t.Fatalf("nats-server rejected the generated config: %v\n---\n%s", err, conf)
+	base.MQTTListen = "0.0.0.0:1883"
+	if conf := buildLeafConf(base); !strings.Contains(conf, "mqtt {\n  listen: \"0.0.0.0:1883\"\n}") {
+		t.Errorf("leaf_mqtt set, but no mqtt block\n---\n%s", conf)
 	}
-	// Every path the server will open resolves into the conf's directory.
-	if len(opts.LeafNode.Remotes) != 1 {
-		t.Fatalf("parsed %d leaf remotes, want 1", len(opts.LeafNode.Remotes))
-	}
-	for _, p := range []struct{ name, got, want string }{
-		{"pid_file", opts.PidFile, filepath.Join(dir, LeafPidName)},
-		{"store_dir", opts.StoreDir, filepath.Join(dir, LeafStoreDirName)},
-		{"credentials", opts.LeafNode.Remotes[0].Credentials, filepath.Join(dir, "edge.creds")},
-	} {
-		if p.got != p.want {
-			t.Errorf("%s parsed as %q, want %q", p.name, p.got, p.want)
-		}
-	}
-	// NewServer is where operator-mode validation runs (remote account keys,
-	// system account resolution). It binds no ports, so this stays hermetic.
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		t.Fatalf("nats-server could not build a server from the generated config: %v\n---\n%s", err, conf)
-	}
-	srv.Shutdown()
 }
 
 // fetchBootstrap must hit exactly one endpoint. `config` used to read nats_users

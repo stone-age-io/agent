@@ -1099,6 +1099,29 @@ func TestValidatePlatformAuth(t *testing.T) {
 			mutate:  func(c *Config) { c.Platform.LeafRefreshInterval = 2 * time.Hour },
 			wantErr: "must not exceed 1 hour",
 		},
+		{
+			name:   "leaf_mqtt on every interface",
+			mutate: func(c *Config) { c.Platform.LeafMQTT = "0.0.0.0:1883" },
+		},
+		{
+			name:   "leaf_mqtt with no host",
+			mutate: func(c *Config) { c.Platform.LeafMQTT = ":1883" },
+		},
+		{
+			name:    "leaf_mqtt without a port",
+			mutate:  func(c *Config) { c.Platform.LeafMQTT = "0.0.0.0" },
+			wantErr: "must be host:port",
+		},
+		{
+			name:    "leaf_mqtt port out of range",
+			mutate:  func(c *Config) { c.Platform.LeafMQTT = "0.0.0.0:70000" },
+			wantErr: "port must be 1-65535",
+		},
+		{
+			name:    "leaf_mqtt port 0",
+			mutate:  func(c *Config) { c.Platform.LeafMQTT = "0.0.0.0:0" },
+			wantErr: "port must be 1-65535",
+		},
 	}
 
 	for _, tt := range tests {

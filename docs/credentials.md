@@ -73,6 +73,7 @@ All of these live under `platform:`.
 | `password_env` | Until bootstrapped | Name of the env var holding the thing's password — see [After the first boot](#after-the-first-boot) |
 | `sync_interval` | `24h` | Range 1h–72h. Must stay well inside the platform's session token TTL (7 days) |
 | `leaf_refresh_interval` | `5m` | Gateways only: how often the leaf's preloaded account JWT is re-read and the leaf reloaded. `0` turns the timer off; otherwise 30s–1h. It is the site's revocation latency — see [Leaf Nodes](./leaf-node.md#keeping-the-account-jwt-current). Inert without a generated `nats-leaf.conf` |
+| `leaf_mqtt` | empty | Gateways only: `host:port` the generated leaf accepts MQTT 3.1.1 clients on. Empty writes no `mqtt` block. Restart the leaf after changing it — see [Leaf Nodes](./leaf-node.md#mqtt-for-site-devices) |
 | `session_file` | No | Where the platform session is stored. Defaults to `platform-session.json` beside `creds_file` |
 | `allow_insecure_url` | No | Permits a plain `http://` platform URL. Development only |
 

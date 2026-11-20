@@ -274,6 +274,44 @@ Unlike `cmd.nebula`, it acts first and answers afterwards. A Nebula action can
 cut the tunnel the request arrived through; a leaf reload drops only the
 connections the new JWT revokes, so the reply can wait for the result.
 
+### MQTT for site devices
+
+A site's MQTT devices can connect to its leaf rather than across the WAN to the
+hub, and then keep working while the WAN is down. Set the address the leaf
+listens on:
+
+```yaml
+platform:
+  leaf_mqtt: "0.0.0.0:1883"   # host:port; empty (the default) means no MQTT
+```
+
+Both `agent -leaf-config` and the refresh write it into `nats-leaf.conf` as an
+`mqtt { listen: ... }` block, so it works the same in-process and separately
+supervised. It is a key here, not a platform field or a flag, because a
+listener is this box's business, and because the refresh rebuilds the file from
+this config: a flag on `-leaf-config` would be dropped on the next account JWT
+change.
+
+**Restart the leaf after setting or changing it.** `nats-server` cannot reload
+an `mqtt` block, and a refused reload applies nothing in the new file, the
+account JWT included. The refresh logs the refused reload, and from the next
+account JWT change `leaf_preload` reports the leaf as behind until it restarts,
+as with a changed `store_dir` above. An in-process leaf restarts with the agent.
+
+What to know about MQTT at a leaf:
+
+- **Devices authenticate as at the hub**: MQTT 3.1.1 only, and the password is
+  the user's JWT, which must have **Enable Bearer Token** set on the platform.
+  Anyone holding that JWT can connect as that device, and `leaf_mqtt` has no
+  TLS option yet, so keep the listener on the site's own network.
+- **Sessions and retained messages stay at the site.** MQTT stores them in the
+  leaf's JetStream domain, which is why they survive a WAN outage, and also why
+  a client at the hub does not see a value retained here. Plain messages cross
+  the leaf connection like any other, within the leaf's permissions.
+- **The org account needs JetStream storage**, as it does for MQTT at the hub.
+- **Topics become subjects**: `/` becomes `.`, so `camera/CA-9KD-4PX/motion` is
+  `camera.CA-9KD-4PX.motion`.
+
 ---
 
 ## 4. KV sync

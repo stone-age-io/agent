@@ -48,9 +48,12 @@ type LeafRefresher struct {
 	confPath  string
 	outputDir string
 	credsFile string
-	source    LeafSource
-	reload    func() error
-	logger    *zap.Logger
+	// mqttListen is platform.leaf_mqtt, passed to leafConf like the bootstrap
+	// passes it, so both build the same bytes.
+	mqttListen string
+	source     LeafSource
+	reload     func() error
+	logger     *zap.Logger
 
 	// run serialises whole refreshes: the schedule and cmd.leaf_refresh can
 	// arrive together, and two interleaved write-then-reload sequences would be
@@ -94,14 +97,15 @@ func LeafPidPath(credsFile string) string {
 // config: Edge.ReloadEmbedded when this process hosts it, SignalLeafReload when
 // something else supervises it. It is a parameter so a test can count the calls
 // without a server; that is the whole seam.
-func NewLeafRefresher(credsFile string, source LeafSource, reload func() error, logger *zap.Logger) *LeafRefresher {
+func NewLeafRefresher(credsFile, mqttListen string, source LeafSource, reload func() error, logger *zap.Logger) *LeafRefresher {
 	return &LeafRefresher{
-		confPath:  LeafConfPath(credsFile),
-		outputDir: filepath.Dir(credsFile),
-		credsFile: credsFile,
-		source:    source,
-		reload:    reload,
-		logger:    logger,
+		confPath:   LeafConfPath(credsFile),
+		outputDir:  filepath.Dir(credsFile),
+		credsFile:  credsFile,
+		mqttListen: mqttListen,
+		source:     source,
+		reload:     reload,
+		logger:     logger,
 	}
 }
 
@@ -153,7 +157,7 @@ func (r *LeafRefresher) apply() (changed, reloaded bool, err error) {
 	// this pass cannot make the leaf agree.
 	r.record(lc.AccountPub, lc.AccountJWT)
 
-	want, err := leafConf(lc, r.outputDir, r.credsFile)
+	want, err := leafConf(lc, r.outputDir, r.credsFile, r.mqttListen)
 	if err != nil {
 		return false, false, err
 	}

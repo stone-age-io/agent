@@ -31,6 +31,9 @@ type leafConfParams struct {
 	CredsFile string
 	StoreDir  string
 	PidFile   string
+
+	// MQTTListen is platform.leaf_mqtt: host:port, or empty for no mqtt block.
+	MQTTListen string
 }
 
 // leafConf turns a platform leaf config into the contents of nats-leaf.conf.
@@ -43,7 +46,9 @@ type leafConfParams struct {
 //
 // confDir is the directory the conf lives in; credsFile is nats.auth.creds_file,
 // of which only the base name is used, because WriteLeafConfig puts the creds
-// beside the conf.
+// beside the conf. mqttListen is platform.leaf_mqtt. It comes from the agent's
+// config, not the platform, and BOTH callers must pass it, or the refresh would
+// rebuild the file without the block and drop MQTT at the next JWT change.
 //
 // EVERY PATH IN THE FILE IS ABSOLUTE. nats-server resolves a relative
 // `credentials`, `store_dir` or `pid_file` against its own working directory,
@@ -52,7 +57,7 @@ type leafConfParams struct {
 // supervised separately. So all three are computed here from confDir, with
 // filepath.Abs, when the file is written. The platform applies the same rule to
 // `nats export` (its ADR 0001).
-func leafConf(lc *platform.LeafConfig, confDir, credsFile string) (string, error) {
+func leafConf(lc *platform.LeafConfig, confDir, credsFile, mqttListen string) (string, error) {
 	dir, err := filepath.Abs(confDir)
 	if err != nil {
 		return "", fmt.Errorf("resolve the leaf config directory %s: %w", confDir, err)
@@ -68,6 +73,7 @@ func leafConf(lc *platform.LeafConfig, confDir, credsFile string) (string, error
 		CredsFile:     filepath.Join(dir, filepath.Base(credsFile)),
 		StoreDir:      filepath.Join(dir, LeafStoreDirName),
 		PidFile:       filepath.Join(dir, LeafPidName),
+		MQTTListen:    mqttListen,
 	}), nil
 }
 
@@ -115,6 +121,15 @@ func buildLeafConf(p leafConfParams) string {
 	// which for a one-account edge is the org account.
 	fmt.Fprintf(&b, "leafnodes {\n  remotes: [\n    { url: %q, account: %q, credentials: %q }\n  ]\n}\n\n",
 		p.HubLeafURL, p.AccountPub, p.CredsFile)
+
+	// Only when asked for, so a leaf without MQTT gets the same bytes as before
+	// and an upgrade rewrites and reloads nothing. MQTT keeps its sessions and
+	// retained messages in this leaf's JetStream domain (the block above), and
+	// nats-server requires server_name for it, which is also above.
+	if p.MQTTListen != "" {
+		b.WriteString("# MQTT 3.1.1 for site devices (platform.leaf_mqtt). Changing it needs a leaf restart.\n")
+		fmt.Fprintf(&b, "mqtt {\n  listen: %q\n}\n\n", p.MQTTListen)
+	}
 
 	b.WriteString("# Local monitoring only (no $SYS user); keep bound to localhost.\n")
 	b.WriteString("http: \"127.0.0.1:8222\"\n\n")

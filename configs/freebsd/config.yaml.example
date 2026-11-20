@@ -69,6 +69,9 @@ nats:
 #                                                 # reload the leaf. 0 = off, else
 #                                                 # 30s-1h. THIS IS THE SITE'S
 #                                                 # REVOCATION LATENCY
+#   leaf_mqtt: "0.0.0.0:1883"                     # gateways: MQTT for site devices
+#                                                 # at the leaf. Empty = off. Restart
+#                                                 # the leaf after changing it
 #   # session_file: default is beside nats.auth.creds_file
 #   # allow_insecure_url: false                   # http:// URL, development only
 

@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +82,23 @@ type PlatformConfig struct {
 	// device revoked at the hub keeps authenticating at its site's leaf. Inert
 	// on an agent with no generated nats-leaf.conf beside its creds file.
 	LeafRefreshInterval time.Duration `mapstructure:"leaf_refresh_interval"`
+
+	// LeafMQTT is the host:port the generated leaf listens on for MQTT 3.1.1
+	// clients, so a site's MQTT devices reach their own leaf and keep working
+	// while the WAN is down. Empty, the default, writes no mqtt block. The leaf
+	// reads the same file embedded or separately supervised, so this works in
+	// both.
+	//
+	// It is a key here, not a field in /api/me/leaf-config, because a listener
+	// is this box's business (which interface, which port), and not a flag on
+	// `agent -leaf-config`, because the scheduled refresh rebuilds the file
+	// without flags and would drop it on the next account JWT change.
+	//
+	// nats-server cannot reload an mqtt block, so a change takes effect when
+	// the LEAF RESTARTS. Until then the refused reload is logged, and the
+	// leaf_preload check reports the leaf as behind once the account JWT next
+	// moves, as with a changed store_dir.
+	LeafMQTT string `mapstructure:"leaf_mqtt"`
 
 	// AllowInsecureURL permits a plain http:// platform URL. Development only:
 	// bootstrap sends the thing's password and receives an nkey seed, so on the
@@ -373,6 +392,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.inventory.interval", "24h")
 	v.SetDefault("platform.sync_interval", "24h")
 	v.SetDefault("platform.leaf_refresh_interval", "5m")
+	v.SetDefault("platform.leaf_mqtt", "")
 
 	// Nebula defaults. Off unless asked for; the paths sit beside the other
 	// platform-managed secrets.
@@ -590,6 +610,10 @@ func validate(cfg *Config) error {
 		return err
 	}
 
+	if err := validateLeafMQTT(cfg); err != nil {
+		return err
+	}
+
 	if err := validateNebula(cfg); err != nil {
 		return err
 	}
@@ -690,6 +714,26 @@ func validateLeafRefresh(cfg *Config) error {
 		return fmt.Errorf("platform.leaf_refresh_interval must be 0 (off) or at least 30 seconds (got: %v)", interval)
 	case interval > time.Hour:
 		return fmt.Errorf("platform.leaf_refresh_interval must not exceed 1 hour (got: %v) - it is how long a device revoked at the hub can still connect at this site's leaf, because the leaf learns of revocations only from the account JWT preloaded into its config", interval)
+	}
+	return nil
+}
+
+// validateLeafMQTT checks platform.leaf_mqtt, which goes into the generated
+// nats-leaf.conf verbatim. A bad value would otherwise fail at the leaf, as a
+// server that will not start or a reload it refuses, far from the key that
+// caused it. Like leaf_refresh_interval it is inert, and unchecked, without
+// platform auth.
+func validateLeafMQTT(cfg *Config) error {
+	addr := cfg.Platform.LeafMQTT
+	if cfg.NATS.Auth.Type != authPlatform || addr == "" {
+		return nil
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("platform.leaf_mqtt must be host:port, such as 0.0.0.0:1883 (got: %q)", addr)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("platform.leaf_mqtt port must be 1-65535 (got: %q)", addr)
 	}
 	return nil
 }
