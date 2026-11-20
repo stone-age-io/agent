@@ -76,3 +76,39 @@ func TestJobsDoNotOverlapThemselves(t *testing.T) {
 		t.Errorf("%d Sync calls were in flight at once; a job must not overlap itself", syncer.maxSeen)
 	}
 }
+
+// Start and Shutdown can arrive together: Run starts the scheduler while a stop
+// that came in at startup shuts it down. gocron's Start then waited for ever
+// on a confirmation its loop never sent, which hung Run. Start must return
+// whichever comes first.
+func TestStartAndShutdownTogetherNeverHang(t *testing.T) {
+	cfg := &config.Config{Code: "srv-01", SubjectPrefix: "agents"}
+	cfg.Nebula.SyncInterval = time.Hour
+
+	// gocron lost the race a few percent of the time, so enough rounds to be
+	// all but certain to hit it without the fix, and still well under a second.
+	for range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		s, err := New(zap.NewNop(), nil, nil, cfg, "dev", nil, &slowSyncer{}, nil, ctx)
+		if err != nil {
+			cancel()
+			t.Fatalf("New: %v", err)
+		}
+
+		started := make(chan struct{})
+		go func() {
+			s.Start()
+			close(started)
+		}()
+		if err := s.Shutdown(); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			cancel()
+			t.Fatal("Start is still blocked after Shutdown returned")
+		}
+		cancel()
+	}
+}

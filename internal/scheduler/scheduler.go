@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -57,6 +58,9 @@ type Scheduler struct {
 	nebulaSyncer  NebulaSyncer  // nil unless the embedded overlay is enabled
 	leafRefresher LeafRefresher // nil unless a generated nats-leaf.conf sits beside the creds
 	ctx           context.Context
+
+	// lifecycle keeps Start and Shutdown from overlapping. See Start.
+	lifecycle sync.Mutex
 }
 
 // New creates a new scheduler with configured tasks
@@ -321,14 +325,27 @@ func (s *Scheduler) scheduleTasks() error {
 	return nil
 }
 
-// Start begins executing scheduled tasks
+// Start begins executing scheduled tasks.
+//
+// gocron's Start and Shutdown must never overlap. Start hands the start to
+// gocron's loop and then waits on a bare receive for the loop to confirm it.
+// If Shutdown lands between the two, the loop sees the shutdown first and
+// never confirms, and Start blocks for ever. Shutdown meanwhile returns nil at
+// once, because the scheduler had not yet marked itself started. In the agent
+// that was Run hanging after a stop that arrived as it started (gocron
+// v2.23.2, scheduler.go Start and selectStart). The lock closes that window.
+// A Start after a finished Shutdown is already a no-op in gocron.
 func (s *Scheduler) Start() {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.scheduler.Start()
 	s.logger.Info("Scheduler started")
 }
 
 // Shutdown gracefully stops the scheduler
 func (s *Scheduler) Shutdown() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.logger.Info("Shutting down scheduler")
 	return s.scheduler.Shutdown()
 }

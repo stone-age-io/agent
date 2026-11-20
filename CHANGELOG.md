@@ -22,6 +22,15 @@ that period, and this file starts where the versioned releases do.
   leaf's JetStream domain, so a client at the hub does not see a value
   retained at a site. See [Leaf Nodes](docs/leaf-node.md#mqtt-for-site-devices).
 
+### Fixed
+
+- **A stop that arrived as the agent started could hang it.** The scheduler's
+  start and shutdown could overlap, and gocron's `Start` then waited for ever
+  for a confirmation its own shutdown had cancelled. The service stopped
+  anyway, but the agent's run loop never returned. They are now serialised.
+  `TestRunReturnsCleanlyWhenStopped` failed about one run in twenty under
+  `-race` because of it.
+
 ## [0.9.0] - 2026-11-18
 
 Nebula 1.12, which is why this is a minor release: it refuses some configs
